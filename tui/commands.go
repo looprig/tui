@@ -7,9 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/content"
-	"github.com/ciram-co/looprig/pkg/tool"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // blinkInterval is the cadence of the live-surface animation tick: the streaming

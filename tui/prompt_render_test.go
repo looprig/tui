@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ciram-co/looprig/pkg/tool"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // TestRenderPermissionBox covers the permission-control rendering: a bordered box

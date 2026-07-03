@@ -6,7 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
+	"github.com/looprig/cli/tui/styles"
 )
 
 // minInputLines and maxInputLines bound the composer's content height in lines. The

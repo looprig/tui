@@ -19,9 +19,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig-console/internal/logging"
-	"github.com/ciram-co/looprig-console/internal/ttylog"
-	"github.com/ciram-co/looprig-console/tui"
+	"github.com/looprig/cli/internal/logging"
+	"github.com/looprig/cli/internal/ttylog"
+	"github.com/looprig/cli/tui"
 )
 
 // Banner is the startup metadata shown in the TUI's session-ready notice: the

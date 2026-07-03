@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 func TestToolStatusConstantOrder(t *testing.T) {

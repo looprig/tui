@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
-	"github.com/ciram-co/looprig/pkg/content"
+	"github.com/looprig/cli/tui/styles"
+	"github.com/looprig/harness/pkg/content"
 )
 
 // TestRenderEntryUser locks the user-kind render: the submitted text renders as

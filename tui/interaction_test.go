@@ -5,9 +5,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/event"
-	"github.com/ciram-co/looprig/pkg/identity"
-	"github.com/ciram-co/looprig/pkg/tool"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/identity"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // TestInteractionComposeUpdate covers modeCompose key handling: a printable key

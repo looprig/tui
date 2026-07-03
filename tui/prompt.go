@@ -4,9 +4,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
-	"github.com/ciram-co/looprig/pkg/tool"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/cli/tui/styles"
+	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // promptKind tags a prompt as a permission gate or a user-input request. Each is

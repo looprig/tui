@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/ciram-co/looprig-console/tui/styles"
+import "github.com/looprig/cli/tui/styles"
 
 // animState is the live-surface animation state advanced once per blink tick while
 // a turn is Running. It is meaningful ONLY for the live tail rendered in View(); the

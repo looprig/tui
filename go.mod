@@ -1,4 +1,4 @@
-module github.com/ciram-co/looprig-console
+module github.com/looprig/cli
 
 go 1.26.4
 
@@ -13,7 +13,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.4
-	github.com/ciram-co/looprig v0.0.0
+	github.com/looprig/harness v0.0.0
 )
 
 require (
@@ -100,8 +100,8 @@ require (
 // Local, unpublished dependency on the looprig SDK. looprig-console is extracted
 // FROM the current looprig working tree, so it must build against that exact tree
 // (published tags lag). At release: drop this replace and pin a real looprig tag.
-replace github.com/ciram-co/looprig => ../looprig
+replace github.com/looprig/harness => ../looprig
 
 // The TUI requires the ciram-co bubbletea fork for the Kitty keyboard protocol
 // (true Shift+Enter). Copied verbatim from looprig/go.mod — MUST stay in sync.
-replace charm.land/bubbletea/v2 => github.com/ciram-co/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd
+replace charm.land/bubbletea/v2 => github.com/looprig/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd

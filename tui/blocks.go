@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"github.com/ciram-co/looprig/pkg/content"
+	"github.com/looprig/harness/pkg/content"
 )
 
 // maxAttachmentBytes caps the size of any single @path attachment (5 MiB).

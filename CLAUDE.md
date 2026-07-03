@@ -30,7 +30,7 @@
 
 ## Dependencies
 
-This module is the presentation layer extracted from github.com/ciram-co/looprig; it depends on that SDK for core types (content, event, transcript, …).
+This module is the presentation layer extracted from github.com/looprig/harness; it depends on that SDK for core types (content, event, transcript, …).
 
 **Prefer stdlib.** Always reach for the Go standard library first. If a need can be met with stdlib — even with a bit more code — use stdlib.
 

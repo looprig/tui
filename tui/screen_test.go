@@ -9,14 +9,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig-console/tui/components"
-	"github.com/ciram-co/looprig/pkg/content"
-	"github.com/ciram-co/looprig/pkg/event"
-	"github.com/ciram-co/looprig/pkg/hub"
-	"github.com/ciram-co/looprig/pkg/identity"
-	"github.com/ciram-co/looprig/pkg/tool"
-	"github.com/ciram-co/looprig/pkg/transcript"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/cli/tui/components"
+	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/hub"
+	"github.com/looprig/harness/pkg/identity"
+	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/transcript"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // compile-time assertion that the test double satisfies the (widened) Agent

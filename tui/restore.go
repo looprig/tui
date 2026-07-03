@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/event"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // DisplayProjection is the committed TUI projection of a fold over the primary loop's

@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/ciram-co/looprig/pkg/tool"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // TestPromptFromPermission covers building a prompt view-model from a concrete

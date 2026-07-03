@@ -3,7 +3,7 @@ package components
 import (
 	"strings"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
+	"github.com/looprig/cli/tui/styles"
 )
 
 // SlashCmd is one slash command's display metadata. The action is dispatched by

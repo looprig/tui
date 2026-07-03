@@ -14,10 +14,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/transcript"
-	"github.com/ciram-co/looprig/pkg/transcript/html"
-	"github.com/ciram-co/looprig/pkg/transcript/journalsource"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/harness/pkg/transcript"
+	"github.com/looprig/harness/pkg/transcript/html"
+	"github.com/looprig/harness/pkg/transcript/journalsource"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // export.go implements the /export command: a DIRECT USER ACTION that snapshots the

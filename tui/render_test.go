@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
+	"github.com/looprig/cli/tui/styles"
 )
 
 // ansiSGR matches ANSI SGR (color/style) escape sequences. The markdown renderer

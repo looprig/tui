@@ -7,10 +7,10 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
-	"github.com/ciram-co/looprig/pkg/content"
-	"github.com/ciram-co/looprig/pkg/event"
-	"github.com/ciram-co/looprig/pkg/tool"
+	"github.com/looprig/cli/tui/styles"
+	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // TestLiveTailCap covers the pure active-surface budget: from the free space (terminal

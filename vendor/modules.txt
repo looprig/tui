@@ -6,7 +6,7 @@ charm.land/bubbles/v2/internal/runeutil
 charm.land/bubbles/v2/key
 charm.land/bubbles/v2/textarea
 charm.land/bubbles/v2/viewport
-# charm.land/bubbletea/v2 v2.0.7 => github.com/ciram-co/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd
+# charm.land/bubbletea/v2 v2.0.7 => github.com/looprig/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd
 ## explicit; go 1.25.0
 charm.land/bubbletea/v2
 # charm.land/glamour/v2 v2.0.1
@@ -129,19 +129,19 @@ github.com/charmbracelet/x/termios
 # github.com/charmbracelet/x/windows v0.2.2
 ## explicit; go 1.23.0
 github.com/charmbracelet/x/windows
-# github.com/ciram-co/looprig v0.0.0 => ../looprig
+# github.com/looprig/harness v0.0.0 => ../looprig
 ## explicit; go 1.26.4
-github.com/ciram-co/looprig/pkg/command
-github.com/ciram-co/looprig/pkg/content
-github.com/ciram-co/looprig/pkg/event
-github.com/ciram-co/looprig/pkg/hub
-github.com/ciram-co/looprig/pkg/identity
-github.com/ciram-co/looprig/pkg/journal
-github.com/ciram-co/looprig/pkg/tool
-github.com/ciram-co/looprig/pkg/transcript
-github.com/ciram-co/looprig/pkg/transcript/html
-github.com/ciram-co/looprig/pkg/transcript/journalsource
-github.com/ciram-co/looprig/pkg/uuid
+github.com/looprig/harness/pkg/command
+github.com/looprig/harness/pkg/content
+github.com/looprig/harness/pkg/event
+github.com/looprig/harness/pkg/hub
+github.com/looprig/harness/pkg/identity
+github.com/looprig/harness/pkg/journal
+github.com/looprig/harness/pkg/tool
+github.com/looprig/harness/pkg/transcript
+github.com/looprig/harness/pkg/transcript/html
+github.com/looprig/harness/pkg/transcript/journalsource
+github.com/looprig/harness/pkg/uuid
 # github.com/clipperhouse/displaywidth v0.11.0
 ## explicit; go 1.18
 github.com/clipperhouse/displaywidth
@@ -818,5 +818,5 @@ honnef.co/go/tools/stylecheck/st1021
 honnef.co/go/tools/stylecheck/st1022
 honnef.co/go/tools/stylecheck/st1023
 honnef.co/go/tools/unused
-# github.com/ciram-co/looprig => ../looprig
-# charm.land/bubbletea/v2 => github.com/ciram-co/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd
+# github.com/looprig/harness => ../looprig
+# charm.land/bubbletea/v2 => github.com/looprig/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ciram-co/looprig/pkg/content"
+	"github.com/looprig/harness/pkg/content"
 )
 
 // writeFile creates a file under dir with the given relative name and contents,

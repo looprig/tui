@@ -6,7 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
+	"github.com/looprig/cli/tui/styles"
 )
 
 // interruptedTombstone is the content-less marker rendered for an interrupted turn.

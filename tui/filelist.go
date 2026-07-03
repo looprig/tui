@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ciram-co/looprig-console/tui/components"
+	"github.com/looprig/cli/tui/components"
 )
 
 // maxFileCompletions caps the @path picker so the panel never dominates the surface.

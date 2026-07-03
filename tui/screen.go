@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig-console/tui/components"
-	"github.com/ciram-co/looprig/pkg/event"
+	"github.com/looprig/cli/tui/components"
+	"github.com/looprig/harness/pkg/event"
 )
 
 // Screen is the Elm model for the chat TUI. In scrollback-first mode it is a thin

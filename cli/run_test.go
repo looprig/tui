@@ -10,12 +10,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig-console/tui"
-	"github.com/ciram-co/looprig/pkg/content"
-	"github.com/ciram-co/looprig/pkg/event"
-	"github.com/ciram-co/looprig/pkg/tool"
-	"github.com/ciram-co/looprig/pkg/transcript"
-	"github.com/ciram-co/looprig/pkg/uuid"
+	"github.com/looprig/cli/tui"
+	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/transcript"
+	"github.com/looprig/harness/pkg/uuid"
 )
 
 // fakeAgent is a no-op tui.Agent stand-in: construction-success path needs a live

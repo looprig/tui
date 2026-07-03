@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ciram-co/looprig-console/tui/styles"
+	"github.com/looprig/cli/tui/styles"
 )
 
 // FileItem is one @path completion candidate. Path is the value to complete to (e.g.

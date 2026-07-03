@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/event"
+	"github.com/looprig/harness/pkg/event"
 )
 
 // contract_test.go is the Task 11 regression-LOCK for the TUI side of the AskUser

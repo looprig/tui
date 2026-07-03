@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ciram-co/looprig/pkg/content"
-	"github.com/ciram-co/looprig/pkg/event"
+	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/harness/pkg/event"
 )
 
 // tailHeight is the physical row count of the active surface's tail region (held + live),

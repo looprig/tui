@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/ciram-co/looprig-console/tui/styles"
+import "github.com/looprig/cli/tui/styles"
 
 // Status labels — the legible one-line descriptions of the turn-lifecycle state,
 // derived from the session Status plus the live interaction signals.
