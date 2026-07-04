@@ -104,3 +104,5 @@ replace github.com/looprig/harness => ../harness
 replace charm.land/bubbletea/v2 => ../bubbletea-fork
 
 replace github.com/looprig/core => ../core
+
+replace github.com/looprig/inference => ../inference

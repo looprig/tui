@@ -803,3 +803,4 @@ honnef.co/go/tools/unused
 # github.com/looprig/harness => ../harness
 # charm.land/bubbletea/v2 => ../bubbletea-fork
 # github.com/looprig/core => ../core
+# github.com/looprig/inference => ../inference
