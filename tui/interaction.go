@@ -8,7 +8,7 @@ import (
 	"github.com/looprig/cli/tui/components"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // otherChoice is the literal escape-hatch answer the 'o' accelerator sends in

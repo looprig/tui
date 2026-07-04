@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // ToolStatus is the lifecycle state of a tool call rendered in the transcript.

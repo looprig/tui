@@ -5,7 +5,7 @@ import (
 
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // TestDefaultEventFilter locks the single-loop TUI default filter shape: live

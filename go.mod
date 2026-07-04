@@ -51,15 +51,12 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/looprig/core v0.0.0
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/nats-io/nats.go v1.52.0 // indirect
-	github.com/nats-io/nkeys v0.4.16 // indirect
-	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/openai/openai-go/v3 v3.37.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/securego/gosec/v2 v2.27.1 // indirect
@@ -100,8 +97,10 @@ require (
 // Local, unpublished dependency on the looprig SDK. looprig-console is extracted
 // FROM the current looprig working tree, so it must build against that exact tree
 // (published tags lag). At release: drop this replace and pin a real looprig tag.
-replace github.com/looprig/harness => ../looprig
+replace github.com/looprig/harness => ../harness
 
 // The TUI requires the ciram-co bubbletea fork for the Kitty keyboard protocol
 // (true Shift+Enter). Copied verbatim from looprig/go.mod — MUST stay in sync.
-replace charm.land/bubbletea/v2 => github.com/looprig/bubbletea/v2 v2.0.0-20260623210731-9571e88971cd
+replace charm.land/bubbletea/v2 => ../bubbletea-fork
+
+replace github.com/looprig/core => ../core

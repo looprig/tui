@@ -7,7 +7,7 @@ import (
 
 	"github.com/looprig/harness/pkg/content"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // schemaVersion is the current wire-envelope schema version stamped into every
@@ -119,7 +119,7 @@ func encodePayload(ev Event) ([]byte, error) {
 	case RestoreErrored:
 		return marshalRestoreErrored(e)
 	case SessionStarted, SessionActive, SessionIdle, SessionStopped,
-		RestoreStarted, RestoreDone, LoopIdle, LoopStarted, TurnRejected,
+		RestoreStarted, RestoreDone, WorkspaceCheckpointed, LoopIdle, LoopStarted, TurnRejected,
 		UserInputRequested, TurnInterrupted,
 		TurnStarted, TurnFoldedInto, InputCancelled, TurnDone:
 		// Every field round-trips through encoding/json directly: header + scalars/
@@ -328,6 +328,8 @@ func decodePayload(tag string, data []byte) (Event, error) {
 		return decodePlain[RestoreDone](tag, data)
 	case "RestoreErrored":
 		return decodeRestoreErrored(data)
+	case "WorkspaceCheckpointed":
+		return decodePlain[WorkspaceCheckpointed](tag, data)
 	case "LoopIdle":
 		return decodePlain[LoopIdle](tag, data)
 	case "LoopStarted":

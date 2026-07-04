@@ -17,7 +17,7 @@ import (
 	"github.com/looprig/harness/pkg/transcript"
 	"github.com/looprig/harness/pkg/transcript/html"
 	"github.com/looprig/harness/pkg/transcript/journalsource"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // export.go implements the /export command: a DIRECT USER ACTION that snapshots the

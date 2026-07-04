@@ -17,7 +17,7 @@ import (
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/transcript"
 	"github.com/looprig/harness/pkg/transcript/journalsource"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // the canned-source content markers asserted in the rendered HTML.

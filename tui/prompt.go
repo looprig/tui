@@ -6,7 +6,7 @@ import (
 
 	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // promptKind tags a prompt as a permission gate or a user-input request. Each is

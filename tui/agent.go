@@ -7,7 +7,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/harness/pkg/transcript"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // EventStream is the narrow consumer-facing handle the TUI reads whole-session

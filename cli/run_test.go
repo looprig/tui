@@ -15,7 +15,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/harness/pkg/transcript"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // fakeAgent is a no-op tui.Agent stand-in: construction-success path needs a live

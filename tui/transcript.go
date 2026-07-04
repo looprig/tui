@@ -6,7 +6,7 @@ import (
 	"github.com/looprig/harness/pkg/content"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // splitLines splits a tool-result preview into display lines on "\n". An empty

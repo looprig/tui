@@ -16,7 +16,7 @@ import (
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/harness/pkg/transcript"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // compile-time assertion that the test double satisfies the (widened) Agent

@@ -9,7 +9,7 @@ import (
 
 	"github.com/looprig/harness/pkg/content"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/uuid"
+	"github.com/looprig/core/uuid"
 )
 
 // blinkInterval is the cadence of the live-surface animation tick: the streaming
