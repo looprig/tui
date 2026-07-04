@@ -19,7 +19,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/looprig/cli/internal/logging"
+	"github.com/looprig/core/logging"
 	"github.com/looprig/cli/internal/ttylog"
 	"github.com/looprig/cli/tui"
 )
