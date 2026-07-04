@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/cli/tui/styles"
-	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/core/content"
 )
 
 // previewLineCap is the HARD cap on result-preview lines a tool card shows: a result with

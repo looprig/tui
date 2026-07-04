@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/looprig/cli/tui/styles"
-	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/core/content"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/looprig/cli/tui/styles"
-	"github.com/looprig/harness/pkg/content"
+	"github.com/looprig/core/content"
 )
 
 // TestRenderEntryUser locks the user-kind render: the submitted text renders as
