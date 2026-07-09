@@ -264,8 +264,9 @@ Select `screen := tui.NewModern(...)` when modern else `tui.New(...)`. Replace `
 1. `gofmt -l $(go list -f '{{.Dir}}' ./...)` → empty.
 2. `CGO_ENABLED=0 go build -trimpath ./...` → succeeds.
 3. `go test -race ./...` → all pass.
-4. `make secure` → clean (lint + vet + staticcheck + gosec + govulncheck).
-5. Manual smoke (document results in the commit): `LOOPRIG_MODERN=1 <entry>` in Apple Terminal + tmux — wheel scroll; drag-select+paste (no escapes, wide runes aligned); `ctrl+t`; spawn a subagent, click it in the bar, watch its live stream; a gated tool marks the bar and resolves.
-6. Commit `chore: modern viewport Stage 1 verification`.
+4. `make test-integration` → all pass (process-boundary tests behind `//go:build integration`, e.g. the clipboard exec seam).
+5. `make secure` → clean (lint + vet + staticcheck + gosec + govulncheck).
+6. Manual smoke (document results in the commit): `LOOPRIG_MODERN=1 <entry>` in Apple Terminal + tmux — wheel scroll; drag-select+paste (no escapes, wide runes aligned); `ctrl+t`; spawn a subagent, click it in the bar, watch its live stream; a gated tool marks the bar and resolves.
+7. Commit `chore: modern viewport Stage 1 verification`.
 
 **Stage 2 (separate plan, needs harness change):** expose `Session.Submit(ctx, loopID, blocks)` + re-vendor; add to `tui.Agent`; route composer to `focusedLoopID`.
