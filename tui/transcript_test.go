@@ -2690,3 +2690,215 @@ func TestPendingSubagentCardsCapsChildren(t *testing.T) {
 		t.Errorf("Steps total must be preserved; got %d, want 9", cards[0].Steps)
 	}
 }
+
+// TestProjectionForPrimaryAlias locks the primary-alias rule (design §Per-loop
+// projections): projectionFor(primaryLoopID) — and projectionFor(zero) — returns the
+// EXISTING root fold (m.committed / m.live), NOT a rebuilt copy with new IDs, and the
+// primary loop is NEVER stored in m.projections. So scrollback and the primary view pay
+// zero extra cost, nothing is folded twice, and no displayID is minted twice.
+func TestProjectionForPrimaryAlias(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	m := transcriptModel{primaryLoopID: primary}
+	// A genuine primary turn: a committed user row + streaming (uncommitted) live prose.
+	m = m.ApplyEvent(event.TurnStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}},
+		Message: userMsg("hello"),
+	})
+	m = m.ApplyEvent(textChunk("streaming so far"))
+
+	if len(m.committed) != 1 || m.committed[0].Kind != kindUser {
+		t.Fatalf("setup: root committed = %+v, want exactly one kindUser row", m.committed)
+	}
+
+	committed, live := m.projectionFor(primary)
+	if len(committed) != len(m.committed) {
+		t.Fatalf("projectionFor(primary) committed = %d, want the root fold's %d", len(committed), len(m.committed))
+	}
+	// SAME id as the root row — proving an alias, not a re-mint.
+	if committed[0].ID != m.committed[0].ID {
+		t.Errorf("aliased row ID = %d, want the SAME root ID %d (not re-minted)", committed[0].ID, m.committed[0].ID)
+	}
+	if blockText(committed[0].Blocks[0]) != "hello" {
+		t.Errorf("aliased row text = %q, want %q", blockText(committed[0].Blocks[0]), "hello")
+	}
+	if live.Text != m.live.Text || live.Text != "streaming so far" {
+		t.Errorf("aliased live.Text = %q, want the root live %q", live.Text, m.live.Text)
+	}
+	// The primary loop is NEVER re-folded into m.projections.
+	if _, ok := m.projections[primary]; ok {
+		t.Error("m.projections contains the primary loop, want it aliased to the root fold ONLY")
+	}
+	// The zero id also aliases the root fold (single-loop / session default).
+	zc, zl := m.projectionFor(uuid.UUID{})
+	if len(zc) != len(m.committed) || zl.Text != m.live.Text {
+		t.Errorf("projectionFor(zero) = (%d rows, live %q), want the root fold (%d, %q)", len(zc), zl.Text, len(m.committed), m.live.Text)
+	}
+}
+
+// TestProjectionNonPrimaryBuildsOwnStream locks that a NON-PRIMARY loop's events build
+// THAT loop's own projection (task row → assistant prose → tool card) and do NOT
+// duplicate into the primary root fold. It uses a tool-spawned subagent, whose StepDone
+// the root fold accumulates under the pending Subagent card (subagentStep) and commits
+// NOTHING to the root committed slice — so the subagent rows below can ONLY come from the
+// projection.
+func TestProjectionNonPrimaryBuildsOwnStream(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{primaryLoopID: primary}
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "map repo"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "looking around", toolUse("g", "Grep", `{"q":"x"}`)),
+		toolResult("g", "child grep hit"),
+	))
+
+	// The subagent's OWN stream lives in ITS projection: task row, assistant prose, tool.
+	pc, _ := m.projectionFor(sub)
+	if len(pc) != 3 {
+		t.Fatalf("projectionFor(sub) committed = %d, want 3 (task row, assistant, tool); %+v", len(pc), pc)
+	}
+	if pc[0].Kind != kindUser || blockText(pc[0].Blocks[0]) != "map repo" {
+		t.Errorf("projection[0] = %+v, want the subagent's own task user row %q", pc[0], "map repo")
+	}
+	if pc[1].Kind != kindAssistant || assistantText(pc[1].Blocks) != "looking around" {
+		t.Errorf("projection[1] = %+v, want the subagent assistant prose", pc[1])
+	}
+	if pc[2].Kind != kindTool || pc[2].Calls[0].ToolName != "Grep" {
+		t.Errorf("projection[2] = %+v, want the subagent Grep tool card", pc[2])
+	}
+	if got := strings.Join(pc[2].Calls[0].Result, "\n"); got != "child grep hit" {
+		t.Errorf("projection tool result = %q, want the child's %q", got, "child grep hit")
+	}
+	// The ROOT fold is NOT polluted: a tool-spawned subagent commits nothing to the root
+	// committed slice (its card commits later at the orchestrator's StepDone), so the
+	// subagent's task/prose/tool must NOT be duplicated into the root fold.
+	if len(m.committed) != 0 {
+		t.Fatalf("root committed = %d, want 0 (subagent rows must not duplicate into the root fold); %+v", len(m.committed), m.committed)
+	}
+}
+
+// TestProjectionZeroLoopIDGuard locks the zero-LoopID guard: session-scoped and
+// zero-LoopID events are handled by the model logic and are NEVER routed into a
+// projection. primaryLoopID is deliberately NON-zero so the guard being exercised is
+// the IsZero() check (zero != primary), not the primary-alias branch.
+func TestProjectionZeroLoopIDGuard(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	m := transcriptModel{primaryLoopID: primary}
+
+	m = m.ApplyEvent(event.SessionIdle{})
+	m = m.ApplyEvent(event.TurnStarted{Message: userMsg("zero-loop turn")}) // zero LoopID
+	m = m.ApplyEvent(textChunk("zero-loop chunk"))
+	m = m.ApplyEvent(stepDone(aiMessage("", "zero-loop answer")))
+	m = m.ApplyEvent(event.TurnDone{})
+
+	if len(m.projections) != 0 {
+		t.Errorf("len(m.projections) = %d, want 0 (zero-LoopID events never route to a projection)", len(m.projections))
+	}
+}
+
+// TestProjectionGloballyUniqueIDs locks the single-nextID allocator: every entry across
+// the primary root fold AND a subagent projection draws from the one m.nextID, so no two
+// entries share a displayID (a later collapse map keyed by displayID cannot collide).
+func TestProjectionGloballyUniqueIDs(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{primaryLoopID: primary}
+	// Primary stream: a genuine user row + a finalized assistant step.
+	m = m.ApplyEvent(event.TurnStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}},
+		Message: userMsg("primary question"),
+	})
+	m = m.ApplyEvent(stepDoneFrom(primary, aiMessage("", "primary answer")))
+	// Subagent stream folded into its own projection.
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "sub task"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "sub work", toolUse("g", "Grep", `{}`)),
+		toolResult("g", "hit"),
+	))
+
+	pc, _ := m.projectionFor(sub)
+	if len(m.committed) == 0 || len(pc) == 0 {
+		t.Fatalf("root=%d, projection=%d; want both non-empty so uniqueness is meaningful", len(m.committed), len(pc))
+	}
+	seen := make(map[displayID]bool)
+	for _, group := range [][]entry{m.committed, pc} {
+		for _, e := range group {
+			if e.ID == 0 {
+				t.Errorf("entry has a zero ID: %+v", e)
+			}
+			if seen[e.ID] {
+				t.Errorf("displayID %d collides across the root fold and a projection (single nextID violated)", e.ID)
+			}
+			seen[e.ID] = true
+		}
+	}
+}
+
+// TestProjectionStoredCardNoSteal is the §3a guard: a concurrent subagent step whose
+// first tool shares index 0 with the primary's OWN live tool card must rebuild its nested
+// card via storedStepToolCard (the child's durable result), NEVER stealing the primary's
+// same-index live card. The projection fold also never reads or mutates m.live.Calls, so
+// the primary's live card is left untouched.
+func TestProjectionStoredCardNoSteal(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{primaryLoopID: primary}
+	// The primary's OWN live Bash card at index 0 (as if the orchestrator's Bash streamed).
+	m = m.ApplyEvent(event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}}})
+	m = m.ApplyEvent(toolStarted(callID(0x11), "Bash", "parent bash"))
+	m = m.ApplyEvent(toolCompleted(callID(0x11), false, "PARENT bash output"))
+
+	// A concurrent subagent whose FIRST tool is ALSO Bash — same index (0).
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "investigate"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("child-bash-id", "Bash", `{"command":"ls"}`)),
+		toolResult("child-bash-id", "CHILD bash output"),
+	))
+
+	pc, _ := m.projectionFor(sub)
+	var child *ToolCallView
+	for _, e := range pc {
+		if e.Kind == kindTool && len(e.Calls) == 1 && e.Calls[0].ToolName == "Bash" {
+			cc := e.Calls[0]
+			child = &cc
+			break
+		}
+	}
+	if child == nil {
+		t.Fatalf("projection has no Bash tool card; %+v", pc)
+	}
+	if got := strings.Join(child.Result, "\n"); got != "CHILD bash output" {
+		t.Errorf("projection Bash result = %q, want the CHILD's %q (not the parent live card — §3a)", got, "CHILD bash output")
+	}
+	if child.Summary != "ls" {
+		t.Errorf("projection Bash summary = %q, want the stored command %q", child.Summary, "ls")
+	}
+	// The primary's live Bash card is untouched: the projection never reads m.live.Calls.
+	if len(m.live.Calls) != 1 {
+		t.Fatalf("m.live.Calls = %d, want the primary's 1 live card untouched", len(m.live.Calls))
+	}
+	if got := strings.Join(m.live.Calls[0].Result, "\n"); got != "PARENT bash output" {
+		t.Errorf("primary live Bash result = %q, want %q (untouched by the projection)", got, "PARENT bash output")
+	}
+}

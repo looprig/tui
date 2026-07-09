@@ -90,6 +90,27 @@ func DefaultEventFilter(primaryLoopID uuid.UUID) event.EventFilter {
 	}
 }
 
+// AllLoopsEventFilter is the MODERN TUI's declared interest for a session
+// subscription: it is DefaultEventFilter widened so BOTH classes deliver from EVERY
+// loop — Ephemeral is All (not primary-only) and Enduring is All (already the default).
+// It takes no primary loop id because neither scope discriminates by loop.
+//
+// Modern mode renders every loop's WHOLE live stream (a user can focus any subagent
+// loop and watch its live tokens + tool spinners), so it must actually RECEIVE every
+// loop's live Ephemeral firehose. The primary-only Ephemeral default (DefaultEventFilter)
+// would STARVE the per-loop projections of a subagent's live output, freezing a focused
+// subagent view at Enduring StepDone granularity. The whole-session hub buffer is bounded
+// and has no replay, so modern mode opens ONE all-loops subscription at startup and never
+// re-subscribes; focus is then a pure view filter over already-received, already-projected
+// state. The accepted cost is higher event volume than the primary-only default — modern
+// mode wants exactly that. Scrollback mode keeps DefaultEventFilter unchanged.
+func AllLoopsEventFilter() event.EventFilter {
+	return event.EventFilter{
+		Ephemeral: event.LoopScope{All: true},
+		Enduring:  event.LoopScope{All: true},
+	}
+}
+
 // OpenAgent constructs a fresh Agent. The composition root binds it to
 // registry.Open(name); the TUI calls it on /clear to replace the current agent.
 type OpenAgent func(context.Context) (Agent, error)

@@ -93,6 +93,41 @@ func TestDefaultEventFilterShape(t *testing.T) {
 	}
 }
 
+// TestAllLoopsEventFilter locks the MODERN TUI's filter shape: unlike DefaultEventFilter
+// (primary-only Ephemeral), AllLoopsEventFilter's Ephemeral scope matches EVERY loop, so
+// a subagent loop's live token/tool firehose reaches the subscriber and its per-loop
+// projection is not starved; Enduring stays all-loops as in the default. It asserts the
+// Ephemeral scope directly (All plus Matches over a random NON-primary loop id) and
+// cross-checks that DefaultEventFilter does NOT match that id — pinning the load-bearing
+// difference at the source, not only through behavior.
+func TestAllLoopsEventFilter(t *testing.T) {
+	t.Parallel()
+
+	primary := loopID(1)
+	other := loopID(7) // an arbitrary NON-primary (subagent) loop id
+
+	all := AllLoopsEventFilter()
+	def := DefaultEventFilter(primary)
+
+	if !all.Ephemeral.All {
+		t.Error("AllLoopsEventFilter Ephemeral.All = false, want true (every loop's live stream)")
+	}
+	if !all.Ephemeral.Matches(other) {
+		t.Error("AllLoopsEventFilter Ephemeral.Matches(non-primary) = false, want true (modern mode receives every loop's live stream)")
+	}
+	if !all.Ephemeral.Matches(primary) {
+		t.Error("AllLoopsEventFilter Ephemeral.Matches(primary) = false, want true")
+	}
+	if !all.Enduring.All {
+		t.Error("AllLoopsEventFilter Enduring.All = false, want true (Enduring stays all-loops)")
+	}
+	// The load-bearing contrast (design §Subscription): the primary-only default does NOT
+	// match a non-primary loop's Ephemeral events — the very starvation modern mode fixes.
+	if def.Ephemeral.Matches(other) {
+		t.Error("DefaultEventFilter Ephemeral.Matches(non-primary) = true, want false (default is primary-only)")
+	}
+}
+
 // loopID builds a deterministic non-zero loop uuid from one byte (callID is defined
 // in screen_test.go with the same shape; this name documents the loop-id intent).
 func loopID(b byte) uuid.UUID {

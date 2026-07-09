@@ -235,6 +235,18 @@ type queuedInput struct {
 	shown   bool
 }
 
+// loopProjection is a NON-PRIMARY loop's own committed + live stream, folded from that
+// loop's events so modern mode can render any focused loop's whole transcript
+// independently of the primary root fold (design §Per-loop projections). committed holds
+// the loop's finalized rows; live is its in-progress segment. Its entries draw from the
+// model's SINGLE nextID allocator (never a per-projection counter), so displayIDs are
+// globally unique across every projection and the primary root fold — a later collapse
+// map keyed by displayID cannot collide.
+type loopProjection struct {
+	committed []entry
+	live      liveSeg
+}
+
 // transcriptModel is the pure, side-effect-free reducer over a turn's event
 // stream. committed holds finalized entries in display order; live is the
 // in-progress segment for the current turn; queued holds the pending
@@ -284,6 +296,17 @@ type transcriptModel struct {
 	// cloned on write (value-copy contract) — appended to a fresh slice, never mutated in
 	// a shared backing array — mirroring the map clone-on-write alongside it.
 	accumOrder []spawnKey
+	// projections holds, per NON-PRIMARY loop id, that loop's own committed+live stream
+	// (design §Per-loop projections). It is an ADDITIVE sink: routeProjection folds a
+	// non-primary, non-zero-LoopID event into its projection AFTER the folded root
+	// reconstruction has run unchanged, so scrollback's root view, the user-row rule, and
+	// the subagentAccum machinery are all untouched. The PRIMARY loop is NEVER stored here
+	// — projectionFor aliases the existing committed/live root fold for it (no re-fold, no
+	// duplicate id, zero cost when modern mode is inactive). It is cloned on write
+	// (value-copy contract), mirroring subagentAccum: a freshly created projection is
+	// freshly allocated so a prior model never sees it, and in-place fold into the pointer
+	// is the intended write path within one linear reducer chain.
+	projections map[uuid.UUID]*loopProjection
 }
 
 // spawnKey identifies one Subagent tool call's spawn: the parent loop/turn/step
@@ -405,6 +428,11 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		}
 		m.turnFailed(ev)
 	}
+	// ADDITIVE per-loop sink: after the folded root reconstruction above has run
+	// unchanged, ALSO fold a non-primary, non-zero-LoopID event into its own projection
+	// so modern mode can render that loop's whole stream (design §Per-loop projections).
+	// It is a no-op for the primary loop and for session-scoped (zero-LoopID) events.
+	m.routeProjection(ev)
 	return m
 }
 
@@ -1263,4 +1291,166 @@ func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 		Blocks: []content.Block{&content.TextBlock{Text: msg}},
 	})
 	m.live = liveSeg{}
+}
+
+// projectionFor returns the committed + live stream to render for loopID. For the
+// PRIMARY loop id — and the zero id (the single-loop / session default) — it is a pure
+// ALIAS of the existing root fold (m.committed / m.live): it neither builds nor reads
+// m.projections, so scrollback mode and the primary view pay ZERO extra cost, no entry is
+// folded twice, and no displayID is minted twice (design §Per-loop projections,
+// primary-alias rule). Any OTHER loop id returns its loopProjection's committed+live; an
+// absent projection yields an empty pair (a loop seen but not yet producing content). It
+// is the seam Task 7's viewport renders through — projectionFor(focusedLoopID).
+func (m transcriptModel) projectionFor(loopID uuid.UUID) (committed []entry, live liveSeg) {
+	if loopID == m.primaryLoopID || loopID.IsZero() {
+		return m.committed, m.live
+	}
+	if p, ok := m.projections[loopID]; ok {
+		return p.committed, p.live
+	}
+	return nil, liveSeg{}
+}
+
+// routeProjection is the ADDITIVE per-loop sink (design §Per-loop projections): AFTER the
+// folded root reconstruction has run unchanged, it ALSO folds a NON-PRIMARY, non-zero-
+// LoopID event into that loop's projection so modern mode can render the loop's own
+// committed+live stream. It is a strict no-op for the PRIMARY loop (its stream IS the root
+// fold, aliased by projectionFor) and for session-scoped zero-LoopID events (handled by
+// the model logic, NEVER a projection — the zero-LoopID guard). Every committed entry
+// draws from the single m.nextID, so displayIDs stay globally unique across all
+// projections and the root fold. It NEVER consults m.live.Calls: a non-primary step's
+// tool cards are rebuilt purely via storedStepToolCard (design §3a — consulting the
+// primary live.Calls would steal a same-index primary card).
+func (m *transcriptModel) routeProjection(ev event.Event) {
+	loopID := ev.EventHeader().LoopID
+	if loopID.IsZero() || loopID == m.primaryLoopID {
+		return
+	}
+	p := m.ensureProjection(loopID)
+	switch ev := ev.(type) {
+	case event.TurnStarted:
+		p.live.active = true
+		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
+	case event.TurnFoldedInto:
+		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
+	case event.TokenDelta:
+		projectionChunk(p, ev.Chunk)
+	case event.StepDone:
+		m.projectionStep(p, ev)
+	case event.TurnDone, event.TurnInterrupted, event.TurnFailed:
+		// A terminal resets the loop's provisional live: every completed step already
+		// committed via its own projectionStep, so nothing is flushed here (a projection
+		// carries no defensive commit path — its finalized rows come only from StepDone).
+		p.live = liveSeg{}
+	}
+}
+
+// ensureProjection returns the projection for a NON-PRIMARY loop, creating it (and
+// cloning the projections map on write) on first sight so a later event folds into the
+// same projection. A freshly created projection is freshly allocated, so the by-value
+// reducer never aliases a prior model's projection; the MAP clone upholds the value-copy
+// contract, mirroring ensureAccum.
+func (m *transcriptModel) ensureProjection(loopID uuid.UUID) *loopProjection {
+	if p, ok := m.projections[loopID]; ok {
+		return p
+	}
+	next := make(map[uuid.UUID]*loopProjection, len(m.projections)+1)
+	for k, v := range m.projections {
+		next[k] = v
+	}
+	p := &loopProjection{}
+	next[loopID] = p
+	m.projections = next
+	return p
+}
+
+// projectionUser commits THIS loop's OWN user/task row into its projection when the
+// turn-start is the loop's own initial task — triggeredBy (Cause.LoopID) is zero (not a
+// hand-back) and a Message is present. Unlike the root startTurnUser (keyed on
+// primaryLoopID), the per-loop rule is scoped to THIS projection's loop: routeProjection
+// already selected the projection by the event's LoopID, so the row is the loop's own
+// task, shown at the head of its focused stream (design §Per-loop projections). It draws
+// from the single m.nextID.
+func (m *transcriptModel) projectionUser(p *loopProjection, triggeredBy uuid.UUID, msg *content.UserMessage) {
+	if !triggeredBy.IsZero() || msg == nil {
+		return
+	}
+	m.nextID++
+	p.committed = append(p.committed, entry{ID: m.nextID, Kind: kindUser, Blocks: msg.Blocks})
+}
+
+// projectionChunk routes one streamed chunk into a projection's live segment (text →
+// live.Text, thinking → live.Thinking), mirroring applyChunk for the root fold. Any other
+// chunk variant is skipped. It is a free function — chunks allocate no id, so it touches
+// only the projection, never the model.
+func projectionChunk(p *loopProjection, c content.Chunk) {
+	switch chunk := c.(type) {
+	case *content.TextChunk:
+		p.live.Text += chunk.Text
+	case *content.ThinkingChunk:
+		p.live.Thinking += chunk.Thinking
+	}
+}
+
+// projectionStep commits one StepDone into a projection, mirroring the primary stepDone
+// commit but building each tool card via storedStepToolCard EXCLUSIVELY — never
+// stepToolCard, which consults m.live.Calls and would steal a same-index primary live
+// card (design §3a). It commits the step's AIMessage prose/headline (projectionStepAssistant)
+// then each tool card as its own kindTool entry, promoting a lone empty-text card to the
+// bullet exactly as the root fold does, and finally resets the projection's provisional
+// live (active preserved). Every entry draws from the single m.nextID.
+func (m *transcriptModel) projectionStep(p *loopProjection, ev event.StepDone) {
+	ai, results := splitStepGroup(ev.Messages)
+	uses := toolUsesOf(ai)
+	cards := make([]ToolCallView, len(uses))
+	for i := range uses {
+		cards[i] = storedStepToolCard(uses[i], results)
+	}
+	m.projectionStepAssistant(p, ai, len(uses))
+	promotedSingle := ai != nil && textOnly(ai.Blocks) == "" && len(uses) == 1
+	for i := range cards {
+		m.nextID++
+		p.committed = append(p.committed, entry{
+			ID:       m.nextID,
+			Kind:     kindTool,
+			Calls:    []ToolCallView{cards[i]},
+			promoted: promotedSingle,
+		})
+	}
+	active := p.live.active
+	p.live = liveSeg{active: active}
+}
+
+// projectionStepAssistant commits a projection's per-step AIMessage prose/headline as one
+// kindAssistant entry, mirroring commitStepAssistant for the root fold: the thinking rail
+// (if any) then the narration (if any), or a "Multiple actions" umbrella headline for an
+// empty-text step that ran more than one tool. A nil AIMessage, or a step with no prose
+// and at most one tool (its lone card is promoted to the bullet by projectionStep),
+// commits nothing here. It draws from the single m.nextID.
+func (m *transcriptModel) projectionStepAssistant(p *loopProjection, ai *content.AIMessage, cards int) {
+	if ai == nil {
+		return
+	}
+	var blocks []content.Block
+	if th := thinkingText(ai.Blocks); th != "" {
+		blocks = append(blocks, &content.ThinkingBlock{Thinking: th})
+	}
+	text := textOnly(ai.Blocks)
+	if text != "" {
+		blocks = append(blocks, &content.TextBlock{Text: text})
+	}
+	headline := ""
+	if text == "" && cards > 1 {
+		headline = multipleActionsHeadline
+	}
+	if len(blocks) == 0 && headline == "" {
+		return
+	}
+	m.nextID++
+	p.committed = append(p.committed, entry{
+		ID:       m.nextID,
+		Kind:     kindAssistant,
+		Blocks:   blocks,
+		headline: headline,
+	})
 }
