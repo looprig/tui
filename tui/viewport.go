@@ -39,11 +39,11 @@ type selection struct {
 // until release, then fall back to lines (resolving the anchored points by identity).
 type viewportModel struct {
 	lines  []renderedLine
-	offset int // index of the top visible line
-	height int // visible rows
-	width  int // visible columns (stored for the composing shell; View measures plain)
+	offset int       // index of the top visible line
+	height int       // visible rows
+	sel    selection // meaningful only when hasSel; a VALUE (not a pointer) so copying
+	hasSel bool      // the model never aliases a shared selection across Elm Update copies
 	atTail bool
-	sel    *selection     // nil when there is no selection
 	frozen []renderedLine // snapshot taken at mouse-down; nil when no drag is active
 }
 
@@ -62,10 +62,16 @@ func (m *viewportModel) SetLines(lines []renderedLine) {
 	m.reclamp()
 }
 
-// SetSize sets the visible width and height, then re-derives the offset the same way
-// SetLines does (pin to tail when following, else clamp).
+// SetSize sets the visible height, clamps a negative height to 0 so maxOffset is always
+// well-defined, then re-derives the offset the same way SetLines does (pin to tail when
+// following, else clamp). The width argument is accepted to match the composing shell's
+// call shape but is not stored: the shell renders lines to width before SetLines, so the
+// viewport never needs it.
 func (m *viewportModel) SetSize(width, height int) {
-	m.width = width
+	_ = width
+	if height < 0 {
+		height = 0
+	}
 	m.height = height
 	m.reclamp()
 }
@@ -97,11 +103,11 @@ func (m *viewportModel) scrollBy(n int) {
 }
 
 // handleKey consumes the viewport's non-conflicting navigation keys — PageUp/PageDown
-// (a page is height-1 rows, one row of overlap) and Home/End — returning whether the key
-// was consumed so the composing shell can route un-consumed keys elsewhere. Line-scroll
-// deliberately lives on the wheel and Page keys, not the arrow keys (which belong to the
-// composer/prompt layer).
-func (m viewportModel) handleKey(msg tea.KeyPressMsg) (viewportModel, bool) {
+// (a page is height-1 rows, one row of overlap) and Home/End — mutating in place and
+// returning whether the key was consumed so the composing shell can route un-consumed
+// keys elsewhere. Line-scroll deliberately lives on the wheel and Page keys, not the
+// arrow keys (which belong to the composer/prompt layer).
+func (m *viewportModel) handleKey(msg tea.KeyPressMsg) bool {
 	page := m.height - 1
 	if page < 1 {
 		page = 1
@@ -116,16 +122,22 @@ func (m viewportModel) handleKey(msg tea.KeyPressMsg) (viewportModel, bool) {
 	case "end":
 		m.scrollBy(len(m.lines))
 	default:
-		return m, false
+		return false
 	}
-	return m, true
+	return true
 }
 
-// handleMouse routes mouse events: the wheel scrolls; a left click begins a selection and
-// freezes the buffer; motion with the button held moves the cursor against the frozen
-// buffer; release keeps the selection visible and returns a copy command for its text
-// (nil for an empty selection, so an empty drag never clobbers the clipboard).
-func (m viewportModel) handleMouse(msg tea.MouseMsg) (viewportModel, tea.Cmd) {
+// handleMouse routes mouse events, mutating in place and returning any follow-up command:
+// the wheel scrolls; a left click begins a selection and freezes the buffer; motion with
+// the button held moves the cursor against the frozen buffer; release keeps the selection
+// visible and returns a copy command for its text (nil for an empty selection, so an empty
+// drag never clobbers the clipboard).
+//
+// Coordinate contract: msg.X and msg.Y are VIEWPORT-LOCAL — the viewport renders at row 0
+// of its own region, so (0,0) is its top-left cell. The composing shell (Task 7) MUST
+// translate global terminal coordinates into viewport-local ones (subtract the region's
+// top row / left column) before calling this.
+func (m *viewportModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch e := msg.(type) {
 	case tea.MouseWheelMsg:
 		switch e.Button {
@@ -144,10 +156,10 @@ func (m viewportModel) handleMouse(msg tea.MouseMsg) (viewportModel, tea.Cmd) {
 		}
 	case tea.MouseReleaseMsg:
 		if m.frozen != nil {
-			return m, m.endSelect()
+			return m.endSelect()
 		}
 	}
-	return m, nil
+	return nil
 }
 
 // beginSelect starts a drag at viewport-local (x, y): it snapshots the current lines into
@@ -164,14 +176,15 @@ func (m *viewportModel) beginSelect(x, y int) {
 	}
 	m.frozen = m.lines
 	pt := selPoint{entry: m.lines[row].entry, sub: m.lines[row].sub, cell: x}
-	m.sel = &selection{anchor: pt, cursor: pt}
+	m.sel = selection{anchor: pt, cursor: pt}
+	m.hasSel = true
 }
 
 // moveCursor updates the drag's moving endpoint from viewport-local (x, y), reading the
 // FROZEN buffer so a concurrent reflow of lines cannot shift the selection. The row is
 // clamped into the frozen buffer.
 func (m *viewportModel) moveCursor(x, y int) {
-	if len(m.frozen) == 0 || m.sel == nil {
+	if len(m.frozen) == 0 || !m.hasSel {
 		return
 	}
 	row := clamp(m.offset+y, 0, len(m.frozen)-1)
@@ -209,7 +222,7 @@ type resolvedPoint struct {
 // ordered so start <= end (by row, then cell). ok is false when there is no selection,
 // an endpoint is no longer present in buf, or the span is empty (start == end).
 func (m viewportModel) normSel(buf []renderedLine) (start, end resolvedPoint, ok bool) {
-	if m.sel == nil {
+	if !m.hasSel {
 		return resolvedPoint{}, resolvedPoint{}, false
 	}
 	aRow, aOK := lineIndexOf(buf, m.sel.anchor)
@@ -281,6 +294,10 @@ func (m viewportModel) View() string {
 		return ""
 	}
 	buf := m.activeBuffer()
+	// Clamp to len(buf): during a drag the buffer is frozen while offset may have advanced
+	// (a SetLines that pinned to a now-longer lines). If offset lands past the frozen end,
+	// start clamps to len(buf) and the window is empty for that one frame — an accepted
+	// transient (a drag is momentary), not a correctness bug.
 	start := clamp(m.offset, 0, len(buf))
 	end := clamp(start+m.height, 0, len(buf))
 	selStart, selEnd, hasSel := m.normSel(buf)

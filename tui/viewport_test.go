@@ -127,7 +127,7 @@ func TestViewportWheel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := viewportModel{lines: plainLines(20), height: 5, offset: tt.start}
-			m, cmd := m.handleMouse(tea.MouseWheelMsg{Button: tt.button})
+			cmd := m.handleMouse(tea.MouseWheelMsg{Button: tt.button})
 			if cmd != nil {
 				t.Errorf("wheel returned a non-nil cmd")
 			}
@@ -163,7 +163,7 @@ func TestViewportKeys(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := viewportModel{lines: plainLines(20), height: 5, offset: tt.start}
-			m, consumed := m.handleKey(keyPress(tt.key))
+			consumed := m.handleKey(keyPress(tt.key))
 			if consumed != tt.wantConsumed {
 				t.Fatalf("consumed = %v, want %v", consumed, tt.wantConsumed)
 			}
@@ -211,6 +211,70 @@ func TestViewportSetLines(t *testing.T) {
 	}
 }
 
+// TestViewportSetSize locks that SetSize re-derives the offset (pin to tail when
+// following, else clamp) and clamps a negative height to 0 so maxOffset stays defined.
+func TestViewportSetSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		lines      int
+		startOff   int
+		atTail     bool
+		w, h       int
+		wantOffset int
+		wantHeight int
+	}{
+		{name: "pinned follows tail on grow", lines: 20, startOff: 15, atTail: true, w: 80, h: 8, wantOffset: 12, wantHeight: 8},
+		{name: "detached clamps offset when height grows", lines: 20, startOff: 18, atTail: false, w: 80, h: 15, wantOffset: 5, wantHeight: 15},
+		{name: "negative height clamped to zero", lines: 20, startOff: 3, atTail: false, w: 80, h: -4, wantOffset: 3, wantHeight: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := viewportModel{lines: plainLines(tt.lines), height: 5, offset: tt.startOff, atTail: tt.atTail}
+			m.SetSize(tt.w, tt.h)
+			if m.offset != tt.wantOffset {
+				t.Errorf("offset = %d, want %d", m.offset, tt.wantOffset)
+			}
+			if m.height != tt.wantHeight {
+				t.Errorf("height = %d, want %d", m.height, tt.wantHeight)
+			}
+		})
+	}
+}
+
+// TestSelectionAnchorDeletedByReflow locks the degrade-safe path: when a reflow deletes
+// the entry a resolved selection endpoint is anchored to, normSel can no longer resolve
+// it, so SelectedText returns "" and View renders the surviving lines verbatim (no panic,
+// no highlight, no stale span).
+func TestSelectionAnchorDeletedByReflow(t *testing.T) {
+	t.Parallel()
+
+	buf := []renderedLine{
+		rl(1, 0, "alpha", "alpha"),
+		rl(1, 1, "bravo", "bravo"),
+		rl(2, 0, "charlie", "charlie"),
+	}
+	m := viewportModel{lines: buf, height: 10}
+	m.beginSelect(0, 0) // anchor -> entry 1, sub 0
+	m.moveCursor(7, 2)  // cursor -> entry 2, sub 0
+	m.handleMouse(tea.MouseReleaseMsg{X: 7, Y: 2, Button: tea.MouseLeft})
+	if !m.hasSel {
+		t.Fatalf("precondition: selection should exist after release")
+	}
+
+	// Reflow deletes entry 1 entirely — the anchor's line is gone.
+	m.SetLines([]renderedLine{rl(2, 0, "charlie", "charlie")})
+
+	if got := m.SelectedText(); got != "" {
+		t.Errorf("SelectedText with deleted anchor = %q, want \"\"", got)
+	}
+	if got := m.View(); got != "charlie" {
+		t.Errorf("View with deleted anchor = %q, want %q (surviving line verbatim, no panic)", got, "charlie")
+	}
+}
+
 // TestSelectedText locks cell-based extraction from plain across same-line, multi-line,
 // wide-rune (CJK + emoji, width 2), and empty selections.
 func TestSelectedText(t *testing.T) {
@@ -223,58 +287,65 @@ func TestSelectedText(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		buf  []renderedLine
-		sel  *selection
-		want string
+		name   string
+		buf    []renderedLine
+		sel    selection
+		hasSel bool
+		want   string
 	}{
 		{
-			name: "same line substring by cell",
-			buf:  []renderedLine{rl(1, 0, "hello world", "hello world")},
-			sel:  &selection{anchor: selPoint{1, 0, 0}, cursor: selPoint{1, 0, 5}},
-			want: "hello",
+			name:   "same line substring by cell",
+			buf:    []renderedLine{rl(1, 0, "hello world", "hello world")},
+			sel:    selection{anchor: selPoint{1, 0, 0}, cursor: selPoint{1, 0, 5}},
+			hasSel: true,
+			want:   "hello",
 		},
 		{
-			name: "same line reversed anchor/cursor normalizes",
-			buf:  []renderedLine{rl(1, 0, "hello world", "hello world")},
-			sel:  &selection{anchor: selPoint{1, 0, 11}, cursor: selPoint{1, 0, 6}},
-			want: "world",
+			name:   "same line reversed anchor/cursor normalizes",
+			buf:    []renderedLine{rl(1, 0, "hello world", "hello world")},
+			sel:    selection{anchor: selPoint{1, 0, 11}, cursor: selPoint{1, 0, 6}},
+			hasSel: true,
+			want:   "world",
 		},
 		{
-			name: "multi line first mid last",
-			buf:  multi,
-			sel:  &selection{anchor: selPoint{1, 0, 5}, cursor: selPoint{2, 0, 4}},
-			want: "one\nline two\nline",
+			name:   "multi line first mid last",
+			buf:    multi,
+			sel:    selection{anchor: selPoint{1, 0, 5}, cursor: selPoint{2, 0, 4}},
+			hasSel: true,
+			want:   "one\nline two\nline",
 		},
 		{
-			name: "cjk wide rune selected by cells",
-			buf:  []renderedLine{rl(1, 0, "a世b", "a世b")},
-			sel:  &selection{anchor: selPoint{1, 0, 1}, cursor: selPoint{1, 0, 3}},
-			want: "世",
+			name:   "cjk wide rune selected by cells",
+			buf:    []renderedLine{rl(1, 0, "a世b", "a世b")},
+			sel:    selection{anchor: selPoint{1, 0, 1}, cursor: selPoint{1, 0, 3}},
+			hasSel: true,
+			want:   "世",
 		},
 		{
-			name: "emoji wide rune selected by cells",
-			buf:  []renderedLine{rl(1, 0, "x🚀y", "x🚀y")},
-			sel:  &selection{anchor: selPoint{1, 0, 1}, cursor: selPoint{1, 0, 3}},
-			want: "🚀",
+			name:   "emoji wide rune selected by cells",
+			buf:    []renderedLine{rl(1, 0, "x🚀y", "x🚀y")},
+			sel:    selection{anchor: selPoint{1, 0, 1}, cursor: selPoint{1, 0, 3}},
+			hasSel: true,
+			want:   "🚀",
 		},
 		{
-			name: "empty selection anchor equals cursor",
-			buf:  []renderedLine{rl(1, 0, "hello", "hello")},
-			sel:  &selection{anchor: selPoint{1, 0, 2}, cursor: selPoint{1, 0, 2}},
-			want: "",
+			name:   "empty selection anchor equals cursor",
+			buf:    []renderedLine{rl(1, 0, "hello", "hello")},
+			sel:    selection{anchor: selPoint{1, 0, 2}, cursor: selPoint{1, 0, 2}},
+			hasSel: true,
+			want:   "",
 		},
 		{
-			name: "nil selection",
-			buf:  []renderedLine{rl(1, 0, "hello", "hello")},
-			sel:  nil,
-			want: "",
+			name:   "no selection",
+			buf:    []renderedLine{rl(1, 0, "hello", "hello")},
+			hasSel: false,
+			want:   "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := viewportModel{lines: tt.buf, height: 10, sel: tt.sel}
+			m := viewportModel{lines: tt.buf, height: 10, sel: tt.sel, hasSel: tt.hasSel}
 			if got := m.SelectedText(); got != tt.want {
 				t.Errorf("SelectedText() = %q, want %q", got, tt.want)
 			}
@@ -330,7 +401,7 @@ func TestSelectionSurvivesReflowAfterRelease(t *testing.T) {
 	m.beginSelect(0, 0)
 	m.moveCursor(7, 2)
 	want := m.SelectedText()
-	m, _ = m.handleMouse(tea.MouseReleaseMsg{X: 7, Y: 2, Button: tea.MouseLeft})
+	m.handleMouse(tea.MouseReleaseMsg{X: 7, Y: 2, Button: tea.MouseLeft})
 	if m.frozen != nil {
 		t.Fatalf("frozen must be cleared after release")
 	}
@@ -357,16 +428,16 @@ func TestReleaseCopiesSelection(t *testing.T) {
 	t.Run("non-empty drag copies", func(t *testing.T) {
 		t.Parallel()
 		m := viewportModel{lines: buf, height: 5}
-		m, _ = m.handleMouse(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-		m, _ = m.handleMouse(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-		m, cmd := m.handleMouse(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+		m.handleMouse(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+		m.handleMouse(tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+		cmd := m.handleMouse(tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
 		if cmd == nil {
 			t.Errorf("expected a copy cmd for a non-empty selection")
 		}
 		if m.frozen != nil {
 			t.Errorf("frozen must be nil after release")
 		}
-		if m.sel == nil {
+		if !m.hasSel {
 			t.Errorf("selection must remain visible after release")
 		}
 	})
@@ -374,8 +445,8 @@ func TestReleaseCopiesSelection(t *testing.T) {
 	t.Run("empty click-release copies nothing", func(t *testing.T) {
 		t.Parallel()
 		m := viewportModel{lines: buf, height: 5}
-		m, _ = m.handleMouse(tea.MouseClickMsg{X: 3, Y: 0, Button: tea.MouseLeft})
-		_, cmd := m.handleMouse(tea.MouseReleaseMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+		m.handleMouse(tea.MouseClickMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+		cmd := m.handleMouse(tea.MouseReleaseMsg{X: 3, Y: 0, Button: tea.MouseLeft})
 		if cmd != nil {
 			t.Errorf("empty selection must return nil cmd, got non-nil")
 		}
@@ -399,8 +470,8 @@ func TestBeginSelectOutsideContent(t *testing.T) {
 			t.Parallel()
 			m := viewportModel{lines: plainLines(3), height: 10}
 			m.beginSelect(tt.x, tt.y)
-			if m.sel != nil || m.frozen != nil {
-				t.Errorf("click outside content started a selection (sel=%v frozen=%v)", m.sel, m.frozen)
+			if m.hasSel || m.frozen != nil {
+				t.Errorf("click outside content started a selection (hasSel=%v frozen=%v)", m.hasSel, m.frozen)
 			}
 		})
 	}
@@ -419,7 +490,8 @@ func TestViewSelectionHighlight(t *testing.T) {
 	m := viewportModel{
 		lines:  buf,
 		height: 2,
-		sel:    &selection{anchor: selPoint{1, 0, 0}, cursor: selPoint{1, 0, 5}},
+		sel:    selection{anchor: selPoint{1, 0, 0}, cursor: selPoint{1, 0, 5}},
+		hasSel: true,
 	}
 	rows := strings.Split(m.View(), "\n")
 	if len(rows) != 2 {
