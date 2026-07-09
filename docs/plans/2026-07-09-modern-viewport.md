@@ -102,7 +102,7 @@ type renderedLine struct {
     sub    int        // intra-entry line index
 }
 ```
-Add a function `renderEntryLines(e entry, width int, collapsed bool) []renderedLine` that wraps the existing entry renderer and, per output line, records `plain` (build from the source content, NOT by stripping — the renderer has the plain text before styling) and provenance.
+Add a function `renderEntryLines(e entry, width int, collapsed bool) []renderedLine` that wraps the existing entry renderer and, per output line, records `plain` and provenance. `plain` is derived from the styled line by **fail-secure ANSI stripping** (`plainFromStyled`): this guarantees `plain[i]` corresponds line-for-line to `styled[i]` (so `lipgloss.Width(plain)==lipgloss.Width(styled)`), which a parallel un-styled render could not. Because tool-result bodies pass subprocess bytes through verbatim, the stripper must be fail-secure — no `\x1b` may survive into clipboard-bound text (OSC/DCS/CSI incl. colon sub-params/nF escapes, then a residual-ESC guard), stdlib `regexp` only.
 
 **Step 3 — Failing tests:** a thinking entry yields lines whose `plain` has no ESC bytes (`!strings.ContainsRune(plain, 0x1b)`); `entry` matches the source id; `sub` increments 0..n; a wide-rune line's `lipgloss.Width(plain)` equals the intended cell width; collapsed vs expanded produce different line counts.
 
