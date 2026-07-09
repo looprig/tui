@@ -69,11 +69,11 @@ func subNext(sub EventStream) tea.Cmd {
 		if sub == nil {
 			return nil
 		}
-		ev, ok := <-sub.Events()
+		d, ok := <-sub.Events()
 		if !ok {
 			return subClosedMsg{err: sub.Err()}
 		}
-		return eventMsg{ev: ev}
+		return eventMsg{ev: d.Event}
 	}
 }
 

@@ -6,8 +6,9 @@ import (
 	"fmt"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/gate"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // schemaVersion is the current wire-envelope schema version stamped into every
@@ -118,10 +119,14 @@ func encodePayload(ev Event) ([]byte, error) {
 		return marshalTurnFailed(e)
 	case RestoreErrored:
 		return marshalRestoreErrored(e)
+	case GateResolved:
+		return marshalGateResolved(e)
 	case SessionStarted, SessionActive, SessionIdle, SessionStopped,
-		RestoreStarted, RestoreDone, WorkspaceCheckpointed, LoopIdle, LoopStarted, TurnRejected,
+		RestoreStarted, RestoreDone, WorkspaceCheckpointed, SecurityCeilingChanged,
+		LoopIdle, LoopStarted, TurnRejected,
 		UserInputRequested, TurnInterrupted,
-		TurnStarted, TurnFoldedInto, InputCancelled, TurnDone:
+		TurnStarted, TurnFoldedInto, InputCancelled, TurnDone,
+		PermissionDecided, GatePrepared, GateOpened:
 		// Every field round-trips through encoding/json directly: header + scalars/
 		// strings/slices, and for the Message-bearing four (TurnStarted/TurnFoldedInto/
 		// InputCancelled/TurnDone) the content.Message codec tags nested blocks. The
@@ -330,6 +335,8 @@ func decodePayload(tag string, data []byte) (Event, error) {
 		return decodeRestoreErrored(data)
 	case "WorkspaceCheckpointed":
 		return decodePlain[WorkspaceCheckpointed](tag, data)
+	case "SecurityCeilingChanged":
+		return decodePlain[SecurityCeilingChanged](tag, data)
 	case "LoopIdle":
 		return decodePlain[LoopIdle](tag, data)
 	case "LoopStarted":
@@ -352,8 +359,16 @@ func decodePayload(tag string, data []byte) (Event, error) {
 		return decodePlain[TurnInterrupted](tag, data)
 	case "PermissionRequested":
 		return decodePermissionRequested(data)
+	case "PermissionDecided":
+		return decodePlain[PermissionDecided](tag, data)
 	case "UserInputRequested":
 		return decodePlain[UserInputRequested](tag, data)
+	case "GatePrepared":
+		return decodePlain[GatePrepared](tag, data)
+	case "GateOpened":
+		return decodePlain[GateOpened](tag, data)
+	case "GateResolved":
+		return decodeGateResolved(data)
 	default:
 		return nil, &UnknownEventTypeError{Type: tag}
 	}
@@ -427,6 +442,67 @@ func decodeRestoreErrored(data []byte) (Event, error) {
 	ev := RestoreErrored{Header: w.Header}
 	if w.Err != nil {
 		ev.Err = w.Err
+	}
+	return ev, nil
+}
+
+// gateResolvedWire is GateResolved's wire form: the Audit sealed interface is
+// persisted IN FULL via gate.MarshalResponseAudit (a bare interface would marshal
+// to lossy, un-keyed output), pre-encoded into a sibling "audit" key. A nil Audit
+// serializes to an absent key.
+type gateResolvedWire struct {
+	Header
+	GateID        gate.ID             `json:"gate_id,omitzero"`
+	Reason        gate.CloseReason    `json:"reason,omitempty"`
+	Action        string              `json:"action,omitempty"`
+	ApprovalScope tool.ApprovalScope  `json:"scope,omitzero"`
+	Source        gate.ResponseSource `json:"source,omitzero"`
+	Audit         json.RawMessage     `json:"audit,omitempty"`
+}
+
+func marshalGateResolved(e GateResolved) ([]byte, error) {
+	var auditJSON json.RawMessage
+	if e.Audit != nil {
+		a, err := gate.MarshalResponseAudit(e.Audit)
+		if err != nil {
+			return nil, &EventEncodeError{Type: "GateResolved", Cause: err}
+		}
+		auditJSON = a
+	}
+	out, err := json.Marshal(gateResolvedWire{
+		Header:        e.Header,
+		GateID:        e.GateID,
+		Reason:        e.Reason,
+		Action:        e.Action,
+		ApprovalScope: e.ApprovalScope,
+		Source:        e.Source,
+		Audit:         auditJSON,
+	})
+	if err != nil {
+		return nil, &EventEncodeError{Type: "GateResolved", Cause: err}
+	}
+	return out, nil
+}
+
+func decodeGateResolved(data []byte) (Event, error) {
+	var w gateResolvedWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return nil, &EventDecodeError{Type: "GateResolved", Cause: err}
+	}
+	ev := GateResolved{
+		Header:        w.Header,
+		GateID:        w.GateID,
+		Reason:        w.Reason,
+		Action:        w.Action,
+		ApprovalScope: w.ApprovalScope,
+		Source:        w.Source,
+	}
+	if len(w.Audit) > 0 {
+		audit, err := gate.UnmarshalResponseAudit(w.Audit)
+		if err != nil {
+			return nil, &EventDecodeError{Type: "GateResolved", Cause: err}
+		}
+		ev.Audit = audit
 	}
 	return ev, nil
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/transcript"
 	"github.com/looprig/core/uuid"
 )
 
@@ -42,9 +41,6 @@ func (a *fakeAgent) Approve(context.Context, uuid.UUID, uuid.UUID, tool.Approval
 func (a *fakeAgent) Deny(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (a *fakeAgent) ProvideAnswer(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
-}
-func (a *fakeAgent) ExportSource(context.Context) (transcript.RecordSource, transcript.SystemPromptResolver, error) {
-	return nil, nil, nil
 }
 func (a *fakeAgent) Close(context.Context) error {
 	if a.closed != nil {

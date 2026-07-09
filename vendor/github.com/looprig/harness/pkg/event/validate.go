@@ -1,8 +1,8 @@
 package event
 
 import (
-	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/identity"
 )
 
 // EventName is the concrete event type name an InvalidEventError points at.
@@ -131,6 +131,8 @@ func toolExecutionID(ev Event) uuid.UUID {
 	switch e := ev.(type) {
 	case PermissionRequested:
 		return e.ToolExecutionID
+	case PermissionDecided:
+		return e.ToolExecutionID
 	case UserInputRequested:
 		return e.ToolExecutionID
 	case ToolCallStarted:
@@ -169,6 +171,11 @@ func classify(ev Event) (name string, profile idProfile, ok bool) {
 		// (same shape as RestoreDone/SessionIdle) — only SessionID set. Ref is an
 		// opaque payload string the validator never constrains.
 		return "WorkspaceCheckpointed", sessionProfile(), true
+	case SecurityCeilingChanged:
+		// Session-scoped: a session-global ceiling clamp appended when the operator
+		// changes it (same shape as WorkspaceCheckpointed) — only SessionID set. Level is
+		// an opaque ordinal the validator never constrains.
+		return "SecurityCeilingChanged", sessionProfile(), true
 	case LoopIdle:
 		return "LoopIdle", loopProfile(), true
 	case LoopStarted:
@@ -200,12 +207,20 @@ func classify(ev Event) (name string, profile idProfile, ok bool) {
 		return "TurnInterrupted", turnProfile(), true
 	case PermissionRequested:
 		return "PermissionRequested", toolProfile(), true
+	case PermissionDecided:
+		return "PermissionDecided", toolProfile(), true
 	case UserInputRequested:
 		return "UserInputRequested", toolProfile(), true
 	case ToolCallStarted:
 		return "ToolCallStarted", toolProfile(), true
 	case ToolCallCompleted:
 		return "ToolCallCompleted", toolProfile(), true
+	case GatePrepared:
+		return "GatePrepared", stepProfile(), true
+	case GateOpened:
+		return "GateOpened", stepProfile(), true
+	case GateResolved:
+		return "GateResolved", stepProfile(), true
 	default:
 		return "Event", idProfile{}, false
 	}

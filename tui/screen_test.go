@@ -15,7 +15,6 @@ import (
 	"github.com/looprig/harness/pkg/hub"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/harness/pkg/transcript"
 	"github.com/looprig/core/uuid"
 )
 
@@ -75,14 +74,6 @@ type fakeAgent struct {
 	backlog      []event.Event
 	replayErr    error
 	replayCalled bool
-
-	// export recorder: exportSrc/exportPrompts are returned by ExportSource on success;
-	// exportErr (e.g. a *journalsource.ExportUnavailableError) is returned instead when
-	// set, and exportCalled records that the seam was exercised.
-	exportSrc     transcript.RecordSource
-	exportPrompts transcript.SystemPromptResolver
-	exportErr     error
-	exportCalled  bool
 }
 
 // fixedFakeSubmitID is the deterministic InputID a fakeAgent returns when no
@@ -154,21 +145,13 @@ func (f *fakeAgent) ReplayBacklog(_ context.Context) ([]event.Event, error) {
 	return f.backlog, nil
 }
 
-func (f *fakeAgent) ExportSource(context.Context) (transcript.RecordSource, transcript.SystemPromptResolver, error) {
-	f.exportCalled = true
-	if f.exportErr != nil {
-		return nil, nil, f.exportErr
-	}
-	return f.exportSrc, f.exportPrompts, nil
-}
-
 // fakeSubscription is a test-controlled event.Subscription: a buffered channel a
 // test pushes events onto (push) plus an idempotent Close and a configurable Err.
 // It models the session-lifetime stream the Screen reads via subNext. The channel
 // is buffered so push never blocks the test goroutine; closeErr is what Err reports
 // after a hub-forced loss (nil mimics an intentional Close).
 type fakeSubscription struct {
-	ch       chan event.Event
+	ch       chan event.Delivery
 	closeErr error
 	closed   bool
 }
@@ -176,10 +159,10 @@ type fakeSubscription struct {
 // newFakeSubscription builds a fakeSubscription with a generously buffered channel
 // so a test can stage several events without a reader draining them.
 func newFakeSubscription() *fakeSubscription {
-	return &fakeSubscription{ch: make(chan event.Event, 64)}
+	return &fakeSubscription{ch: make(chan event.Delivery, 64)}
 }
 
-func (s *fakeSubscription) Events() <-chan event.Event { return s.ch }
+func (s *fakeSubscription) Events() <-chan event.Delivery { return s.ch }
 
 // Close is the consumer's idempotent teardown: it closes the channel once so a
 // subsequent subNext receives !ok. It records no error (Err stays whatever was set).
@@ -198,7 +181,7 @@ func (s *fakeSubscription) Err() error { return s.closeErr }
 // surfaces loudly rather than hanging.
 func (s *fakeSubscription) push(ev event.Event) {
 	select {
-	case s.ch <- ev:
+	case s.ch <- event.Delivery{Event: ev}:
 	default:
 		panic("fakeSubscription buffer full")
 	}
