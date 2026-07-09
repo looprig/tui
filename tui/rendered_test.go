@@ -70,6 +70,17 @@ func TestPlainFromStyled(t *testing.T) {
 		{name: "osc8 hyperlink ST stripped to text", in: "\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\", want: "link"},
 		{name: "osc then sgr around text", in: "\x1b]8;;u\x07\x1b[4mlink\x1b[m\x1b]8;;\x07", want: "link"},
 		{name: "wide rune preserved", in: "\x1b[1m世\x1b[0m", want: "世"},
+		// Raw-payload escape families the renderer never emits but a tool result can carry
+		// verbatim — each must be stripped to its visible text (fail-secure boundary).
+		{name: "colon-form sgr stripped", in: "\x1b[38:2:1:2:3mx\x1b[0m", want: "x"},
+		{name: "dcs string sequence stripped", in: "\x1bP1;2q data\x1b\\visible", want: "visible"},
+		{name: "sos string sequence stripped", in: "\x1bXjunk\x1b\\keep", want: "keep"},
+		{name: "apc string sequence stripped", in: "\x1b_junk\x07keep", want: "keep"},
+		{name: "charset select stripped", in: "\x1b(Btext", want: "text"},
+		{name: "two-byte escape stripped", in: "a\x1bMb", want: "ab"},
+		{name: "bare escape removed by guard", in: "\x1b", want: ""},
+		{name: "trailing lone escape removed by guard", in: "text\x1b", want: "text"},
+		{name: "double lone escape removed by guard", in: "ab\x1b\x1b", want: "ab"},
 	}
 
 	for _, tt := range tests {
@@ -159,6 +170,65 @@ func TestRenderEntryLinesNoEscapes(t *testing.T) {
 	}
 }
 
+// TestRenderEntryLinesRawEscapes locks the fail-secure boundary on REAL rendered
+// output: a tool-card body passes ToolCallView.Result through VERBATIM, so a raw
+// subprocess byte stream can carry escape families the renderer never emits (DCS,
+// SOS/APC, charset-select, colon-form SGR, a lone ESC). Rendered through
+// renderEntryLines, NO line's plain may contain a 0x1b byte — nothing leaks to the
+// clipboard. Each case also asserts the raw escape genuinely reached the styled output,
+// so the fixture truly exercises the strip path rather than passing vacuously.
+func TestRenderEntryLinesRawEscapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result []string
+	}{
+		{name: "dcs body", result: []string{"before\x1bP1;2qPAYLOAD\x1b\\after"}},
+		{name: "charset select body", result: []string{"before\x1b(Bafter"}},
+		{name: "colon-form sgr body", result: []string{"before\x1b[38:2:1:2:3mafter\x1b[0m"}},
+		{name: "sos and apc bodies", result: []string{"a\x1bXsos\x1b\\b", "c\x1b_apc\x07d"}},
+		{name: "lone escape body", result: []string{"tail\x1b"}},
+		{
+			name: "mixed exotic families in one card",
+			result: []string{
+				"dcs\x1bP0qX\x1b\\end",
+				"charset\x1b(Bmid",
+				"colon\x1b[38:2:9:9:9mred\x1b[0m lone\x1b",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := entry{ID: 7, Kind: kindTool, Calls: []ToolCallView{{
+				ToolExecutionID: callID(2),
+				ToolName:        "Bash",
+				Summary:         "run",
+				Status:          ToolOK,
+				Result:          tt.result,
+			}}}
+			lines := renderEntryLines(e, 80, true)
+			if len(lines) == 0 {
+				t.Fatalf("renderEntryLines(%s) returned no lines", tt.name)
+			}
+			sawStyledESC := false
+			for _, rl := range lines {
+				if hasEscape(rl.styled) {
+					sawStyledESC = true
+				}
+				if hasEscape(rl.plain) {
+					t.Errorf("%s sub=%d plain = %q, must be ANSI-free (raw escape leaked to clipboard)", tt.name, rl.sub, rl.plain)
+				}
+			}
+			if !sawStyledESC {
+				t.Errorf("%s: no styled line carried a raw ESC; fixture does not exercise the strip path", tt.name)
+			}
+		})
+	}
+}
+
 // TestRenderEntryLinesPlainEqualsVisible locks that plain equals the exact visible
 // text — the color codes are gone and the characters are correct — for simple entries
 // with a deterministic single-line render.
@@ -200,23 +270,43 @@ func TestRenderEntryLinesPlainEqualsVisible(t *testing.T) {
 }
 
 // TestRenderEntryLinesProvenance locks that every renderedLine carries the source
-// entry's displayID and a contiguous 0-based sub index (0..n-1 in order). The fixture
-// is the expanded thinking row (multiple lines) so the sub sequence is non-trivial.
+// entry's displayID and a contiguous 0-based sub index (0..n-1 in order), across a
+// range of entry kinds and both fold states. The multi-line fixtures (expanded thinking,
+// a two-line user row) make the sub sequence non-trivial.
 func TestRenderEntryLinesProvenance(t *testing.T) {
 	t.Parallel()
 
-	const id displayID = 42
-	lines := renderEntryLines(thinkingEntry(id), 80, false)
-	if len(lines) < 2 {
-		t.Fatalf("expanded thinking render = %d lines, want a multi-line entry", len(lines))
+	tests := []struct {
+		name      string
+		e         entry
+		collapsed bool
+	}{
+		{name: "thinking expanded", e: thinkingEntry(42), collapsed: false},
+		{name: "thinking collapsed", e: thinkingEntry(42), collapsed: true},
+		{name: "tool card", e: toolCardEntry(7), collapsed: true},
+		{
+			name:      "multi-line user row",
+			e:         entry{ID: 5, Kind: kindUser, Blocks: []content.Block{&content.TextBlock{Text: "line one\nline two"}}},
+			collapsed: false,
+		},
 	}
-	for i, rl := range lines {
-		if rl.entry != id {
-			t.Errorf("line %d entry = %d, want %d", i, rl.entry, id)
-		}
-		if rl.sub != i {
-			t.Errorf("line %d sub = %d, want %d", i, rl.sub, i)
-		}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			lines := renderEntryLines(tt.e, 80, tt.collapsed)
+			if len(lines) == 0 {
+				t.Fatalf("renderEntryLines(%s) returned no lines", tt.name)
+			}
+			for i, rl := range lines {
+				if rl.entry != tt.e.ID {
+					t.Errorf("%s line %d entry = %d, want %d", tt.name, i, rl.entry, tt.e.ID)
+				}
+				if rl.sub != i {
+					t.Errorf("%s line %d sub = %d, want %d", tt.name, i, rl.sub, i)
+				}
+			}
+		})
 	}
 }
 

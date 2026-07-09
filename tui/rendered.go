@@ -2,6 +2,7 @@ package tui
 
 import (
 	"regexp"
+	"strings"
 )
 
 // renderedLine is one rendered transcript line carrying BOTH its drawn form and the
@@ -38,22 +39,48 @@ func renderEntryLines(e entry, width int, collapsed bool) []renderedLine {
 	return out
 }
 
-// ansiCSI matches a CSI escape sequence: ESC '[', optional parameter bytes ([0-9;?]),
-// optional intermediate bytes (0x20–0x2F) and one final byte (0x40–0x7E). It covers
-// every SGR color/style span glamour and lipgloss emit. Compiled once as a package var.
-var ansiCSI = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
-
-// ansiOSC matches an OSC escape sequence: ESC ']', a string body, and a BEL (0x07) or
-// ST (ESC '\\') terminator. It covers the OSC-8 hyperlink wrappers glamour emits for
-// markdown links, stripping the wrapper to its visible link text. Compiled once.
-var ansiOSC = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
+// The escape-stripping passes, compiled once. plainFromStyled feeds the system
+// clipboard (a trust boundary), and tool-card bodies pass raw subprocess bytes through
+// VERBATIM, so a styled line may carry escape families the renderer itself never emits.
+// The passes therefore cover far more than glamour/lipgloss output, and a final guard
+// makes "no 0x1b byte" a hard guarantee (fail secure: over-stripping exotic malformed
+// content at the clipboard boundary is the correct tradeoff).
+var (
+	// ansiOSC matches an OSC string sequence: ESC ']', a body, and a BEL (0x07) or ST
+	// (ESC '\\') terminator. It covers the OSC-8 hyperlink wrappers glamour emits for
+	// markdown links, stripping the wrapper to its visible link text.
+	ansiOSC = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
+	// ansiString matches the other string sequences that can appear in raw payloads —
+	// DCS (ESC P), SOS (ESC X), PM (ESC ^) and APC (ESC _) — up to their ST or BEL
+	// terminator. Stripped BEFORE the generic single-escape pass so the introducer byte
+	// (P/X/^/_) is not mis-eaten as a bare escape's final byte.
+	ansiString = regexp.MustCompile("\x1b[P^X_].*?(?:\x1b\\\\|\x07)")
+	// ansiCSI matches a CSI sequence: ESC '[', parameter bytes (0-9 ; : ?), optional
+	// intermediate bytes (0x20–0x2F) and one final byte (0x40–0x7E). The ':' allows the
+	// ISO-8613-6 colon sub-parameter form (e.g. truecolor "38:2:r:g:b") a subprocess may
+	// emit, which the plain ';'/'?' class would miss.
+	ansiCSI = regexp.MustCompile("\x1b\\[[0-9;:?]*[ -/]*[@-~]")
+	// ansiEscape matches an nF / two-byte / charset-select escape: ESC, optional
+	// intermediate bytes (0x20–0x2F) and one final byte (0x30–0x7E) — e.g. "\x1b(B",
+	// "\x1bM". It runs AFTER the string-sequence and CSI passes so a well-formed OSC/DCS/
+	// CSI is already gone and only genuine single-byte-final escapes remain to match.
+	ansiEscape = regexp.MustCompile("\x1b[ -/]*[0-~]")
+)
 
 // plainFromStyled strips ALL terminal escape sequences from a styled line so the result
-// is exactly the visible text — no 0x1b byte remains. This is the correct semantic for
-// "copy what you see": selection measures and extracts plain, never the styled string
-// (whose ANSI would corrupt cell math and reach the clipboard). OSC wrappers are removed
-// first (a hyperlink collapses to its text) then CSI/SGR spans.
+// is exactly the visible text — no 0x1b byte remains, GUARANTEED. This is the correct
+// semantic for "copy what you see": selection measures and extracts plain, never the
+// styled string (whose ANSI would corrupt cell math and reach the clipboard). Because
+// tool-card bodies carry raw subprocess bytes, the styled line may hold escape families
+// the renderer never emits; the passes cover OSC, DCS/SOS/PM/APC, CSI (with colon
+// sub-parameters) and generic single escapes, in an order where string sequences are
+// removed before the generic pass, then a final guard removes any residual ESC left by a
+// malformed or truncated sequence — the hard fail-secure guarantee at the clipboard
+// boundary.
 func plainFromStyled(styled string) string {
 	s := ansiOSC.ReplaceAllString(styled, "")
-	return ansiCSI.ReplaceAllString(s, "")
+	s = ansiString.ReplaceAllString(s, "")
+	s = ansiCSI.ReplaceAllString(s, "")
+	s = ansiEscape.ReplaceAllString(s, "")
+	return strings.ReplaceAll(s, "\x1b", "")
 }
