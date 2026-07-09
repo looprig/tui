@@ -24,20 +24,14 @@ func TestNewSlashComplete(t *testing.T) {
 		{
 			name:      "prefix slash matches all",
 			prefix:    "/",
-			wantCount: 3,
-			wantNames: []string{"/clear", "/help", "/export"},
+			wantCount: 2,
+			wantNames: []string{"/clear", "/help"},
 		},
 		{
 			name:      "prefix /h matches help",
 			prefix:    "/h",
 			wantCount: 1,
 			wantNames: []string{"/help"},
-		},
-		{
-			name:      "prefix /e matches export",
-			prefix:    "/e",
-			wantCount: 1,
-			wantNames: []string{"/export"},
 		},
 		{
 			name:    "prefix /zzz matches nothing",
@@ -111,24 +105,19 @@ func TestSlashCompleteCursorWrap(t *testing.T) {
 			wantName: "/help",
 		},
 		{
-			name:     "down twice moves to third",
+			name:     "down twice wraps to first",
 			moves:    []func(*SlashComplete){(*SlashComplete).Down, (*SlashComplete).Down},
-			wantName: "/export",
-		},
-		{
-			name:     "down thrice wraps to first",
-			moves:    []func(*SlashComplete){(*SlashComplete).Down, (*SlashComplete).Down, (*SlashComplete).Down},
 			wantName: "/clear",
 		},
 		{
 			name:     "up wraps to last",
 			moves:    []func(*SlashComplete){(*SlashComplete).Up},
-			wantName: "/export",
+			wantName: "/help",
 		},
 		{
-			name:     "up twice from first lands on second",
+			name:     "up twice from first lands on first",
 			moves:    []func(*SlashComplete){(*SlashComplete).Up, (*SlashComplete).Up},
-			wantName: "/help",
+			wantName: "/clear",
 		},
 	}
 
@@ -162,7 +151,7 @@ func TestSlashCompleteView(t *testing.T) {
 	if view == "" {
 		t.Fatal("View() = empty, want non-empty")
 	}
-	for _, want := range []string{"/clear", "/help", "/export"} {
+	for _, want := range []string{"/clear", "/help"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() = %q, want substring %q", view, want)
 		}

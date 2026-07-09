@@ -488,15 +488,9 @@ func helpText() string {
 }
 
 // slashAction maps a recognized slash-command name to the typed uiAction Screen acts
-// on. Most commands share the generic uiRunSlash carrier (Screen.runSlash switches on
-// the name); /export is the one exception with its own uiExport kind so its
-// snapshot-anytime semantics read distinctly from /help and /clear at the action layer.
-// Screen still funnels uiExport back through runSlash("/export"), keeping all
-// status-gated slash execution in one place.
+// on. Every command shares the generic uiRunSlash carrier (Screen.runSlash switches on
+// the name), keeping all status-gated slash execution in one place.
 func slashAction(name string) uiAction {
-	if name == components.CmdExport {
-		return uiAction{Kind: uiExport}
-	}
 	return uiAction{Kind: uiRunSlash, Slash: name}
 }
 

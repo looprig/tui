@@ -13,7 +13,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.4
-	github.com/looprig/harness v0.5.0
+	github.com/looprig/harness v0.5.2
 )
 
 require (
@@ -52,7 +52,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/looprig/core v0.1.0
-	github.com/looprig/inference v0.1.0
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
