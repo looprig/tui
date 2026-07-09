@@ -1,4 +1,4 @@
-.PHONY: test fmt fmt-check lint vuln verify secure fuzz
+.PHONY: test test-integration fmt fmt-check lint vuln verify secure fuzz
 
 # Module's own package dirs, excluding vendor/ and the nested .worktrees/ modules
 # (go list ./... stops at nested module boundaries and skips vendor).
@@ -16,6 +16,11 @@ export GOFLAGS := -mod=vendor
 
 test:
 	go test -race ./...
+
+# Run the integration-tagged tests (process-boundary seams excluded from the
+# default run): scoped to this module's package dirs, same GO_DIRS idiom as above.
+test-integration:
+	go test -tags integration -race $(GO_DIRS)
 
 # Format the whole module in place.
 fmt:
