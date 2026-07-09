@@ -134,7 +134,10 @@ Rules (each a distinct review fix):
 - **Primary is an alias, not a copy.** `projection(primaryLoopID)` returns a view backed by the
   *existing* `committed`/`live` fold — it is **not** re-folded. Only **non-primary** loops get a
   separate `loopProjection`. This avoids double-folding, double allocation, and duplicate IDs,
-  and keeps scrollback mode zero-cost (projections built only when `ModernScreen` is active).
+  and keeps scrollback mode zero-**read**-cost. Projections are folded unconditionally (a small
+  additive write per non-primary loop); scrollback simply never *reads* them. This is deliberate
+  over gating on a build flag — a flag a later task forgot to set would silently empty every
+  focused-loop view; the write cost is negligible.
 - **Globally-unique IDs.** All entries (every projection) draw from the one `nextID`, so the
   ModernScreen-level `collapsed map[displayID]bool` can key on `displayID` without cross-loop
   collision.
