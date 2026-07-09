@@ -292,8 +292,10 @@ func (m *Screen) handleBlink() tea.Cmd {
 // turn-lifecycle events, flushes any newly committed entries to scrollback, and
 // re-arms the continuous reader. Reading continues unconditionally: the loop is
 // blocked on the permission GATE, not the stream, so the user's keypress
-// (approve/deny/answer) is what releases it. A prompt event dispatches nothing
-// here; the trio call happens later when the user resolves it.
+// (approve/deny/answer) is what releases it. While a prompt gate is active
+// (scrollbackGated) every commit is HELD in the surface rather than emitted to
+// scrollback — writing to scrollback while the box is up strands it into native
+// history — and the held tail drains via the normal spill path once the gate resolves.
 func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	finalizingLive := m.finalizesPrimaryLive(ev)
 	m.transcript = m.transcript.ApplyEvent(ev)
@@ -306,9 +308,6 @@ func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	// than emitting them to scrollback, then drain the held tail from the top to fit the
 	// budget as the live tail grows. spillHeld runs BEFORE spillLive so the older held lines
 	// reach scrollback ahead of the newer live-prose overflow, keeping history in order.
-	holdCmd := m.hold(finalizingLive)
-	heldSpillCmd := m.spillHeld()
-	spillCmd := m.spillLive()
 	// Re-arm only while a live subscription is installed: during the /clear window
 	// m.sub is transiently nil, and the fresh subscription's reader is (re)started
 	// by handleSubscribed, not here. subNext is also nil-guarded as a backstop. A
@@ -320,7 +319,38 @@ func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	if m.sub != nil {
 		rearm = subNext(m.sub)
 	}
+
+	// While a prompt gate owns the bottom surface, emit NOTHING to scrollback: the
+	// permission/AskUser box (and the "awaiting approval" status line above it) live in
+	// the managed region, and any scrollback write — printToScrollback → insertAbove —
+	// repaints and strands that box into history. Because reading continues during a
+	// gate (the loop is blocked on the gate, not the stream), sibling/subagent events
+	// keep committing entries; without this guard each commit strands another copy of the
+	// box and status line (the "awaiting approval shown multiple times, box never went
+	// away" symptom). So hold every newly committed entry in the surface and suppress
+	// both spill paths; the held tail drains normally on the next event once the gate has
+	// resolved (the prompt is popped optimistically on the decision keypress, so the
+	// resuming turn's events run the unguarded hold/spill path).
+	if m.scrollbackGated() {
+		m.heldLines = append(m.heldLines, flattenActions(m.flushActions())...)
+		return tea.Batch(rearm, statusCmd)
+	}
+
+	holdCmd := m.hold(finalizingLive)
+	heldSpillCmd := m.spillHeld()
+	spillCmd := m.spillLive()
 	return tea.Batch(rearm, statusCmd, holdCmd, heldSpillCmd, spillCmd)
+}
+
+// scrollbackGated reports whether a prompt gate (permission or AskUser) currently owns
+// the bottom surface. While a prompt box is up it lives in the managed region, so any
+// scrollback write repaints and strands it into native history — the input box's
+// managed region cannot be committed while the terminal is still using part of it to
+// show the box. handleEvent and flush consult this to hold every commit until the gate
+// resolves, at which point the queued handoff drains gradually via the normal spill
+// path. Fail-secure: when in doubt (a prompt is present) we withhold the write.
+func (m Screen) scrollbackGated() bool {
+	return m.activePrompt() != nil
 }
 
 // hold moves newly committed entries into the held tail (rendered in the surface) instead
@@ -478,7 +508,15 @@ func (m *Screen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 // the surface and drain it gradually); flush is the direct path for those out-of-band
 // commits, where an immediate handoff is acceptable.
 func (m *Screen) flush() tea.Cmd {
-	lines := append(append([]string(nil), m.heldLines...), flattenActions(m.flushActions())...)
+	actions := flattenActions(m.flushActions())
+	// A prompt gate owns the surface — releasing to scrollback now would strand the
+	// box (see scrollbackGated). Hold the out-of-band entry in the surface instead
+	// (where it still renders, above the box) and let it drain once the gate resolves.
+	if m.scrollbackGated() {
+		m.heldLines = append(m.heldLines, actions...)
+		return nil
+	}
+	lines := append(append([]string(nil), m.heldLines...), actions...)
 	m.heldLines = nil
 	return printToScrollback([]printAction{{Lines: lines}})
 }
