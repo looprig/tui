@@ -96,8 +96,11 @@ func DefaultEventFilter(primaryLoopID uuid.UUID) event.EventFilter {
 // It takes no primary loop id because neither scope discriminates by loop.
 //
 // Modern mode renders every loop's WHOLE live stream (a user can focus any subagent
-// loop and watch its live tokens + tool spinners), so it must actually RECEIVE every
-// loop's live Ephemeral firehose. The primary-only Ephemeral default (DefaultEventFilter)
+// loop and watch its live tokens stream), so it must actually RECEIVE every loop's live
+// Ephemeral firehose. (The widened scope also DELIVERS each loop's tool-lifecycle events;
+// rendering them as live tool spinners inside a focused subagent projection is deferred —
+// today a projection's live segment shows streamed text/thinking, and tool cards appear at
+// StepDone. See routeProjection.) The primary-only Ephemeral default (DefaultEventFilter)
 // would STARVE the per-loop projections of a subagent's live output, freezing a focused
 // subagent view at Enduring StepDone granularity. The whole-session hub buffer is bounded
 // and has no replay, so modern mode opens ONE all-loops subscription at startup and never

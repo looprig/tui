@@ -302,7 +302,11 @@ type transcriptModel struct {
 	// reconstruction has run unchanged, so scrollback's root view, the user-row rule, and
 	// the subagentAccum machinery are all untouched. The PRIMARY loop is NEVER stored here
 	// — projectionFor aliases the existing committed/live root fold for it (no re-fold, no
-	// duplicate id, zero cost when modern mode is inactive). It is cloned on write
+	// duplicate id). Projections are ALWAYS folded (routeProjection is unconditional), so
+	// scrollback mode pays a small ADDITIVE write cost per non-primary loop; it simply never
+	// READS them (projectionFor is only called by the modern viewport). This avoids a build
+	// flag a later task could forget to set, which would silently empty every focused view.
+	// It is cloned on write
 	// (value-copy contract), mirroring subagentAccum: a freshly created projection is
 	// freshly allocated so a prior model never sees it, and in-place fold into the pointer
 	// is the intended write path within one linear reducer chain.
@@ -738,6 +742,8 @@ func (m *transcriptModel) commitPrompt(ctx promptContext) {
 // applyChunk routes one streamed chunk into the live segment: text accumulates
 // into live.Text, thinking into live.Thinking. Any other chunk variant (e.g. a
 // tool-use chunk) is skipped — tool-call reconstruction is a later task.
+// KEEP IN SYNC WITH projectionChunk (the per-loop mirror): a change to how chunks route
+// into the live segment must be mirrored there, or a focused subagent view will drift.
 func (m *transcriptModel) applyChunk(c content.Chunk) {
 	switch chunk := c.(type) {
 	case *content.TextChunk:
@@ -857,6 +863,9 @@ func (m *transcriptModel) toolCompleted(ev event.ToolCallCompleted) {
 // groups, never merged. After committing, the provisional live segment is reset
 // (active preserved): the dropped/partial TokenDeltas of this step vanish — the
 // self-heal — and the step's gate decisions are cleared.
+// KEEP IN SYNC WITH projectionStep (the per-loop mirror): the card-per-step, single-tool
+// promotion, and umbrella rules are duplicated there (built via storedStepToolCard only);
+// a change here must be mirrored, or a focused subagent view will render differently.
 func (m *transcriptModel) stepDone(ev event.StepDone) {
 	// A SUBAGENT loop's step routes by whether it has a recorded spawn parent:
 	//   - WITH a loopParent entry (a tool-spawned subagent): its tool group accumulates
@@ -1169,6 +1178,9 @@ const subagentLineCap = 80
 // umbrella. So a thinking-only message renders just the rail, a single-ordinary-tool
 // empty-text step with no thinking commits nothing here at all, and a
 // multi-ordinary-tool empty-text step gets the "● Multiple actions" umbrella.
+// KEEP IN SYNC WITH projectionStepAssistant (the per-loop mirror): the thinking-rail,
+// narration, and "Multiple actions" umbrella logic are duplicated there; a change here
+// must be mirrored, or a focused subagent view will render differently.
 func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCards int) {
 	if ai == nil {
 		return
@@ -1295,10 +1307,11 @@ func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 
 // projectionFor returns the committed + live stream to render for loopID. For the
 // PRIMARY loop id — and the zero id (the single-loop / session default) — it is a pure
-// ALIAS of the existing root fold (m.committed / m.live): it neither builds nor reads
-// m.projections, so scrollback mode and the primary view pay ZERO extra cost, no entry is
-// folded twice, and no displayID is minted twice (design §Per-loop projections,
-// primary-alias rule). Any OTHER loop id returns its loopProjection's committed+live; an
+// ALIAS of the existing root fold (m.committed / m.live): the READ neither builds nor reads
+// m.projections, so the primary view pays ZERO extra read cost, no entry is folded twice,
+// and no displayID is minted twice (design §Per-loop projections, primary-alias rule). (The
+// WRITE side, routeProjection, still folds non-primary loops unconditionally — see the
+// projections field comment.) Any OTHER loop id returns its loopProjection's committed+live; an
 // absent projection yields an empty pair (a loop seen but not yet producing content). It
 // is the seam Task 7's viewport renders through — projectionFor(focusedLoopID).
 func (m transcriptModel) projectionFor(loopID uuid.UUID) (committed []entry, live liveSeg) {
@@ -1326,22 +1339,36 @@ func (m *transcriptModel) routeProjection(ev event.Event) {
 	if loopID.IsZero() || loopID == m.primaryLoopID {
 		return
 	}
-	p := m.ensureProjection(loopID)
+	// ensureProjection is called LAZILY, inside the writing cases only, so a loop seen
+	// solely via events this switch ignores (ToolCall*/Permission*/InputQueued) never
+	// materializes an empty projection — keeping projectionFor's "absent = no content yet"
+	// contract truthful.
 	switch ev := ev.(type) {
 	case event.TurnStarted:
+		p := m.ensureProjection(loopID)
 		p.live.active = true
 		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
 	case event.TurnFoldedInto:
+		p := m.ensureProjection(loopID)
 		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
 	case event.TokenDelta:
+		p := m.ensureProjection(loopID)
 		projectionChunk(p, ev.Chunk)
 	case event.StepDone:
+		p := m.ensureProjection(loopID)
 		m.projectionStep(p, ev)
 	case event.TurnDone, event.TurnInterrupted, event.TurnFailed:
 		// A terminal resets the loop's provisional live: every completed step already
 		// committed via its own projectionStep, so nothing is flushed here (a projection
 		// carries no defensive commit path — its finalized rows come only from StepDone).
-		p.live = liveSeg{}
+		// Reset in place only if the projection already exists (lazy — no empty projection
+		// is created for a bare terminal). KNOWN Stage-1 limitation: a subagent interrupted
+		// or failed MID-step shows no terminal tombstone/error in its own focused view
+		// (unlike the primary turnInterrupted/turnFailed commits) — revisit if Task 7
+		// surfaces the need; live tool-spinner parity for projections is likewise deferred.
+		if p, ok := m.projections[loopID]; ok {
+			p.live = liveSeg{}
+		}
 	}
 }
 
