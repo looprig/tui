@@ -39,8 +39,9 @@ import (
 // Prompts + feature parity (Task 9): prompt keys route to the reused interaction model
 // (handleKey precedence (2)) and the bottom box renders the head gate via the shared surface;
 // a pending gate marks its loop with "!" in the bar WITHOUT stealing focus (bar() reads
-// pendingGateLoops). A composer submit auto-refocuses the primary loop (routeToInteraction —
-// Stage 1 always submits to primary, so the user's message must land in the view they watch).
+// pendingGateLoops). A composer submit targets the FOCUSED loop (routeToInteraction — Stage 2:
+// submitting while focused on a subagent runs a new turn on THAT loop and stays focused there;
+// on the primary it is the ordinary primary submit).
 // A cold-restore session repaints its history: Init batches restoreBacklogCmd and handleRestored
 // folds the backlog into the transcript + projections + loop table and re-renders. The remaining
 // parity items (/clear reopen, esc/ctrl+c interrupt, queued input, image @path rejection) all
@@ -503,27 +504,34 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // routeToInteraction delegates a key to the interaction model and maps the resulting typed
-// uiAction into the agent-driving command via the core. When the action committed an
-// out-of-band entry (e.g. /help, a submit build error) the rendered buffer changed, so the
-// viewport re-renders to surface it. A plain composer edit leaves the transcript UNCHANGED —
-// only the composer's auto-grow may have shrunk the content region — so it just syncs the
-// viewport SIZE (resize), never re-rendering the transcript per keystroke. The editor's blink
-// cmd is batched so the cursor keeps blinking in compose/answer modes.
+// uiAction into the agent-driving command. When the action committed an out-of-band entry
+// (e.g. /help, a submit build error) the rendered buffer changed, so the viewport re-renders
+// to surface it. A plain composer edit leaves the transcript UNCHANGED — only the composer's
+// auto-grow may have shrunk the content region — so it just syncs the viewport SIZE (resize),
+// never re-rendering the transcript per keystroke. The editor's blink cmd is batched so the
+// cursor keeps blinking in compose/answer modes.
 //
-// Submit auto-refocuses the primary (Stage 1): the composer always submits to the PRIMARY
-// loop, so on a uiSubmit the view refocuses primary (focusLoop) — a user who typed while
-// focused on a subagent is not left staring at a projection where nothing appeared; their
-// message (and, on a queued send, the queued affordance / eventual user row) lands in the
-// view they now watch. It fires on the SUBMIT path ONLY — approve/deny/answer/slash/edit
-// never move focus — and focusLoop no-ops when the primary is already focused, so a user
-// composing on the primary sees no change and queued-input-while-running is unaffected.
+// Submit goes to the FOCUSED loop (Stage 2): a uiSubmit is intercepted here and routed to the
+// currently focused loop via the core's loop-targeted submitToLoop — a submit while focused on
+// a subagent runs a NEW turn on THAT loop and STAYS focused there (no auto-refocus), while a
+// submit on the primary behaves exactly like before (submitToLoop(primary) == the primary
+// submit). Only uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
+// edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
+// primary-loop submit path (mapAction → submit → Submit) is untouched.
 func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
-	cmd, present := m.sessionCore.mapAction(action)
+	var cmd tea.Cmd
+	var present bool
 	if action.Kind == uiSubmit {
-		m.focusLoop(m.transcript.primaryLoopID)
+		// Modern override: submit to the FOCUSED loop (not the primary) and do NOT refocus —
+		// the user stays on the loop they are watching. Blocks are built the same way the
+		// core's primary submit does (buildBlocks from action.Text), and a build error commits
+		// the same faint error entry.
+		cmd, present = m.sessionCore.submitToLoop(m.focusedLoopID, action.Text)
+	} else {
+		cmd, present = m.sessionCore.mapAction(action)
 	}
 	if present {
 		m.rerender()

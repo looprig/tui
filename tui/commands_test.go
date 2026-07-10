@@ -175,6 +175,47 @@ func TestSubmitCmd(t *testing.T) {
 	}
 }
 
+// TestSubmitToLoopCmd covers the loop-targeted fire-and-forget submit: blocks AND the
+// target loopID are forwarded to SubmitToLoop, and the result msg carries only the error
+// (a nil err is a silent success) in the SAME submitResultMsg shape as submitCmd.
+func TestSubmitToLoopCmd(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		submitErr error
+		wantErr   bool
+	}{
+		{name: "success is silent", submitErr: nil},
+		{name: "error surfaced", submitErr: errors.New("send failed"), wantErr: true},
+	}
+
+	loopID := callID(0x5A)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agent := &fakeAgent{submitErr: tt.submitErr}
+			blocks := []content.Block{&content.TextBlock{Text: "hi"}}
+			msg := submitToLoopCmd(context.Background(), agent, loopID, blocks)()
+
+			res, ok := msg.(submitResultMsg)
+			if !ok {
+				t.Fatalf("msg = %T, want submitResultMsg", msg)
+			}
+			if (res.err != nil) != tt.wantErr {
+				t.Errorf("err != nil = %v, want %v", res.err != nil, tt.wantErr)
+			}
+			if !agent.submitToLoopCalled {
+				t.Error("SubmitToLoop not called")
+			}
+			if agent.lastSubmitToLoopID != loopID {
+				t.Errorf("SubmitToLoop loopID = %v, want %v", agent.lastSubmitToLoopID, loopID)
+			}
+		})
+	}
+}
+
 func TestInterruptTurn(t *testing.T) {
 	t.Parallel()
 

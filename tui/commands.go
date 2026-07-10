@@ -106,6 +106,20 @@ func submitCmd(ctx context.Context, agent Agent, blocks []content.Block) tea.Cmd
 	}
 }
 
+// submitToLoopCmd is submitCmd's loop-targeted counterpart: it sends blocks
+// fire-and-forget to a SPECIFIC loop (the modern viewport's focused loop) via
+// SubmitToLoop and reports the outcome in the SAME submitResultMsg shape, so
+// handleSubmitResult records the submit and surfaces a send failure identically to the
+// primary path. loopID is the focused loop the modern composer routes to; everything
+// else mirrors submitCmd (the loop still owns queueing, so there is no per-turn reader
+// and no status branching here).
+func submitToLoopCmd(ctx context.Context, agent Agent, loopID uuid.UUID, blocks []content.Block) tea.Cmd {
+	return func() tea.Msg {
+		id, err := agent.SubmitToLoop(ctx, loopID, blocks)
+		return submitResultMsg{inputID: id, blocks: blocks, err: err}
+	}
+}
+
 // interruptTurn issues a bounded Interrupt and reports the result, so Update
 // never blocks on the session's interrupt ack.
 func interruptTurn(ctx context.Context, agent Agent) tea.Cmd {

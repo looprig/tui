@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 )
 
@@ -326,6 +327,23 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return submitCmd(c.appCtx, c.agent, blocks), false
+}
+
+// submitToLoop is submit's loop-targeted counterpart: it builds blocks from the composed
+// text exactly as submit does and sends them fire-and-forget to a SPECIFIC loop (the
+// modern viewport's focused loop) via submitToLoopCmd, rather than to the primary. A
+// buildBlocks error commits the SAME plain-user-row-plus-faint-error entries and sends
+// nothing (returning true so the shell presents them). It exists so the modern shell can
+// route a composer submit to the focused loop while reusing the one buildBlocks +
+// error-commit path — Screen never calls it (its submit stays the primary-loop submit).
+func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool) {
+	blocks, err := buildBlocks(text, c.agent.AcceptsImages())
+	if err != nil {
+		c.transcript = c.transcript.CommitUserText(text)
+		c.transcript = c.transcript.CommitError(err)
+		return nil, true
+	}
+	return submitToLoopCmd(c.appCtx, c.agent, loopID, blocks), false
 }
 
 // runSlash executes a known slash command. /help commits the listing (the shell presents

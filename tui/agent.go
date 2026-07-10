@@ -22,7 +22,15 @@ type EventStream = event.Subscription
 type Agent interface {
 	// Submit sends input fire-and-forget as a queueable UserInput; the returned
 	// InputID correlates the Reply events (Cause.CommandID) that report the outcome.
+	// It targets the PRIMARY loop — the single-loop convenience Screen and the modern
+	// viewport's primary focus both use.
 	Submit(ctx context.Context, blocks []content.Block) (uuid.UUID, error)
+	// SubmitToLoop sends input fire-and-forget to a SPECIFIC loop — the modern
+	// viewport's FOCUSED loop — rather than the primary, so a submit while focused on a
+	// subagent runs a new turn on THAT loop. It is the loop-targeted counterpart of
+	// Submit (same fire-and-forget InputID/Cause.CommandID contract, human agency); a
+	// loopID equal to the primary loop id behaves exactly like Submit.
+	SubmitToLoop(ctx context.Context, loopID uuid.UUID, blocks []content.Block) (uuid.UUID, error)
 	// PrimaryLoopID is the loop whose live Ephemeral stream the TUI watches; used to
 	// build the DefaultEventFilter for the session subscription.
 	PrimaryLoopID() uuid.UUID

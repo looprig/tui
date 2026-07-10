@@ -35,6 +35,14 @@ type fakeAgent struct {
 	submitCalled     bool
 	lastSubmitBlocks []content.Block
 
+	// submitToLoop recorder: parallels the submit recorder for the loop-targeted
+	// SubmitToLoop (the modern composer's focused-loop submit). It captures the target
+	// loopID and blocks so a test can assert the composer routed to the FOCUSED loop, and
+	// shares submitID/submitErr with Submit (same returned id/error contract).
+	submitToLoopCalled     bool
+	lastSubmitToLoopID     uuid.UUID
+	lastSubmitToLoopBlocks []content.Block
+
 	// primaryLoopID is returned by PrimaryLoopID; zero is a valid fixed id for the
 	// single-loop default filter.
 	primaryLoopID uuid.UUID
@@ -83,6 +91,19 @@ var fixedFakeSubmitID = uuid.UUID{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
 func (f *fakeAgent) Submit(_ context.Context, blocks []content.Block) (uuid.UUID, error) {
 	f.submitCalled = true
 	f.lastSubmitBlocks = blocks
+	if f.submitErr != nil {
+		return uuid.UUID{}, f.submitErr
+	}
+	if f.submitID.IsZero() {
+		return fixedFakeSubmitID, nil
+	}
+	return f.submitID, nil
+}
+
+func (f *fakeAgent) SubmitToLoop(_ context.Context, loopID uuid.UUID, blocks []content.Block) (uuid.UUID, error) {
+	f.submitToLoopCalled = true
+	f.lastSubmitToLoopID = loopID
+	f.lastSubmitToLoopBlocks = blocks
 	if f.submitErr != nil {
 		return uuid.UUID{}, f.submitErr
 	}

@@ -989,39 +989,105 @@ func TestModernBarGateMarker(t *testing.T) {
 	}
 }
 
-// TestModernSubmitAutoRefocusesPrimary pins the Stage-1 submit auto-refocus: a composer submit
-// while focused on a SUBAGENT snaps focus back to the primary (the composer always submits to
-// primary, so the message must land in the view the user now watches), while a plain composer
-// EDIT never moves focus — the refocus is the submit path only.
-func TestModernSubmitAutoRefocusesPrimary(t *testing.T) {
+// TestModernSubmitRoutesToFocusedLoop pins Stage-2 composer routing: a composer submit goes to
+// the FOCUSED loop via SubmitToLoop and STAYS focused there (no auto-refocus to primary), and
+// ONLY uiSubmit is intercepted — every other action still routes through the shared core.
+// (a) a submit while focused on a subagent calls SubmitToLoop with the focused loop id + the
+// composer text and does NOT move focus; (b) a submit while focused on the primary submits to
+// the primary loop id; (c) a plain composer EDIT submits nothing and never moves focus;
+// (d) a non-submit action (approve) still routes through the core unchanged, never a submit.
+func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
 	subA := callID(2)
+	gateCall := callID(7)
 
 	tests := []struct {
-		name        string
-		act         func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd)
-		wantFocus   uuid.UUID
-		wantSubmit  bool
-		wantRefocus bool
+		name      string
+		focusSub  bool // start focused on subA (else primary)
+		act       func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd)
+		wantFocus uuid.UUID
+		assert    func(t *testing.T, agent *fakeAgent)
 	}{
 		{
-			name: "submit from a subagent view refocuses primary and sends",
+			name:     "submit from a subagent view targets that loop and stays focused",
+			focusSub: true,
+			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+				m.interaction.input.SetValue("hello sub")
+				return updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			},
+			wantFocus: subA,
+			assert: func(t *testing.T, agent *fakeAgent) {
+				if !agent.submitToLoopCalled {
+					t.Error("SubmitToLoop not called for a subagent-view submit")
+				}
+				if agent.lastSubmitToLoopID != subA {
+					t.Errorf("SubmitToLoop loopID = %v, want focused subagent %v", agent.lastSubmitToLoopID, subA)
+				}
+				if got := firstBlockText(agent.lastSubmitToLoopBlocks); got != "hello sub" {
+					t.Errorf("SubmitToLoop blocks text = %q, want %q", got, "hello sub")
+				}
+				if agent.submitCalled {
+					t.Error("primary Submit called on the modern focused-loop path, want SubmitToLoop only")
+				}
+			},
+		},
+		{
+			name:     "submit from the primary view targets the primary loop",
+			focusSub: false,
 			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
 				m.interaction.input.SetValue("hello primary")
 				return updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 			},
-			wantFocus:  primary,
-			wantSubmit: true,
+			wantFocus: primary,
+			assert: func(t *testing.T, agent *fakeAgent) {
+				if !agent.submitToLoopCalled {
+					t.Error("SubmitToLoop not called for a primary-view submit")
+				}
+				if agent.lastSubmitToLoopID != primary {
+					t.Errorf("SubmitToLoop loopID = %v, want primary %v", agent.lastSubmitToLoopID, primary)
+				}
+				if got := firstBlockText(agent.lastSubmitToLoopBlocks); got != "hello primary" {
+					t.Errorf("SubmitToLoop blocks text = %q, want %q", got, "hello primary")
+				}
+			},
 		},
 		{
-			name: "a plain edit does NOT move focus",
+			name:     "a plain edit does NOT move focus or submit",
+			focusSub: true,
 			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
 				return updateModern(t, m, keyPress("x"))
 			},
-			wantFocus:  subA,
-			wantSubmit: false,
+			wantFocus: subA,
+			assert: func(t *testing.T, agent *fakeAgent) {
+				if agent.submitToLoopCalled || agent.submitCalled {
+					t.Error("a plain composer edit reached a submit path, want none")
+				}
+			},
+		},
+		{
+			name:     "a non-submit action (approve) still routes through the core",
+			focusSub: false,
+			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+				// A pending permission gate on the primary loop; 'y' approves it (uiApprove),
+				// which must reach the core's approve path — NOT the submit interception.
+				m = feedModern(t, m, event.PermissionRequested{
+					Header:          hdr(primary),
+					ToolExecutionID: gateCall,
+					Request:         tool.BashRequest{Command: "ls"},
+				})
+				return updateModern(t, m, runeKey('y'))
+			},
+			wantFocus: primary,
+			assert: func(t *testing.T, agent *fakeAgent) {
+				if !agent.approveCalled {
+					t.Error("approve did not route through the core (Approve not called)")
+				}
+				if agent.submitToLoopCalled || agent.submitCalled {
+					t.Error("a non-submit action reached a submit path, want the core's approve only")
+				}
+			},
 		},
 	}
 
@@ -1033,19 +1099,19 @@ func TestModernSubmitAutoRefocusesPrimary(t *testing.T) {
 			m := newModernSized(t, agent, 80, 24)
 			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 			m = feedModern(t, m, loopStarted(subA, "reviewer"))
-			m.focusLoop(subA)
-			if m.focusedLoopID != subA {
-				t.Fatalf("precondition: focus = %v, want subA %v", m.focusedLoopID, subA)
+			if tt.focusSub {
+				m.focusLoop(subA)
+				if m.focusedLoopID != subA {
+					t.Fatalf("precondition: focus = %v, want subA %v", m.focusedLoopID, subA)
+				}
 			}
 
 			m, cmd := tt.act(t, m)
 			if m.focusedLoopID != tt.wantFocus {
-				t.Errorf("focusedLoopID = %v, want %v", m.focusedLoopID, tt.wantFocus)
+				t.Errorf("focusedLoopID = %v, want %v (Stage 2: no auto-refocus)", m.focusedLoopID, tt.wantFocus)
 			}
 			drainCmd(t, cmd)
-			if agent.submitCalled != tt.wantSubmit {
-				t.Errorf("agent.submitCalled = %v, want %v", agent.submitCalled, tt.wantSubmit)
-			}
+			tt.assert(t, agent)
 		})
 	}
 }
@@ -1289,8 +1355,9 @@ func TestModernInterruptAndQuit(t *testing.T) {
 }
 
 // TestModernQueuedInputWhileRunning pins queued-input parity: submitting while a turn RUNS does
-// not error (it fires the fire-and-forget Submit the loop queues) and the auto-refocus-to-primary
-// still holds — a submit from a subagent view lands the user back on the primary.
+// not error (it fires the fire-and-forget SubmitToLoop the loop queues) and — Stage 2 — the
+// submit targets the FOCUSED loop and stays there, so a submit from a subagent view runs the
+// queued turn on THAT subagent without snapping focus back to the primary.
 func TestModernQueuedInputWhileRunning(t *testing.T) {
 	t.Parallel()
 
@@ -1309,15 +1376,18 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 	if m.status != StatusRunning {
 		t.Errorf("status = %d, want StatusRunning (submit does not change the running turn)", m.status)
 	}
-	if m.focusedLoopID != primary {
-		t.Errorf("focusedLoopID = %v, want primary %v (auto-refocus holds while running)", m.focusedLoopID, primary)
+	if m.focusedLoopID != subA {
+		t.Errorf("focusedLoopID = %v, want subA %v (Stage 2: submit stays on the focused loop)", m.focusedLoopID, subA)
 	}
 	if len(m.transcript.committed) != committedBefore {
 		t.Errorf("committed grew by %d, want 0 (a queued submit commits no error)", len(m.transcript.committed)-committedBefore)
 	}
 	drainCmd(t, cmd)
-	if !agent.submitCalled {
-		t.Error("Submit not called for a queued-while-running message")
+	if !agent.submitToLoopCalled {
+		t.Error("SubmitToLoop not called for a queued-while-running message")
+	}
+	if agent.lastSubmitToLoopID != subA {
+		t.Errorf("queued submit loopID = %v, want focused subagent %v", agent.lastSubmitToLoopID, subA)
 	}
 }
 
