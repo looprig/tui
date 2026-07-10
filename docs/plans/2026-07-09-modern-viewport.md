@@ -239,22 +239,21 @@ func (b loopBar) cycle(dir int) uuid.UUID          // ctrl+n / ctrl+p order
 
 ---
 
-### Task 10: `cli/run.go` mode selection + `agentHolder`
+### Task 10: `cli/run.go` — make the viewport the design (NO flag)
+
+> **Revised (user):** drop the `--modern` flag / `LOOPRIG_MODERN` env / `RunOption` idea entirely. The new viewport IS the design — wire it directly so every `swe`-swarm entry point (which runs through `cli.Run`) uses it with no toggle. `Screen` (scrollback) stays in the tree as unwired legacy/fallback; it is not deleted.
 
 **Files:** Modify `cli/run.go`; Test `cli/run_test.go`.
 
-**Step 1 — Read:** all of `cli/run.go` (esp. `newProgram`, `tui.New`, teardown `final.(tui.Screen)`).
+**Step 1 — Read:** all of `cli/run.go` (esp. `newProgram`, the `tui.New(...)` construction, teardown `final.(tui.Screen)`).
 
-**Step 2 — Add:**
-```go
-type RunOption func(*runConfig)
-func WithModern(on bool) RunOption
-// modern = on OR os.Getenv("LOOPRIG_MODERN") != ""
-type agentHolder interface{ Agent() Agent }   // in tui; both models satisfy it
-```
-Select `screen := tui.NewModern(...)` when modern else `tui.New(...)`. Replace `final.(tui.Screen)` teardown with `final.(agentHolder)`.
+**Step 2 — Change:**
+- Replace `screen := tui.New(ctx, agent, open, banner.agentBanner())` with `screen := tui.NewModern(ctx, agent, open, banner.agentBanner())`. No flag, no env, no `RunOption` — `cli.Run`'s signature is unchanged, so all `swe` entry points keep compiling and now launch the viewport.
+- Add `type agentHolder interface{ Agent() Agent }` (in `tui`; both models satisfy it) and replace the teardown assertion `final.(tui.Screen)` with `final.(agentHolder)` so teardown works for `ModernScreen` (and still would for `Screen`).
 
-**Step 3 — Failing tests:** `WithModern(true)` (and `LOOPRIG_MODERN=1` via a seam) build the modern model; default builds `Screen`; teardown resolves `Agent()` for both; existing `Run` callers still compile (variadic). **Step 4:** commit `feat: --modern mode selection in cli.Run`.
+**Step 3 — Failing tests:** `Run` builds and drives `ModernScreen` (via the `newProgram` seam / fake program capturing the model); teardown resolves `Agent()` through `agentHolder`; existing `Run` callers compile unchanged. **Step 4:** commit `feat: wire the viewport (ModernScreen) as the cli.Run design`.
+
+> **Sequencing:** Task 10 must run AFTER Task 9 (prompts + parity) — once the viewport is wired as the only path, a missing prompt/gate handler would freeze `swe` on any gated tool (the exact bug scrollback-first fixed). Do not flip the default until Task 9 lands.
 
 ---
 

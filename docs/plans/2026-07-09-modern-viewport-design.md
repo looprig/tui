@@ -1,6 +1,14 @@
 # Modern Viewport TUI (`--modern`) — Design
 
-Date: 2026-07-09 · Status: **authoritative spec for the follow-up impl plan** · Rev 2 (fable review folded in)
+Date: 2026-07-09 · Status: **authoritative spec for the follow-up impl plan** · Rev 3
+
+> **Rev 3 (user decision):** the `--modern` FLAG is dropped. The viewport is no longer an opt-in
+> mode — it becomes THE design the `swe` agent swarm uses. `cli.Run` constructs `ModernScreen`
+> directly (no flag, no `LOOPRIG_MODERN` env, no `RunOption`); `Screen` (scrollback) stays in the
+> tree as unwired legacy/fallback. Wherever this doc says "opt-in `--modern`", "flag", "env", or
+> "mode selection" (Goal, Scope §1, the `cli/run.go` table row, §"View() and mode selection",
+> Testing, Manual smoke), read it as "wired as the default via `cli.Run` → `NewModern`". See the
+> plan's revised Task 10.
 
 ## Goal
 
