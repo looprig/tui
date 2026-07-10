@@ -346,25 +346,67 @@ func TestModernMouseRoutesByRegion(t *testing.T) {
 	}
 }
 
-// TestModernHeaderClickTogglesCollapse pins the per-entry fold: a plain click (no drag) on a
-// thinking entry's row toggles just that entry's collapse via provenance, expanding it.
-func TestModernHeaderClickTogglesCollapse(t *testing.T) {
+// TestModernContentClickCollapse pins the click/drag collapse discriminator and the
+// header-only rule: a plain click on an entry's HEADER row (sub 0) toggles its fold; a click
+// on a BODY row (sub > 0) does not; and a drag (press → motion held → release) is a text
+// selection that never toggles. Each case asserts whether the rendered line count changed.
+func TestModernContentClickCollapse(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
 
-	before := len(m.viewport.lines)
+	tests := []struct {
+		name       string
+		gesture    func(t *testing.T, m ModernScreen) ModernScreen
+		wantChange bool // did the rendered line count change (i.e. a fold toggled)?
+	}{
+		{
+			name: "header click (sub 0) toggles the fold",
+			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
+				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+				return m
+			},
+			wantChange: true,
+		},
+		{
+			name: "body click (sub > 0) does not toggle",
+			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
+				y := len(m.viewport.lines) - 1 // the last line is narration — an entry BODY row
+				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
+				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 0, Y: y, Button: tea.MouseLeft})
+				return m
+			},
+			wantChange: false,
+		},
+		{
+			name: "drag (press, motion, release) is a selection, never a toggle",
+			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
+				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+				m, _ = updateModern(t, m, tea.MouseMotionMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+				return m
+			},
+			wantChange: false,
+		},
+	}
 
-	// A press then release with no intervening motion is a click, not a drag → toggle the row.
-	m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-	m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+			m = feedModern(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
 
-	if after := len(m.viewport.lines); after <= before {
-		t.Errorf("header click did not expand the entry: before=%d after=%d", before, after)
+			before := len(m.viewport.lines)
+			m = tt.gesture(t, m)
+			changed := len(m.viewport.lines) != before
+			if changed != tt.wantChange {
+				t.Errorf("line-count change = %v (before=%d after=%d), want change=%v", changed, before, len(m.viewport.lines), tt.wantChange)
+			}
+		})
 	}
 }
 

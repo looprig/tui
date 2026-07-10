@@ -143,16 +143,26 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleResize stores the terminal dimensions, resizes the composer, commits a deferred
-// opening banner (if systemReadyMsg arrived first), and re-sizes + re-renders the viewport.
+// handleResize stores the terminal dimensions, resizes the composer, and commits a deferred
+// opening banner (if systemReadyMsg arrived first). A WIDTH change reflows every rendered
+// line (they were laid out at the old width) and a deferred banner commit changed the buffer
+// — either needs a full rerender; a PURE height change only needs a size sync (the lines are
+// unchanged, so re-rendering the transcript is wasted work).
 func (m ModernScreen) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	widthChanged := msg.Width != m.width
 	m.width, m.height = msg.Width, msg.Height
 	m.ready = true
 	m.interaction.input.Resize(msg.Width)
+	bannerCommitted := false
 	if m.startupPending && !m.startupCommitted {
 		m.commitStartup()
+		bannerCommitted = true
 	}
-	m.refresh()
+	if widthChanged || bannerCommitted {
+		m.rerender()
+	} else {
+		m.resize()
+	}
 	return m, nil
 }
 
@@ -168,7 +178,7 @@ func (m *ModernScreen) handleSystemReady() tea.Cmd {
 		return nil
 	}
 	m.commitStartup()
-	m.refresh()
+	m.rerender()
 	return nil
 }
 
@@ -196,7 +206,7 @@ func (m *ModernScreen) commitStartup() {
 // The turn-phase cue is unused in Stage 1 (a static status line; Task 9 threads the blink).
 func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 	rearm, _ := m.sessionCore.handleEvent(ev)
-	m.refresh()
+	m.rerender()
 	return rearm
 }
 
@@ -206,7 +216,7 @@ func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 func (m *ModernScreen) handleSubscribed(msg subscribedMsg) tea.Cmd {
 	cmd, present := m.sessionCore.applySubscribed(msg)
 	if present {
-		m.refresh()
+		m.rerender()
 	}
 	return cmd
 }
@@ -216,7 +226,7 @@ func (m *ModernScreen) handleSubscribed(msg subscribedMsg) tea.Cmd {
 // entry the viewport re-renders.
 func (m *ModernScreen) handleSubClosed(msg subClosedMsg) tea.Cmd {
 	if m.sessionCore.applySubClosed(msg) {
-		m.refresh()
+		m.rerender()
 	}
 	return nil
 }
@@ -226,7 +236,7 @@ func (m *ModernScreen) handleSubClosed(msg subClosedMsg) tea.Cmd {
 // commits a faint error entry the viewport re-renders.
 func (m *ModernScreen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 	if m.sessionCore.applySubmitResult(msg) {
-		m.refresh()
+		m.rerender()
 	}
 	return nil
 }
@@ -236,7 +246,7 @@ func (m *ModernScreen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 // until the loop's TurnInterrupted terminal lands Idle.
 func (m *ModernScreen) handleInterruptResult(msg interruptResultMsg) tea.Cmd {
 	if m.sessionCore.applyInterruptResult(msg) {
-		m.refresh()
+		m.rerender()
 	}
 	return nil
 }
@@ -245,7 +255,7 @@ func (m *ModernScreen) handleInterruptResult(msg interruptResultMsg) tea.Cmd {
 // silent success; a non-nil err commits a faint error entry the viewport re-renders.
 func (m *ModernScreen) handlePromptResult(msg promptResultMsg) tea.Cmd {
 	if m.sessionCore.applyPromptResult(msg) {
-		m.refresh()
+		m.rerender()
 	}
 	return nil
 }
@@ -258,7 +268,7 @@ func (m *ModernScreen) handlePromptResult(msg promptResultMsg) tea.Cmd {
 func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	cmd, present := m.sessionCore.applyReopenResult(msg)
 	if present {
-		m.refresh()
+		m.rerender()
 		return cmd
 	}
 	// Successful reopen: reset the modern presentation to match the fresh session.
@@ -267,16 +277,17 @@ func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	m.viewport = viewportModel{atTail: true}
 	m.startupPending = false
 	m.startupCommitted = false
-	m.refresh()
+	m.rerender()
 	return cmd
 }
 
-// handleKey routes a key press by the design's precedence. ctrl+c (quit) and ctrl+t (toggle
-// the global collapse fold) are GLOBAL and handled first; ctrl+n/ctrl+p are RESERVED as
-// no-ops for Task 8's focus cycle so the composer never swallows them. Then: (1) an active
-// prompt consumes its keys; else Esc interrupts a running turn; (2/3) the viewport consumes
-// ONLY its non-conflicting nav keys (PageUp/PageDown/Home/End), and everything else — the
-// arrow keys and printable input — falls through to the composer.
+// handleKey routes a key press in ACTUAL execution order: (1) the GLOBAL chords ctrl+c
+// (quit) and ctrl+t (toggle the global collapse fold) fire first, even with a prompt open
+// (ctrl+n/ctrl+p are RESERVED no-ops for Task 8's focus cycle so the composer never swallows
+// them); (2) an active prompt consumes its approve/deny/choice/answer keys; (3) with no
+// prompt, Esc interrupts a running turn; (4) the viewport consumes ONLY its non-conflicting
+// nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
+// input — falls through to the composer.
 func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -292,7 +303,7 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// flipping the default re-folds the WHOLE buffer (design §Collapse). Fires even with a
 		// prompt open — it is pure display state.
 		m.collapse.ToggleAll()
-		m.refresh()
+		m.rerender()
 		return m, nil
 	case "ctrl+n":
 		// Task 8: focus the NEXT loop (bar.cycle(+1)). Reserved as a no-op so the chord is
@@ -302,36 +313,42 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Task 8: focus the PREVIOUS loop (bar.cycle(-1)). Reserved no-op (see ctrl+n).
 		return m, nil
 	}
-	// Precedence (1): an active prompt consumes its own approve/deny/choice/answer keys.
+	// Precedence (2): an active prompt consumes its own approve/deny/choice/answer keys.
 	if m.activePrompt() != nil {
 		return m.routeToInteraction(msg)
 	}
-	// Esc with no prompt keeps its legacy meaning — interrupt a running turn (a no-op idle).
+	// Precedence (3): Esc with no prompt keeps its legacy meaning — interrupt a running turn
+	// (a no-op when idle).
 	if msg.String() == "esc" {
 		return m, m.sessionCore.interruptRunning()
 	}
-	// Precedence (3): the viewport consumes ONLY PageUp/PageDown/Home/End (handleKey returns
-	// false for every other key), so those scroll the content while the arrow keys and
-	// printable input fall through to the composer (precedence 2).
+	// Precedence (4): the viewport consumes ONLY PageUp/PageDown/Home/End (handleKey returns
+	// false for every other key), so those scroll the content.
 	if m.viewport.handleKey(msg) {
 		return m, nil
 	}
-	// Precedence (2): the composer consumes printable input and its editing/↑↓ keys.
+	// Precedence (5): everything else — the arrow keys and printable input — falls through to
+	// the composer.
 	return m.routeToInteraction(msg)
 }
 
 // routeToInteraction delegates a key to the interaction model and maps the resulting typed
 // uiAction into the agent-driving command via the core. When the action committed an
-// out-of-band entry (e.g. /help, a submit build error), the viewport re-renders to surface
-// it. It ALSO refreshes the viewport size unconditionally, so a composer that grew to
-// multiple rows (shrinking the content region) keeps the viewport height in sync. The
-// editor's blink cmd is batched so the cursor keeps blinking in compose/answer modes.
+// out-of-band entry (e.g. /help, a submit build error) the rendered buffer changed, so the
+// viewport re-renders to surface it. A plain composer edit leaves the transcript UNCHANGED —
+// only the composer's auto-grow may have shrunk the content region — so it just syncs the
+// viewport SIZE (resize), never re-rendering the transcript per keystroke. The editor's blink
+// cmd is batched so the cursor keeps blinking in compose/answer modes.
 func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
-	cmd, _ := m.sessionCore.mapAction(action)
-	m.refresh()
+	cmd, present := m.sessionCore.mapAction(action)
+	if present {
+		m.rerender()
+	} else {
+		m.resize()
+	}
 	return m, tea.Batch(cmd, blink)
 }
 
@@ -360,9 +377,9 @@ func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 // contentMouse forwards a content-region mouse event to the viewport (which draws its own
 // selection and returns a copy command on release) and implements the click-vs-drag collapse
-// rule: a plain click (press+release with no intervening motion) toggles the clicked entry's
-// fold, while a drag is a text selection and never toggles. The content region sits at row 0,
-// so the global Y is already the viewport-local row.
+// rule: a plain click (press+release with no intervening motion) on an entry's HEADER row
+// toggles just that entry's fold, while a drag is a text selection and never toggles. The
+// content region sits at row 0, so the global Y is already the viewport-local row.
 func (m *ModernScreen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	switch msg.(type) {
 	case tea.MouseClickMsg:
@@ -377,10 +394,13 @@ func (m *ModernScreen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 		return m.viewport.handleMouse(msg)
 	case tea.MouseReleaseMsg:
 		cmd := m.viewport.handleMouse(msg) // finishes any drag; copyCmd for a real selection
+		// A plain click (no motion) on an entry's HEADER line (sub == 0 — e.g. the
+		// "│ thinking" / "thinking · N lines" header) toggles that entry's fold; a click on a
+		// body row does NOT toggle (design: header-click). A drag is a selection, never a toggle.
 		if !m.mouseDragging {
-			if id, ok := m.viewport.entryAt(mouse.Y); ok {
+			if id, sub, ok := m.viewport.entryAt(mouse.Y); ok && sub == 0 {
 				m.collapse.Toggle(id)
-				m.refresh()
+				m.rerender()
 			}
 		}
 		return cmd
@@ -404,6 +424,11 @@ type modernLayout struct {
 // first (its height varies with the composer/prompt), then the status + bar reserve one row
 // each, and the viewport content gets whatever remains (floored at 0). Because it is
 // deterministic in the model state, View and regionAt compute the identical layout.
+//
+// NOT side-effect-free: measuring the box (bottomBoxView → the bubbles textarea's View)
+// drives the textarea's internal render/measure cache, so layout must run only on Bubble
+// Tea's single model goroutine (never concurrently — see the serial subtest note in the
+// tests).
 func (m ModernScreen) layout() modernLayout {
 	const statusH, barH = 1, 1
 	boxH := lipgloss.Height(m.bottomBoxView())
@@ -460,14 +485,29 @@ func (m ModernScreen) contentWidth() int {
 	return m.width
 }
 
-// refresh re-sizes the viewport to the current layout's content region and re-renders the
-// focused projection into it — the single "the view changed" sync called after every
-// transcript / collapse / size change. Keeping the viewport height tied to the (variable)
-// bottom chrome is what lets the mouse hit-test's row math (entryAt) agree with what View
-// drew, and the auto-follow tail stays pinned across the re-render.
-func (m *ModernScreen) refresh() {
+// resize and rerender are the two viewport-sync primitives, deliberately SPLIT so a
+// composer keystroke does not re-render the whole transcript.
+//
+// resize syncs ONLY the viewport's size to the current layout's content region — it does
+// NOT re-render the buffer. The composer auto-grows as the user types, which shrinks the
+// content region, but the transcript LINES are unchanged, so a keystroke needs only this
+// (SetSize re-clamps the offset and preserves the auto-follow tail). This keeps typing O(1)
+// in the transcript length: renderFocused re-renders every committed entry through glamour
+// (which builds a fresh renderer per block), which must NOT run per keystroke over a long
+// buffer.
+func (m *ModernScreen) resize() {
 	lay := m.layout()
 	m.viewport.SetSize(m.contentWidth(), lay.contentH)
+}
+
+// rerender re-sizes the viewport AND re-renders the focused projection into it. It is the
+// "the rendered buffer changed" sync — called ONLY when the lines actually differ: a
+// transcript-changing event, a collapse toggle (ctrl+t / header-click), a focus change, or a
+// width change (a new width reflows every line). Keeping the viewport height tied to the
+// (variable) bottom chrome lets the mouse hit-test's row math (entryAt) agree with what View
+// drew, and the auto-follow tail stays pinned across the re-render.
+func (m *ModernScreen) rerender() {
+	m.resize()
 	m.viewport.SetLines(m.renderFocused())
 }
 
@@ -587,7 +627,7 @@ func (m ModernScreen) View() tea.View {
 // EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then the
 // status line, the loop bar, and the bottom box. The viewport is sized to lay.contentH on a
 // LOCAL copy before rendering, so the drawn content region always matches the current layout
-// even if the bottom chrome changed since the last Update-side refresh. Every line is
+// even if the bottom chrome changed since the last Update-side resize/rerender. Every line is
 // width-clamped (truncate, never wrap) so no row exceeds the frame width.
 func (m ModernScreen) composeBody(lay modernLayout) string {
 	vp := m.viewport

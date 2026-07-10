@@ -204,22 +204,24 @@ func (m *viewportModel) endSelect() tea.Cmd {
 	return copyCmd(text)
 }
 
-// entryAt resolves the source entry's displayID at viewport-local row localY (0 = the
-// top visible row), for the composing shell's header-click collapse toggle: it maps the
-// local row to a content index (offset + localY) in the active buffer and returns that
-// line's entry provenance. It returns (0, false) for a row outside the visible region or
-// past the content — so a click below the last line toggles nothing. It reads the active
+// entryAt resolves the source entry's displayID AND intra-entry line index (sub) at
+// viewport-local row localY (0 = the top visible row), for the composing shell's
+// header-click collapse toggle: it maps the local row to a content index (offset + localY)
+// in the active buffer and returns that line's entry provenance and its sub index. It
+// returns (0, 0, false) for a row outside the visible region or past the content — so a
+// click below the last line resolves nothing. The sub lets the caller gate the toggle to a
+// HEADER row (sub == 0), so a click on an entry's body does not fold it. It reads the active
 // buffer (the frozen snapshot mid-drag, else the live lines), matching what View drew.
-func (m viewportModel) entryAt(localY int) (displayID, bool) {
+func (m viewportModel) entryAt(localY int) (displayID, int, bool) {
 	if localY < 0 || localY >= m.height {
-		return 0, false
+		return 0, 0, false
 	}
 	buf := m.activeBuffer()
 	row := m.offset + localY
 	if row < 0 || row >= len(buf) {
-		return 0, false
+		return 0, 0, false
 	}
-	return buf[row].entry, true
+	return buf[row].entry, buf[row].sub, true
 }
 
 // activeBuffer is the buffer selection and rendering read: the frozen snapshot while a
