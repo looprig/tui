@@ -293,8 +293,9 @@ func TestModernViewportNavGoesToViewport(t *testing.T) {
 	}
 }
 
-// TestModernRegionAt pins the frame's region hit-testing (content vs status vs bar vs box),
-// the routing the mouse handler depends on.
+// TestModernRegionAt pins the frame's region hit-testing (content → status → gap → box → gap →
+// bar), the routing the mouse handler depends on. The two blank gap rows are regionGap (inert);
+// the status/box regions are inert too, but the bar row focuses and the content region selects.
 func TestModernRegionAt(t *testing.T) {
 	t.Parallel()
 
@@ -313,8 +314,10 @@ func TestModernRegionAt(t *testing.T) {
 		{name: "top content row", y: 0, want: regionContent},
 		{name: "last content row", y: lay.contentH - 1, want: regionContent},
 		{name: "status row", y: lay.statusY, want: regionStatus},
-		{name: "bar row", y: lay.barY, want: regionBar},
+		{name: "gap row above the box", y: lay.gapTopY, want: regionGap},
 		{name: "box row", y: lay.boxTop, want: regionBox},
+		{name: "gap row below the box", y: lay.gapBotY, want: regionGap},
+		{name: "bar row (very bottom)", y: lay.barY, want: regionBar},
 	}
 	// The subtests deliberately run SEQUENTIALLY over the shared m: regionAt → layout →
 	// the composer's textarea View() mutates an internal render cache, which is single-
@@ -673,7 +676,10 @@ func TestModernFocusResetsTailAndClearsSelection(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 8) // small height so content scrolls
+	// A short-but-nonzero content region (height leaves a few content rows above the taller
+	// modern bottom chrome — status + two gap rows + the padded box + the bar) so content still
+	// scrolls AND a Y:0 click lands in the content region.
+	m := newModernSized(t, agent, 80, 14)
 
 	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	for i := 0; i < 20; i++ {
@@ -1690,5 +1696,111 @@ func TestModernRenderFocusedPrimaryExcludesSubagentLeak(t *testing.T) {
 	subLines := m.renderFocused()
 	if !containsPlain(subLines, "SUBAGENT leaked words") {
 		t.Errorf("subagent renderFocused missing its own narration; got %q", plainAll(subLines))
+	}
+}
+
+// TestModernBarActiveFilter pins the modern active-loops bar's filter (m.bar()): it shows only
+// LIVE loops, ALWAYS keeps the FOCUSED loop (even when idle) so the current view is labeled,
+// drops idle non-focused loops, and falls back to the primary when the filter would leave the
+// bar empty.
+func TestModernBarActiveFilter(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+	subB := callID(3)
+
+	tests := []struct {
+		name    string
+		drive   func(t *testing.T, m ModernScreen) ModernScreen
+		present []uuid.UUID
+		absent  []uuid.UUID
+	}{
+		{
+			name: "idle non-focused loop drops off; live loops stay",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feedModern(t, m, loopStarted(subA, "a"))
+				m = feedModern(t, m, loopStarted(subB, "b"))
+				m = feedModern(t, m, event.LoopIdle{Header: hdr(subB)}) // subB parks idle, not focused
+				return m
+			},
+			present: []uuid.UUID{primary, subA},
+			absent:  []uuid.UUID{subB},
+		},
+		{
+			name: "the focused loop is kept even when idle",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feedModern(t, m, loopStarted(subB, "b"))
+				m = feedModern(t, m, event.LoopIdle{Header: hdr(subB)}) // subB idle...
+				m.focusLoop(subB)                                       // ...but focused → kept
+				return m
+			},
+			present: []uuid.UUID{primary, subB},
+		},
+		{
+			name: "empty filter falls back to the primary",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feedModern(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
+				m.focusedLoopID = subB                                     // focus a loop absent from the table
+				return m
+			},
+			present: []uuid.UUID{primary},
+			absent:  []uuid.UUID{subB},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+			m = tt.drive(t, m)
+			bar := m.bar()
+			for _, id := range tt.present {
+				if _, ok := barEntryFor(bar, id); !ok {
+					t.Errorf("bar missing expected loop %v; entries=%+v", id, bar.entries)
+				}
+			}
+			for _, id := range tt.absent {
+				if _, ok := barEntryFor(bar, id); ok {
+					t.Errorf("bar includes filtered-out loop %v; entries=%+v", id, bar.entries)
+				}
+			}
+		})
+	}
+}
+
+// TestModernBarMarkerAndFormat pins the modern bar's rendered form through m.bar(): the FOCUSED
+// loop carries the filled ● mark and every other loop the hollow ○, each formatted as
+// "<mark> <name> (<id4>)" (agent name then the short loop id in parentheses). Focus flips the
+// marks.
+func TestModernBarMarkerAndFormat(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, loopStarted(sub, "operator"))
+
+	// Primary focused: the unfocused subagent shows "○ operator (<id4>)"; a filled ● appears.
+	plain := stripANSI(m.bar().Render(m.width))
+	if want := barSegOf(barUnfocusedMark, "operator", sub); !strings.Contains(plain, want) {
+		t.Errorf("bar = %q, want it to contain %q (unfocused ○ name (id) format)", plain, want)
+	}
+	if !strings.Contains(plain, barFocusedMark) {
+		t.Errorf("bar = %q, want it to contain the focused ● mark", plain)
+	}
+
+	// Focusing the subagent flips the marks: sub becomes ●.
+	m.focusLoop(sub)
+	plain = stripANSI(m.bar().Render(m.width))
+	if want := barSegOf(barFocusedMark, "operator", sub); !strings.Contains(plain, want) {
+		t.Errorf("bar = %q, want the focused subagent to carry the ● mark (%q)", plain, want)
 	}
 }

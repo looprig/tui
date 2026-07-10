@@ -465,3 +465,58 @@ func TestInputBoxBackground(t *testing.T) {
 		}
 	}
 }
+
+// TestInputBoxVerticalPadding covers the per-instance inner vertical padding: the default
+// composer adds no padding rows, and after SetVerticalPadding(1) the modern composer frames its
+// text with one background-filled blank row ABOVE and one BELOW (so the box reads as
+// [pad][text][pad]), each padding row filled to the box width. The scrollback default stays
+// unpadded, and a negative padding is ignored.
+func TestInputBoxVerticalPadding(t *testing.T) {
+	t.Parallel()
+
+	const width = 40
+	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+
+	// Default composer: no padding rows (View height is just the content height).
+	def := NewInputBox()
+	def.Resize(width)
+	if got := strings.Count(def.View(), "\n") + 1; got != minInputLines {
+		t.Errorf("default composer View height = %d, want %d (no padding)", got, minInputLines)
+	}
+
+	// A negative padding is ignored (fail-safe): still no padding rows.
+	neg := NewInputBox()
+	neg.Resize(width)
+	neg.SetVerticalPadding(-2)
+	if got := strings.Count(neg.View(), "\n") + 1; got != minInputLines {
+		t.Errorf("negative-padding View height = %d, want %d (ignored)", got, minInputLines)
+	}
+
+	// Modern composer: gray fill + one padding row above and below the single text row.
+	mod := NewInputBox()
+	mod.Resize(width)
+	mod.SetBackground(lipgloss.Color("#303030"))
+	mod.SetVerticalPadding(1)
+	lines := strings.Split(mod.View(), "\n")
+	if len(lines) != minInputLines+2 { // 1 text row + 2 padding rows
+		t.Fatalf("modern padded composer height = %d, want %d (text + 2 pad rows)\nview:\n%s",
+			len(lines), minInputLines+2, stripANSI(mod.View()))
+	}
+	// The first and last rows are blank padding — no visible text, but carrying the gray fill
+	// to the box width so they read as part of the box.
+	for _, i := range []int{0, len(lines) - 1} {
+		if got := strings.TrimSpace(stripANSI(lines[i])); got != "" {
+			t.Errorf("padding row %d has visible text %q, want blank", i, got)
+		}
+		if !strings.Contains(lines[i], bgSGR) {
+			t.Errorf("padding row %d missing the gray fill; line=%q", i, lines[i])
+		}
+		if got := lipgloss.Width(lines[i]); got != width {
+			t.Errorf("padding row %d width = %d, want %d (filled to box width)", i, got, width)
+		}
+	}
+	// The middle row still carries the composer's ▌ accent.
+	if !strings.Contains(stripANSI(lines[1]), "▌") {
+		t.Errorf("text row missing the ▌ accent; row=%q", stripANSI(lines[1]))
+	}
+}

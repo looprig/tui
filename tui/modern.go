@@ -27,10 +27,11 @@ import (
 // The core owns event routing exactly as it does for Screen; ModernScreen adds ONLY the
 // viewport presentation. Update delegates transport to the core then re-renders the focused
 // projection into the viewport (keeping the auto-follow tail pinned); View composes, top to
-// bottom, the viewport content, one status line, the loop bar, and the bottom box, and
-// returns a per-frame View with AltScreen + cell-motion mouse (the v2 fields the copy-while-
-// scrolling design turns on). Agent() is promoted from the embedded sessionCore, so
-// ModernScreen satisfies the composition root's agentHolder through that single definition.
+// bottom, the viewport content, one status line, a blank gap, the bottom box, a blank gap, and
+// the active-loops bar, and returns a per-frame View with AltScreen + cell-motion mouse (the
+// v2 fields the copy-while-scrolling design turns on). Agent() is promoted from the embedded
+// sessionCore, so ModernScreen satisfies the composition root's agentHolder through that single
+// definition.
 //
 // Focus switching (Task 8): ctrl+n / ctrl+p cycle focus over the bar's loops and a bar-region
 // click focuses the clicked loop, both repointing focusedLoopID and re-rendering that loop's
@@ -141,16 +142,23 @@ func NewModern(ctx context.Context, agent Agent, open OpenAgent, banner AgentBan
 // still auto-growing to maxInputLines.
 const modernComposerMinLines = 2
 
+// modernComposerPadV is the modern composer's inner vertical padding: one background-filled
+// row above AND below the text region, so the input reads as a padded box rather than a bare
+// line. Scrollback's composer keeps the default 0 (no padding).
+const modernComposerPadV = 1
+
 // modernizeComposer applies the MODERN composer treatment to in's input box — the 2-line
-// default height and the gray panel fill (styles.ModernPanelBg) — and returns the updated
-// model. It runs at every site that installs a FRESH (default 1-line, background-free)
-// interaction for a ModernScreen: initial construction (NewModern) and the cold-restore
-// install (handleRestored replaces the whole interaction with a freshly-built one). The
-// /clear reopen keeps the same input (ClearPrompts preserves it), so it needs no re-apply.
-// Scrollback's Screen never calls this, so its composer stays byte-identical.
+// default height, the gray panel fill (styles.ModernPanelBg), and one row of inner vertical
+// padding above/below the text — and returns the updated model. It runs at every site that
+// installs a FRESH (default 1-line, background-free, unpadded) interaction for a ModernScreen:
+// initial construction (NewModern) and the cold-restore install (handleRestored replaces the
+// whole interaction with a freshly-built one). The /clear reopen keeps the same input
+// (ClearPrompts preserves it), so it needs no re-apply. Scrollback's Screen never calls this,
+// so its composer stays byte-identical.
 func modernizeComposer(in interactionModel) interactionModel {
 	in.input.SetMinLines(modernComposerMinLines)
 	in.input.SetBackground(styles.ModernPanelBg)
+	in.input.SetVerticalPadding(modernComposerPadV)
 	return in
 }
 
@@ -557,7 +565,7 @@ func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return m.contentMouse(msg, mouse)
 	case regionBar:
 		return m.barMouse(msg, mouse)
-	default: // regionStatus, regionBox — keys, not the mouse, drive these.
+	default: // regionStatus, regionBox, regionGap — keys (not the mouse) drive these, gaps are inert.
 		return nil
 	}
 }
@@ -638,46 +646,61 @@ func (m *ModernScreen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 
 // modernLayout is the frame's top-to-bottom region geometry, the SINGLE source both View
 // (which draws the regions) and regionAt (which hit-tests a mouse row) compute from, so a
-// drawn row and a hit-tested row can never disagree. The content region occupies rows
-// [0, contentH); the status line, loop bar, and bottom box follow.
+// drawn row and a hit-tested row can never disagree. Top to bottom: the content region
+// occupies rows [0, contentH); then the status line, a blank gap row, the bottom box, a
+// second blank gap row, and finally the active-loops bar at the very bottom.
 type modernLayout struct {
 	contentH int // viewport content rows: region [0, contentH)
 	statusY  int // the status line row
-	barY     int // the loop bar row
+	gapTopY  int // the inert blank gap row between the status line and the box
 	boxTop   int // the first row of the bottom box
 	boxH     int // the bottom box's rendered height
+	gapBotY  int // the inert blank gap row between the box and the loop bar
+	barY     int // the loop bar row (the very bottom)
 }
 
 // layout derives the region geometry from the current frame: the bottom box is measured
-// first (its height varies with the composer/prompt), then the status + bar reserve one row
-// each, and the viewport content gets whatever remains (floored at 0). Because it is
-// deterministic in the model state, View and regionAt compute the identical layout.
+// first (its height varies with the composer/prompt), then the status, the two blank gap
+// rows, and the bar reserve one row each, and the viewport content gets whatever remains
+// (floored at 0). Because it is deterministic in the model state, View and regionAt compute
+// the identical layout.
+//
+// The row order is status → gap → box → gap → bar (the input box sits ABOVE the loop bar,
+// each set off by an inert blank row), matching composeBody's stacking exactly.
 //
 // NOT side-effect-free: measuring the box (bottomBoxView → the bubbles textarea's View)
 // drives the textarea's internal render/measure cache, so layout must run only on Bubble
 // Tea's single model goroutine (never concurrently — see the serial subtest note in the
 // tests).
 func (m ModernScreen) layout() modernLayout {
-	const statusH, barH = 1, 1
+	const statusH, barH, gapH = 1, 1, 1
 	boxH := lipgloss.Height(m.bottomBoxView())
 	if boxH < 1 {
 		boxH = 1
 	}
-	contentH := m.height - statusH - barH - boxH
+	contentH := m.height - statusH - gapH - boxH - gapH - barH
 	if contentH < 0 {
 		contentH = 0
 	}
+	statusY := contentH
+	gapTopY := statusY + statusH
+	boxTop := gapTopY + gapH
+	gapBotY := boxTop + boxH
+	barY := gapBotY + gapH
 	return modernLayout{
 		contentH: contentH,
-		statusY:  contentH,
-		barY:     contentH + statusH,
-		boxTop:   contentH + statusH + barH,
+		statusY:  statusY,
+		gapTopY:  gapTopY,
+		boxTop:   boxTop,
 		boxH:     boxH,
+		gapBotY:  gapBotY,
+		barY:     barY,
 	}
 }
 
 // modernRegion is a frame region the mouse can fall in — the content viewport, the status
-// line, the loop bar, or the bottom box — the discriminant handleMouse routes on.
+// line, the bottom box, the loop bar, or an inert gap row — the discriminant handleMouse
+// routes on.
 type modernRegion uint8
 
 const (
@@ -685,10 +708,12 @@ const (
 	regionStatus
 	regionBar
 	regionBox
+	regionGap
 )
 
 // regionAt maps a terminal row y to its frame region using the same layout View draws, so
-// mouse routing (content select/copy vs a bar focus click) matches what the user sees.
+// mouse routing (content select/copy vs a bar focus click) matches what the user sees. The
+// two blank gap rows (and any row past the bar) are regionGap — inert, no mouse behavior.
 func (m ModernScreen) regionAt(y int) modernRegion {
 	lay := m.layout()
 	switch {
@@ -696,10 +721,12 @@ func (m ModernScreen) regionAt(y int) modernRegion {
 		return regionContent
 	case y == lay.statusY:
 		return regionStatus
+	case y >= lay.boxTop && y < lay.boxTop+lay.boxH:
+		return regionBox
 	case y == lay.barY:
 		return regionBar
-	default:
-		return regionBox
+	default: // the two blank gap rows (and any row past the bar) — inert
+		return regionGap
 	}
 }
 
@@ -799,14 +826,47 @@ func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
 // (pendingGateLoops): a gate on a non-focused loop signals it needs attention WITHOUT stealing
 // focus (design §Prompts), leaving the user to focus it. A gate on the focused loop still marks
 // (focus and gate are independent flags).
+//
+// The bar shows only the loops currently doing work: activeBarEntries keeps the LIVE loops plus
+// the FOCUSED loop (kept even when idle, so the current view is always labeled), dropping idle
+// non-focused loops. When that filter leaves nothing (nothing live and the focused loop absent
+// from the table), primaryBarEntry falls back to the primary so the bar still labels the
+// session; a brand-new session with no loops yet renders an empty bar (the pre-turn default).
 func (m ModernScreen) bar() loopBar {
 	infos := m.transcript.loops()
 	gated := m.interaction.pendingGateLoops()
-	entries := make([]loopBarEntry, 0, len(infos))
-	for _, li := range infos {
-		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]})
+	entries := activeBarEntries(infos, gated, m.focusedLoopID)
+	if len(entries) == 0 {
+		entries = primaryBarEntry(infos, gated, m.transcript.primaryLoopID)
 	}
 	return loopBar{entries: entries, focused: m.focusedLoopID, max: modernLoopBarCap}
+}
+
+// activeBarEntries maps the loop table into bar entries, keeping only LIVE loops plus the
+// FOCUSED loop (even when idle) — an idle, non-focused loop drops off the bar. The entry order
+// follows loops() (stable creation order), so the bar draws loops in the order they appeared.
+func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused uuid.UUID) []loopBarEntry {
+	entries := make([]loopBarEntry, 0, len(infos))
+	for _, li := range infos {
+		if !li.Live && li.ID != focused {
+			continue
+		}
+		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]})
+	}
+	return entries
+}
+
+// primaryBarEntry is the fallback shown when the active filter leaves the bar empty (nothing
+// live and the focused loop is not in the table): the primary loop's entry, so the bar always
+// labels the session. It returns nil when the primary is not yet in the table (a brand-new
+// session with no loops) — an empty bar, the pre-turn default.
+func primaryBarEntry(infos []loopInfo, gated map[uuid.UUID]bool, primary uuid.UUID) []loopBarEntry {
+	for _, li := range infos {
+		if li.ID == primary {
+			return []loopBarEntry{{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]}}
+		}
+	}
+	return nil
 }
 
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
@@ -919,8 +979,9 @@ func formatElapsed(d time.Duration) string {
 }
 
 // View composes the frame top to bottom — the viewport content (the focused projection with
-// collapse), one status line, the active-loops bar, and the bottom box — and returns a
-// per-frame View with the modern configuration: AltScreen on and cell-motion mouse (the v2
+// collapse), one status line, a blank gap, the bottom box, a blank gap, and the active-loops
+// bar — and returns a per-frame View with the modern configuration: AltScreen on and
+// cell-motion mouse (the v2
 // per-frame fields the copy-while-scrolling design turns on), plus the composer's Kitty
 // keyboard request (see Screen.View for why). It returns an empty view until the first sized
 // frame (avoids a 0×0 first frame).
@@ -937,10 +998,13 @@ func (m ModernScreen) View() tea.View {
 
 // composeBody stacks the frame's rows for lay: the viewport content padded/clamped to
 // EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then the
-// status line, the loop bar, and the bottom box. The viewport is sized to lay.contentH on a
-// LOCAL copy before rendering, so the drawn content region always matches the current layout
-// even if the bottom chrome changed since the last Update-side resize/rerender. Every line is
-// width-clamped (truncate, never wrap) so no row exceeds the frame width.
+// status line, an inert blank gap row, the bottom box, a second inert blank gap row, and the
+// active-loops bar at the very bottom. The input box sits ABOVE the loop bar, each set off by
+// a blank row so the bottom chrome does not read as cramped. The viewport is sized to
+// lay.contentH on a LOCAL copy before rendering, so the drawn content region always matches
+// the current layout even if the bottom chrome changed since the last Update-side
+// resize/rerender. Every line is width-clamped (truncate, never wrap) so no row exceeds the
+// frame width. The stacking order MUST match layout()/regionAt exactly.
 func (m ModernScreen) composeBody(lay modernLayout) string {
 	vp := m.viewport
 	vp.SetSize(m.contentWidth(), lay.contentH)
@@ -955,9 +1019,11 @@ func (m ModernScreen) composeBody(lay modernLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
-	rows = append(rows, m.modernStatusLine())
-	rows = append(rows, m.bar().Render(m.width))
-	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...)
+	rows = append(rows, m.modernStatusLine())                      // status line
+	rows = append(rows, "")                                        // inert gap: status → box
+	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
+	rows = append(rows, "")                                        // inert gap: box → bar
+	rows = append(rows, m.bar().Render(m.width))                   // active-loops bar (very bottom)
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
 }
 

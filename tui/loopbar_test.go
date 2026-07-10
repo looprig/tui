@@ -10,14 +10,15 @@ import (
 )
 
 // barSegOf builds the expected ANSI-free segment text for a mark/name/id, mirroring
-// loopBar.segPlain so the render assertions stay pinned to the component's own layout.
+// loopBar.segBody ("<mark> <name> (<id4>)") so the render assertions stay pinned to the
+// component's own layout.
 func barSegOf(mark, name string, id uuid.UUID) string {
-	return mark + name + barIDSep + shortLoopID(id)
+	return mark + barMarkSep + name + barIDOpen + shortLoopID(id) + barIDClose
 }
 
-// TestLoopBarRender covers the bar's one-line render: the leading focus/live/idle marks, the
-// trailing gate "!", the visible cap + "… +N" overflow marker, and the degenerate empty /
-// zero-width frames.
+// TestLoopBarRender covers the bar's one-line render: the leading focused ● / unfocused ○
+// marks, the trailing gate "!", the visible cap + "… +N" overflow marker, and the degenerate
+// empty / zero-width frames.
 func TestLoopBarRender(t *testing.T) {
 	t.Parallel()
 
@@ -31,7 +32,7 @@ func TestLoopBarRender(t *testing.T) {
 		absent  []string
 	}{
 		{
-			name: "focused, live and idle marks",
+			name: "focused ● vs unfocused ○ marks",
 			bar: loopBar{
 				entries: []loopBarEntry{
 					{id: l0, name: "main", live: true},
@@ -43,8 +44,8 @@ func TestLoopBarRender(t *testing.T) {
 			width: 80,
 			contain: []string{
 				barSegOf(barFocusedMark, "main", l0),
-				barSegOf(barLiveMark, "reviewer", l1),
-				barSegOf(barIdleMark, "tester", l2),
+				barSegOf(barUnfocusedMark, "reviewer", l1),
+				barSegOf(barUnfocusedMark, "tester", l2),
 			},
 			absent: []string{"… +"},
 		},
@@ -58,7 +59,7 @@ func TestLoopBarRender(t *testing.T) {
 				focused: l0,
 			},
 			width:   80,
-			contain: []string{barSegOf(barLiveMark, "reviewer", l1) + barGateMark},
+			contain: []string{barSegOf(barUnfocusedMark, "reviewer", l1) + barGateMark},
 		},
 		{
 			name: "visible cap folds the rest into … +N (focused + live kept)",
@@ -76,20 +77,20 @@ func TestLoopBarRender(t *testing.T) {
 			width: 80,
 			contain: []string{
 				barSegOf(barFocusedMark, "main", l0),
-				barSegOf(barLiveMark, "a", l1),
+				barSegOf(barUnfocusedMark, "a", l1),
 				overflowText(3),
 			},
 			absent: []string{
-				barSegOf(barIdleMark, "b", l2),
-				barSegOf(barIdleMark, "c", l3),
-				barSegOf(barIdleMark, "d", l4),
+				barSegOf(barUnfocusedMark, "b", l2),
+				barSegOf(barUnfocusedMark, "c", l3),
+				barSegOf(barUnfocusedMark, "d", l4),
 			},
 		},
 		{
 			name:   "empty bar renders nothing",
 			bar:    loopBar{},
 			width:  80,
-			absent: []string{barFocusedMark, barLiveMark, barIdleMark},
+			absent: []string{barFocusedMark, barUnfocusedMark},
 		},
 		{
 			name: "non-positive width renders nothing",
@@ -114,8 +115,8 @@ func TestLoopBarRender(t *testing.T) {
 			width: 80,
 			contain: []string{
 				barSegOf(barFocusedMark, "main", l0),
-				barSegOf(barIdleMark, "a", l1),
-				barSegOf(barIdleMark, "b", l2),
+				barSegOf(barUnfocusedMark, "a", l1),
+				barSegOf(barUnfocusedMark, "b", l2),
 			},
 			absent: []string{"… +"},
 		},

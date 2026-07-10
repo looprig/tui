@@ -38,11 +38,11 @@ const placeholder = "Type a message…"
 // box. No char limit, no line numbers, no "> " prompt. The box height tracks the
 // content between minLines and maxInputLines.
 //
-// minLines and bg are per-INSTANCE so a single composer implementation serves both
-// shells: the scrollback Screen keeps the historical 1-line, background-free editor (the
-// NewInputBox defaults), and the modern viewport opts into a taller, gray-filled panel via
-// SetMinLines/SetBackground. Nothing else changes, so the scrollback composer stays
-// byte-identical.
+// minLines, bg, and padV are per-INSTANCE so a single composer implementation serves both
+// shells: the scrollback Screen keeps the historical 1-line, background-free, unpadded editor
+// (the NewInputBox defaults), and the modern viewport opts into a taller, gray-filled, padded
+// panel via SetMinLines/SetBackground/SetVerticalPadding. Nothing else changes, so the
+// scrollback composer stays byte-identical.
 type InputBox struct {
 	ta       textarea.Model
 	minLines int    // visible-height floor; default minInputLines (1)
@@ -50,6 +50,7 @@ type InputBox struct {
 	hasBG    bool   // whether the modern gray panel fill is enabled (default: off)
 	bgOpen   string // SGR that turns the fill on (derived once in SetBackground); "" when off
 	bgReset  string // SGR that turns the fill off
+	padV     int    // background-filled padding rows above AND below the text region (default 0)
 }
 
 // NewInputBox returns a configured, focused prompt editor.
@@ -154,6 +155,21 @@ func (b *InputBox) SetBackground(bg color.Color) {
 	b.bgReset = reset
 }
 
+// SetVerticalPadding sets the number of background-filled padding rows View draws ABOVE and
+// BELOW the text region, so the modern composer reads as a padded box ([pad][text…][pad])
+// rather than a bare line. It defaults to 0 (the scrollback Screen never calls this, so its
+// composer stays byte-identical); the modern viewport sets 1. Negative values are ignored
+// (fail-safe). The padding rows are filled with the modern gray panel (SetBackground) so they
+// read as part of the box; with no background enabled they render as blank rows. Padding does
+// NOT change the editor's auto-grow — the text region still grows to maxInputLines — it only
+// frames it, so the box's rendered height is the text height plus 2*padV.
+func (b *InputBox) SetVerticalPadding(n int) {
+	if n < 0 {
+		return
+	}
+	b.padV = n
+}
+
 // Height is the editor's visible content height in rows: the textarea's current row
 // count clamped to [minInputLines, maxInputLines]. It excludes the border frame.
 //
@@ -223,14 +239,34 @@ func (b *InputBox) Update(msg tea.Msg) tea.Cmd {
 // rendered row — the ▌ edge, its one-column left pad, the text, and any empty end-of-buffer
 // rows — is filled to the box width with the gray panel color, so the composer reads as one
 // continuous panel; the default (scrollback) box paints nothing.
+//
+// With vertical padding (SetVerticalPadding, modern sets 1) padV background-filled blank rows
+// are added ABOVE and BELOW the text rows so the composer reads as a padded box
+// ([pad][text…][pad]) rather than a bare line. A padding row is a full-width fill of the gray
+// panel (blank when no background is enabled). The scrollback composer sets neither, so it
+// returns the bare box unchanged (byte-identical).
 func (b *InputBox) View() string {
 	view := styles.BoxStyle.Render(b.ta.View())
-	if !b.hasBG {
+	if !b.hasBG && b.padV == 0 {
 		return view
 	}
 	lines := strings.Split(view, "\n")
-	for i, line := range lines {
-		lines[i] = styles.FillLineBackgroundWith(line, b.width, b.bgOpen, b.bgReset)
+	if b.hasBG {
+		for i, line := range lines {
+			lines[i] = styles.FillLineBackgroundWith(line, b.width, b.bgOpen, b.bgReset)
+		}
+	}
+	if b.padV > 0 {
+		pad := styles.FillLineBackgroundWith("", b.width, b.bgOpen, b.bgReset)
+		padded := make([]string, 0, len(lines)+2*b.padV)
+		for i := 0; i < b.padV; i++ {
+			padded = append(padded, pad)
+		}
+		padded = append(padded, lines...)
+		for i := 0; i < b.padV; i++ {
+			padded = append(padded, pad)
+		}
+		lines = padded
 	}
 	return strings.Join(lines, "\n")
 }

@@ -34,17 +34,18 @@ type loopBar struct {
 	max     int
 }
 
-// Bar glyphs (design §Active-loops bar): a leading mark per segment — focused wins over live
-// wins over idle — plus a trailing gate mark. The id short form and separators keep the row
-// compact.
+// Bar glyphs (design §Active-loops bar): a leading mark per segment — a FILLED ● for the
+// focused loop, a hollow ○ for every other loop — plus a trailing gate mark. The short id is
+// shown parenthesised after the agent name ("<mark> <name> (<id4>)").
 const (
-	barFocusedMark = "▸"  // this loop is focused
-	barLiveMark    = "•"  // this loop is live (running / mid-turn)
-	barIdleMark    = "∘"  // this loop is parked idle
-	barGateMark    = "!"  // this loop has a pending gate awaiting the user
-	barIDSep       = "·"  // between a loop's name and its short id
-	barSep         = "  " // between adjacent segments (and before the overflow marker)
-	barIDLen       = 4    // leading hex chars of the loop id shown as its short form
+	barFocusedMark   = "●"  // the focused loop (filled circle)
+	barUnfocusedMark = "○"  // a non-focused loop (hollow circle)
+	barGateMark      = "!"  // this loop has a pending gate awaiting the user
+	barMarkSep       = " "  // between the leading mark and the loop name
+	barIDOpen        = " (" // opens the parenthesised short id, e.g. " (a1b2)"
+	barIDClose       = ")"  // closes the parenthesised short id
+	barSep           = "  " // between adjacent segments (and before the overflow marker)
+	barIDLen         = 4    // leading hex chars of the loop id shown as its short form
 )
 
 // barSeg is one rendered segment's provenance: the loop id it maps to and the half-open
@@ -57,7 +58,7 @@ type barSeg struct {
 	end   int
 }
 
-// Render draws the bar as a single line: each visible loop's "<mark><name>·<id4>" (plus a
+// Render draws the bar as a single line: each visible loop's "<mark> <name> (<id4>)" (plus a
 // trailing "!" when gated), joined by a small gap, followed by a "… +N" overflow marker when
 // the visible cap hides loops. The visible set is bounded by max (not width), so a wide frame
 // and a narrow one draw the same segments in the same columns — which is exactly why HitTest
@@ -221,26 +222,35 @@ func (b loopBar) render(kept []loopBarEntry) ([]barSeg, string) {
 	return segs, sb.String()
 }
 
-// segPlain is a loop segment's ANSI-free text — "<mark><name>·<id4>" plus a trailing "!" when
-// gated — the form HitTest measures cell spans on. The leading mark encodes focus/live/idle
-// (leadMark); the gate mark is a SUFFIX so it never shifts the leading mark.
+// segBody is a loop segment's ANSI-free "<mark> <name> (<id4>)" — the shared layout both
+// segPlain (which HitTest measures spans on) and segStyled (which Render draws) build from, so
+// a drawn column and a hit-tested column can never disagree. The leading mark encodes focus
+// (leadMark: filled ● when focused, hollow ○ otherwise); the short id is parenthesised after
+// the agent name.
+func (b loopBar) segBody(e loopBarEntry) string {
+	return b.leadMark(e) + barMarkSep + e.name + barIDOpen + shortLoopID(e.id) + barIDClose
+}
+
+// segPlain is a loop segment's ANSI-free text — segBody plus a trailing "!" when gated — the
+// form HitTest measures cell spans on. The gate mark is a SUFFIX so it never shifts the body.
 func (b loopBar) segPlain(e loopBarEntry) string {
-	s := b.leadMark(e) + e.name + barIDSep + shortLoopID(e.id)
+	s := b.segBody(e)
 	if e.gate {
 		s += barGateMark
 	}
 	return s
 }
 
-// segStyled is segPlain with tasteful styling: the focused loop bold (it is the one the
-// viewport tracks), every other loop faint (subordinate context), and a pending gate's "!" in
-// the warn color so it reads as action-required. Styling is zero-width, so segStyled has the
-// same display width as segPlain and the recorded cell spans stay valid.
+// segStyled is segBody in the bar's lighter tone: the WHOLE bar renders faint (StatusStyle)
+// so it reads as quiet, subordinate context, and the focused loop is set apart by an
+// additionally BOLD name (plus its filled ● mark). A pending gate's "!" renders in the warn
+// color so it reads as action-required. Styling is zero-width, so segStyled has the same
+// display width as segPlain and the recorded cell spans stay valid.
 func (b loopBar) segStyled(e loopBarEntry) string {
-	body := b.leadMark(e) + e.name + barIDSep + shortLoopID(e.id)
+	body := b.segBody(e)
 	style := styles.StatusStyle
 	if e.id == b.focused {
-		style = styles.HeadlineStyle
+		style = styles.StatusStyle.Bold(true)
 	}
 	out := style.Render(body)
 	if e.gate {
@@ -249,18 +259,14 @@ func (b loopBar) segStyled(e loopBarEntry) string {
 	return out
 }
 
-// leadMark is a segment's leading glyph: focused wins over live wins over idle (design §bar).
-// It reads the bar's focused id, so segPlain and segStyled agree on the mark and HitTest's
-// cell spans line up with the drawn marks.
+// leadMark is a segment's leading glyph: a FILLED ● for the focused loop, a hollow ○ for every
+// other loop (design §bar). It reads the bar's focused id, so segPlain and segStyled agree on
+// the mark and HitTest's cell spans line up with the drawn marks.
 func (b loopBar) leadMark(e loopBarEntry) string {
-	switch {
-	case e.id == b.focused:
+	if e.id == b.focused {
 		return barFocusedMark
-	case e.live:
-		return barLiveMark
-	default:
-		return barIdleMark
 	}
+	return barUnfocusedMark
 }
 
 // overflowText is the "… +N" marker shown when the visible cap hides N loops.
