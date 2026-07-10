@@ -200,12 +200,20 @@ type renderedLine struct {
 
 Per-entry state `collapsed map[displayID]bool`:
 
-- `ctrl+t` toggles a **global** default over all thinking + tool blocks; because the buffer
-  re-renders each frame, it is **retroactive** (the June "must default expanded" constraint does
-  not apply here). **Default collapsed** (thinking → summary; tool result → `previewLineCap`)
-  since expansion is now reversible and density is the goal.
+- `ctrl+t` toggles a **global** default; because the buffer re-renders each frame, it is
+  **retroactive** (the June "must default expanded" constraint does not apply here). **Default
+  collapsed** since expansion is now reversible and density is the goal.
 - **Click a block header** (hit-test → `renderedLine.entry`) toggles just that entry. A collapsed
   block shows a `▸`/`▾` affordance.
+
+> **Stage-1 scope (implemented):** the collapse state (`collapseState`, Task 6) drives the
+> **thinking** fold via `renderEntryLines(collapsed)` — thinking starts folded and `ctrl+t`/click
+> expand it. **Tool-result expansion is deferred:** the shared `renderEntry` hard-caps tool
+> previews at `previewLineCap` regardless of the expand flag (a deliberate scrollback-safety rule
+> — a huge tool result must not strand a screen-height gap), and un-capping it in modern mode
+> without regressing scrollback needs an additive renderer change out of Task 6's scope. So in
+> Stage 1 tool results stay capped in both modes; the toggle visibly affects thinking, which is
+> the user's stated need. A follow-up can add an `expandTools` renderer path for modern mode.
 
 ## Active-loops bar (replaces tips) + focus
 
