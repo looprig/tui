@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
@@ -3093,5 +3094,188 @@ func TestTranscriptLoopLivenessFoldDeterministic(t *testing.T) {
 	b := FoldDisplay(events, primary)
 	if !a.EqualTranscript(b) {
 		t.Error("EqualTranscript on two folds of the same lifecycle sequence = false, want true (liveness must fold deterministically)")
+	}
+}
+
+// firstThinkingAssistant returns the thinkDur of the FIRST committed kindAssistant entry
+// that carries a ThinkingBlock, and whether such an entry exists — the seam the
+// thinking-duration tests assert the captured span through.
+func firstThinkingAssistant(m transcriptModel) (time.Duration, bool) {
+	for _, e := range m.committed {
+		if e.Kind != kindAssistant {
+			continue
+		}
+		for _, b := range e.Blocks {
+			if _, ok := b.(*content.ThinkingBlock); ok {
+				return e.thinkDur, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// TestThinkingDurationCapture covers measuring a step's thinking span from streaming
+// TokenDelta timestamps (ev.CreatedAt) and attaching it to the committed assistant entry:
+// thinking-then-text seals the end at the FIRST text chunk after thinking; thinking-then-
+// tool (no narration streamed) falls back to the LAST thinking chunk; a step with no
+// thinking carries no duration; and a stream with no timestamps (a cold restore / backlog)
+// yields a zero duration (the bare "Thought" fallback).
+func TestThinkingDurationCapture(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0x51)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// thinkAt / textAt build a TokenDelta stamped at base+offset on the primary loop.
+	thinkAt := func(s string, off time.Duration) event.Event {
+		return event.TokenDelta{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, CreatedAt: base.Add(off)},
+			Chunk:  &content.ThinkingChunk{Thinking: s},
+		}
+	}
+	textAt := func(s string, off time.Duration) event.Event {
+		return event.TokenDelta{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, CreatedAt: base.Add(off)},
+			Chunk:  &content.TextChunk{Text: s},
+		}
+	}
+	// thinkNoStamp builds a thinking TokenDelta with NO CreatedAt (the Ephemeral,
+	// journal-less shape a cold restore never sees at all — used here to prove a
+	// timestamp-less stream captures no duration).
+	thinkNoStamp := func(s string) event.Event {
+		return event.TokenDelta{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}},
+			Chunk:  &content.ThinkingChunk{Thinking: s},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		events       []event.Event
+		wantThinking bool          // a committed assistant entry carries a ThinkingBlock
+		wantDur      time.Duration // its captured thinkDur
+	}{
+		{
+			// Thinking streams from +0 to +8s, then narration begins at +10s: the end is
+			// SEALED at the first text chunk (+10s), so the span is 10s.
+			name: "thinking then text seals end at first text chunk",
+			events: []event.Event{
+				event.TurnStarted{Header: hdr(primary)},
+				thinkAt("weigh ", 0),
+				thinkAt("options", 8*time.Second),
+				textAt("here is ", 10*time.Second),
+				textAt("the plan", 11*time.Second),
+				stepDoneFrom(primary, aiMessage("weigh options", "here is the plan")),
+			},
+			wantThinking: true,
+			wantDur:      10 * time.Second,
+		},
+		{
+			// Thinking streams from +0 to +10s and NO narration follows (the step runs a
+			// tool): the end falls back to the LAST thinking chunk (+10s), a 10s span.
+			name: "thinking then tool falls back to last thinking chunk",
+			events: []event.Event{
+				event.TurnStarted{Header: hdr(primary)},
+				thinkAt("mulling ", 0),
+				thinkAt("it over", 10*time.Second),
+				stepDoneFrom(primary, aiMessage("mulling it over", "", toolUse("t1", "Bash", `{"command":"ls"}`)), toolResult("t1", "ok")),
+			},
+			wantThinking: true,
+			wantDur:      10 * time.Second,
+		},
+		{
+			// A step that streamed only narration has no thinking block committed, so there
+			// is no thinking entry to carry a duration.
+			name: "no thinking step carries no duration entry",
+			events: []event.Event{
+				event.TurnStarted{Header: hdr(primary)},
+				textAt("just answering", 0),
+				stepDoneFrom(primary, aiMessage("", "just answering")),
+			},
+			wantThinking: false,
+		},
+		{
+			// Timestamp-less thinking chunks (the restore/backlog shape) never seed a start,
+			// so the committed entry has a zero duration → the bare "Thought" fallback.
+			name: "timestampless thinking yields zero duration",
+			events: []event.Event{
+				event.TurnStarted{Header: hdr(primary)},
+				thinkNoStamp("reasoning without stamps"),
+				stepDoneFrom(primary, aiMessage("reasoning without stamps", "done")),
+			},
+			wantThinking: true,
+			wantDur:      0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := transcriptModel{primaryLoopID: primary}
+			for _, ev := range tt.events {
+				m = m.ApplyEvent(ev)
+			}
+			gotDur, gotThinking := firstThinkingAssistant(m)
+			if gotThinking != tt.wantThinking {
+				t.Fatalf("committed thinking entry present = %v, want %v (committed=%+v)", gotThinking, tt.wantThinking, m.committed)
+			}
+			if tt.wantThinking && gotDur != tt.wantDur {
+				t.Errorf("captured thinkDur = %v, want %v", gotDur, tt.wantDur)
+			}
+		})
+	}
+}
+
+// TestEqualTranscriptIgnoresThinkDuration is the restore-equivalence guard: a LIVE fold
+// (with streaming TokenDelta timestamps) captures a non-zero thinking duration, while a
+// RESTORE fold of the SAME step WITHOUT those Ephemeral, never-journaled deltas captures
+// zero — yet the two displayed transcripts must still compare EQUAL, because the duration
+// is a live-display enhancement normalized out of EqualTranscript. The restored row
+// correctly shows "│ Thought" with no number; that is the accepted behavior, not a bug.
+func TestEqualTranscriptIgnoresThinkDuration(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0x71)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	step := stepDoneFrom(primary, aiMessage("thinking hard", "the answer"))
+
+	// LIVE: the same finalized step, PRECEDED by streaming thinking TokenDeltas carrying
+	// real timestamps — a 10s thinking span the live fold captures.
+	liveEvents := []event.Event{
+		event.TurnStarted{Header: hdr(primary)},
+		event.TokenDelta{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, CreatedAt: base}, Chunk: &content.ThinkingChunk{Thinking: "thinking "}},
+		event.TokenDelta{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, CreatedAt: base.Add(10 * time.Second)}, Chunk: &content.ThinkingChunk{Thinking: "hard"}},
+		step,
+		event.TurnDone{Header: hdr(primary)},
+	}
+	// RESTORE: only the persisted Enduring events (no Ephemeral TokenDeltas) — the shape a
+	// cold restore's ReplayBacklog yields.
+	restoreEvents := []event.Event{
+		event.TurnStarted{Header: hdr(primary)},
+		step,
+		event.TurnDone{Header: hdr(primary)},
+	}
+
+	live := FoldDisplay(liveEvents, primary)
+	restored := FoldDisplay(restoreEvents, primary)
+
+	// Prove the durations genuinely DIVERGE (otherwise the equality would be trivial).
+	liveDur, ok := firstThinkingAssistant(live.transcript)
+	if !ok || liveDur <= 0 {
+		t.Fatalf("live fold captured no thinking duration (dur=%v, present=%v); the test cannot prove exclusion", liveDur, ok)
+	}
+	restoredDur, ok := firstThinkingAssistant(restored.transcript)
+	if !ok || restoredDur != 0 {
+		t.Fatalf("restore fold thinkDur = %v (present=%v), want 0 (no streaming timestamps)", restoredDur, ok)
+	}
+
+	// HEADLINE: despite the diverging duration, the displayed transcripts compare EQUAL.
+	if !live.EqualTranscript(restored) {
+		t.Errorf("EqualTranscript = false across a live/restore duration divergence, want true (duration must be excluded)")
+	}
+	// And a plain reflect.DeepEqual over the raw models WOULD differ — confirming the
+	// exclusion is doing real work, not masking already-equal state.
+	if live.EqualTranscript(restored) && liveDur == restoredDur {
+		t.Fatal("durations did not diverge; exclusion is untested")
 	}
 }

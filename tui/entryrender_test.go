@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/core/content"
@@ -74,7 +75,8 @@ func TestRenderEntryUserMarkdown(t *testing.T) {
 
 // TestRenderEntryAssistant locks the assistant-kind render: it carries the "●"
 // narration bullet, and its thinking block honors the expand flag (collapsed →
-// the compact "thinking · N lines" summary; expanded → the full reasoning body).
+// the single rail'd header "│ Thought" — the committed entry carries no captured
+// duration here; expanded → that header plus the full reasoning body).
 func TestRenderEntryAssistant(t *testing.T) {
 	t.Parallel()
 	e := entry{
@@ -94,9 +96,9 @@ func TestRenderEntryAssistant(t *testing.T) {
 	if !strings.Contains(collapsed, "Here is the plan.") {
 		t.Errorf("assistant render = %q, want the narration", collapsed)
 	}
-	// collapsed: compact summary, NOT the reasoning body.
-	if !strings.Contains(collapsed, "thinking"+hintSeparator) {
-		t.Errorf("collapsed render = %q, want the compact thinking summary", collapsed)
+	// collapsed: the single rail'd header line, NOT the reasoning body.
+	if !strings.Contains(collapsed, "│ Thought") {
+		t.Errorf("collapsed render = %q, want the rail'd thinking header", collapsed)
 	}
 	if strings.Contains(collapsed, "carefully") {
 		t.Errorf("collapsed render = %q, must NOT show the full thinking body", collapsed)
@@ -104,6 +106,35 @@ func TestRenderEntryAssistant(t *testing.T) {
 	// expanded: the full reasoning body shows.
 	if !strings.Contains(expanded, "carefully") {
 		t.Errorf("expanded render = %q, want the full thinking body", expanded)
+	}
+}
+
+// TestRenderEntryAssistantThinkDuration locks the committed duration affordance end-to-end:
+// a kindAssistant entry carrying a captured thinkDur renders the "│ Thought for Ns" header
+// on the rail — collapsed as the single header line, expanded as the header above the
+// railed reasoning. It is the committed counterpart of the live tail's "│ thinking".
+func TestRenderEntryAssistantThinkDuration(t *testing.T) {
+	t.Parallel()
+	e := entry{
+		ID:   1,
+		Kind: kindAssistant,
+		Blocks: []content.Block{
+			&content.ThinkingBlock{Thinking: "weighing\noptions"},
+			&content.TextBlock{Text: "Here is the plan."},
+		},
+		thinkDur: 10 * time.Second,
+	}
+	collapsed := stripANSI(strings.Join(renderEntry(e, false, 80), "\n"))
+	expanded := stripANSI(strings.Join(renderEntry(e, true, 80), "\n"))
+
+	if !strings.Contains(collapsed, "│ Thought for 10s") {
+		t.Errorf("collapsed render = %q, want the rail'd '│ Thought for 10s' header", collapsed)
+	}
+	if strings.Contains(collapsed, "options") {
+		t.Errorf("collapsed render = %q, must NOT show the reasoning body", collapsed)
+	}
+	if !strings.Contains(expanded, "│ Thought for 10s") || !strings.Contains(expanded, "options") {
+		t.Errorf("expanded render = %q, want the '│ Thought for 10s' header above the body", expanded)
 	}
 }
 
@@ -146,7 +177,7 @@ func TestRenderEntryTool(t *testing.T) {
 	if !strings.Contains(expanded, "more lines") {
 		t.Errorf("expanded tool render = %q, must ALSO be hard-capped (expand does not un-cap tool output)", expanded)
 	}
-	if strings.Contains(collapsed, expandHint) || strings.Contains(expanded, expandHint) {
+	if strings.Contains(collapsed, "ctrl+t") || strings.Contains(expanded, "ctrl+t") {
 		t.Errorf("tool render must NOT carry the ctrl+t hint (collapsed=%q expanded=%q)", collapsed, expanded)
 	}
 }

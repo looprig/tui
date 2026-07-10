@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
@@ -189,6 +190,16 @@ type entry struct {
 	// Verb is the activity word of a kindSubagent line ("done" for a committed StepDone).
 	// Meaningful ONLY for kindSubagent; empty for every other kind.
 	Verb string
+	// thinkDur is the measured wall-clock span of a kindAssistant entry's thinking block,
+	// captured from streaming TokenDelta timestamps at commit (liveSeg.thinkDuration) and
+	// rendered as the "│ Thought for Ns" header (formatThought). It is LIVE-ONLY: a cold
+	// restore replays only persisted Enduring StepDone events, which carry NO streaming
+	// timestamps, so a restored thinking entry legitimately has thinkDur == 0 and renders
+	// the bare "│ Thought" — the accepted restore behavior, NOT a bug. Because that makes a
+	// live fold and a restore fold of the same session diverge on this field, it is
+	// normalized OUT of the restore-equivalence comparison (EqualTranscript). Zero for every
+	// non-assistant entry and for an assistant entry with no thinking block.
+	thinkDur time.Duration
 }
 
 // liveSeg is the in-progress assistant segment for the current turn: the streamed
@@ -212,6 +223,61 @@ type liveSeg struct {
 	// (PermissionRequest.Description), so the committed card can show exactly what
 	// was approved/denied rather than only the redacted audit summary.
 	gateDescriptions map[uuid.UUID]string
+	// thinkStart/thinkLast/thinkEnd measure the wall-clock span of THIS segment's thinking
+	// from streaming TokenDelta timestamps (ev.CreatedAt), so a committed thinking entry can
+	// show "Thought for Ns" (thinkDuration). The rule is DETERMINISTIC: thinkStart is the
+	// FIRST ThinkingChunk's timestamp; thinkLast tracks the LAST ThinkingChunk's timestamp
+	// (the fallback end when thinking is the last thing before StepDone); thinkEnd is SEALED
+	// once — the FIRST non-thinking (Text) chunk that arrives after thinking began — marking
+	// where reasoning gave way to narration. They are LIVE-ONLY (Ephemeral TokenDeltas are
+	// never journaled, so a cold restore captures none) and are reset with the rest of the
+	// segment at each StepDone / terminal, so they never affect restore-equivalence
+	// (EqualTranscript normalizes them out defensively). A zero timestamp (an event with no
+	// CreatedAt) never "sticks" as a start, so such a stream yields no duration.
+	thinkStart time.Time
+	thinkLast  time.Time
+	thinkEnd   time.Time
+}
+
+// recordThinking folds one ThinkingChunk's timestamp into the segment's thinking span:
+// the first non-zero timestamp seeds thinkStart, and every thinking chunk advances
+// thinkLast (the fallback end). A zero timestamp is ignored for the start so a
+// timestamp-less stream (a cold restore) yields no duration.
+func (s *liveSeg) recordThinking(at time.Time) {
+	if s.thinkStart.IsZero() {
+		s.thinkStart = at
+	}
+	s.thinkLast = at
+}
+
+// recordNonThinking seals the thinking span's end at the FIRST non-thinking (Text) chunk
+// that arrives after thinking began (thinkStart set, thinkEnd not yet sealed): that is
+// where reasoning gave way to narration. A non-thinking chunk before any thinking, or a
+// later one once sealed, is ignored.
+func (s *liveSeg) recordNonThinking(at time.Time) {
+	if !s.thinkStart.IsZero() && s.thinkEnd.IsZero() {
+		s.thinkEnd = at
+	}
+}
+
+// thinkDuration is the measured wall-clock span of this segment's thinking: end - start,
+// where end is the sealed thinkEnd (first non-thinking chunk after thinking) or, when
+// thinking ran up to StepDone with no narration after it, the last thinking chunk
+// (thinkLast). It returns 0 when no thinking streamed (thinkStart zero) or on any
+// non-positive span (clock skew / out-of-order timestamps) — a 0 renders the bare
+// "Thought" fallback, never a negative/garbage duration.
+func (s liveSeg) thinkDuration() time.Duration {
+	if s.thinkStart.IsZero() {
+		return 0
+	}
+	end := s.thinkEnd
+	if end.IsZero() {
+		end = s.thinkLast
+	}
+	if d := end.Sub(s.thinkStart); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // empty reports whether the live segment carries no committable content — no
@@ -426,7 +492,7 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.TurnRejected:
 		m.rejectInput(ev.Cause.CommandID, ev.Reason)
 	case event.TokenDelta:
-		m.applyChunk(ev.Chunk)
+		m.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
 	case event.ToolCallStarted:
 		m.toolStarted(ev)
 	case event.ToolCallCompleted:
@@ -806,15 +872,20 @@ func (m *transcriptModel) commitPrompt(ctx promptContext) {
 
 // applyChunk routes one streamed chunk into the live segment: text accumulates
 // into live.Text, thinking into live.Thinking. Any other chunk variant (e.g. a
-// tool-use chunk) is skipped — tool-call reconstruction is a later task.
+// tool-use chunk) is skipped — tool-call reconstruction is a later task. at is the
+// event's CreatedAt, folded into the segment's thinking span (recordThinking /
+// recordNonThinking) so a committed thinking entry can show its "Thought for Ns" duration.
 // KEEP IN SYNC WITH projectionChunk (the per-loop mirror): a change to how chunks route
-// into the live segment must be mirrored there, or a focused subagent view will drift.
-func (m *transcriptModel) applyChunk(c content.Chunk) {
+// into the live segment — timing included — must be mirrored there, or a focused subagent
+// view will drift.
+func (m *transcriptModel) applyChunk(c content.Chunk, at time.Time) {
 	switch chunk := c.(type) {
 	case *content.TextChunk:
 		m.live.Text += chunk.Text
+		m.live.recordNonThinking(at)
 	case *content.ThinkingChunk:
 		m.live.Thinking += chunk.Thinking
+		m.live.recordThinking(at)
 	}
 }
 
@@ -1251,8 +1322,13 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCar
 		return
 	}
 	var blocks []content.Block
+	var thinkDur time.Duration
 	if th := thinkingText(ai.Blocks); th != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: th})
+		// Attach the step's measured thinking span from the (not-yet-reset) live segment,
+		// so the committed rail reads "Thought for Ns"; a stream with no streaming timestamps
+		// (e.g. a cold restore) yields 0 → the bare "Thought" fallback.
+		thinkDur = m.live.thinkDuration()
 	}
 	text := textOnly(ai.Blocks)
 	if text != "" {
@@ -1271,6 +1347,7 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCar
 		Kind:     kindAssistant,
 		Blocks:   blocks,
 		headline: headline,
+		thinkDur: thinkDur,
 	})
 }
 
@@ -1418,7 +1495,7 @@ func (m *transcriptModel) routeProjection(ev event.Event) {
 		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
 	case event.TokenDelta:
 		p := m.ensureProjection(loopID)
-		projectionChunk(p, ev.Chunk)
+		projectionChunk(p, ev.Chunk, ev.EventHeader().CreatedAt)
 	case event.StepDone:
 		p := m.ensureProjection(loopID)
 		m.projectionStep(p, ev)
@@ -1472,15 +1549,18 @@ func (m *transcriptModel) projectionUser(p *loopProjection, triggeredBy uuid.UUI
 }
 
 // projectionChunk routes one streamed chunk into a projection's live segment (text →
-// live.Text, thinking → live.Thinking), mirroring applyChunk for the root fold. Any other
-// chunk variant is skipped. It is a free function — chunks allocate no id, so it touches
-// only the projection, never the model.
-func projectionChunk(p *loopProjection, c content.Chunk) {
+// live.Text, thinking → live.Thinking), and folds the event's CreatedAt (at) into the
+// segment's thinking span — mirroring applyChunk for the root fold. Any other chunk
+// variant is skipped. It is a free function — chunks allocate no id, so it touches only the
+// projection, never the model.
+func projectionChunk(p *loopProjection, c content.Chunk, at time.Time) {
 	switch chunk := c.(type) {
 	case *content.TextChunk:
 		p.live.Text += chunk.Text
+		p.live.recordNonThinking(at)
 	case *content.ThinkingChunk:
 		p.live.Thinking += chunk.Thinking
+		p.live.recordThinking(at)
 	}
 }
 
@@ -1524,8 +1604,12 @@ func (m *transcriptModel) projectionStepAssistant(p *loopProjection, ai *content
 		return
 	}
 	var blocks []content.Block
+	var thinkDur time.Duration
 	if th := thinkingText(ai.Blocks); th != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: th})
+		// Mirror commitStepAssistant: attach the projection's measured thinking span from its
+		// (not-yet-reset) live segment so a focused subagent view shows "Thought for Ns" too.
+		thinkDur = p.live.thinkDuration()
 	}
 	text := textOnly(ai.Blocks)
 	if text != "" {
@@ -1544,5 +1628,6 @@ func (m *transcriptModel) projectionStepAssistant(p *loopProjection, ai *content
 		Kind:     kindAssistant,
 		Blocks:   blocks,
 		headline: headline,
+		thinkDur: thinkDur,
 	})
 }

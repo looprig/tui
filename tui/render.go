@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
@@ -29,14 +30,10 @@ const liveCallCap = 3
 // noOutput is the placeholder shown for a completed tool call with no result lines.
 const noOutput = "(no output)"
 
-// hintSeparator joins the fields of a collapsed-fold hint (the thinking summary and
-// the tool-fold "more lines" marker). Kept in one place so both hints stay
-// consistent: " · " (a U+00B7 middle dot framed by single spaces).
+// hintSeparator joins the fields of the subagent done line ("<verb> · N steps"). It is
+// " · " (a U+00B7 middle dot framed by single spaces), kept in one place so the hint
+// stays consistent.
 const hintSeparator = " · "
-
-// expandHint is the trailing fragment shared by both collapsed-fold hints; it names
-// the key that expands the fold. Lowercase to match the design appendix mockups.
-const expandHint = "ctrl+t"
 
 // cardConnector is the tree connector that prefixes each tool-call card line. It is
 // dotWidth (2) columns — the "⎿" glyph plus a space — so a card's body aligns under it.
@@ -315,11 +312,13 @@ func indentWrap(s, indent string, width int) string {
 // bullet (a thinking-only message, or a single-tool empty-text step whose one card is
 // promoted to the bullet separately by renderPromotedTool). Committed tool cards are
 // their OWN kindTool entries, so this never renders cards inline. expand drives the
-// thinking block's compact/full fold.
-func renderAssistant(thinking, text, headline string, expand bool, width int) string {
+// thinking block's compact/full fold. thinkHeader is the reasoning block's header label —
+// the committed caller (renderEntry) passes formatThought(duration) so the rail reads
+// "│ Thought for Ns" / "│ Thought"; the live-spill caller passes styles.ThinkingHeader.
+func renderAssistant(thinking, text, headline string, expand bool, width int, thinkHeader string) string {
 	var b strings.Builder
 
-	if t := renderThinking(thinking, expand, width); t != "" {
+	if t := renderThinking(thinking, expand, width, thinkHeader); t != "" {
 		b.WriteString(t)
 	}
 
@@ -473,7 +472,10 @@ func nonSubagentCalls(calls []ToolCallView) []ToolCallView {
 func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallView, expand bool, width int, a animState) string {
 	var b strings.Builder
 
-	if t := renderThinking(thinking, expand, width); t != "" {
+	// The LIVE tail's reasoning header is the present-tense "thinking" (styles.ThinkingHeader):
+	// the step has not committed, so no duration is known yet. It flips to "Thought for Ns"
+	// once StepDone commits the step (renderEntry passes formatThought there).
+	if t := renderThinking(thinking, expand, width, styles.ThinkingHeader); t != "" {
 		b.WriteString(t)
 	}
 
@@ -620,30 +622,53 @@ func firstLine(s string) string {
 // vertical rail attaching the reasoning to the assistant turn it precedes.
 const thinkingRail = "│ "
 
-// renderThinking renders the model's reasoning under the unified ctrl+t expand
-// flag. When expanded it renders a dim block whose every line carries the "│ " left
-// rail: a "│ thinking" header followed by "│ "-prefixed, width-wrapped reasoning
-// lines — an unbroken rail down the left margin. When collapsed it renders a single
-// compact dim summary line ("thinking · N lines · ctrl+t", N = number of thinking
-// content lines, singularised to "1 line" for one line) — a one-liner, so no rail.
-// Empty/whitespace-only reasoning renders nothing in either mode.
-func renderThinking(s string, expand bool, width int) string {
+// renderThinking renders the model's reasoning under the unified ctrl+t expand flag,
+// behind a caller-supplied header label so the SAME renderer serves both the live tail
+// and committed scrollback: the LIVE tail passes the present-tense "thinking"
+// (styles.ThinkingHeader); a COMMITTED entry passes formatThought(duration) — "Thought
+// for Ns" once its streaming span is known, or the bare "Thought" fallback when it is not
+// (a cold restore replays no streaming timestamps). Both modes render on the "│ " rail:
+// COLLAPSED is a SINGLE rail'd line "│ <header>" (no reasoning body); EXPANDED is that same
+// "│ <header>" line followed by the "│ "-prefixed, width-wrapped reasoning — an unbroken
+// vertical rail down the left margin. Empty/whitespace-only reasoning renders nothing in
+// either mode.
+func renderThinking(s string, expand bool, width int, header string) string {
 	s = strings.TrimSpace(s) // drop the model's leading/trailing blank reasoning lines
 	if s == "" {
 		return ""
 	}
 	if !expand {
-		n := strings.Count(s, "\n") + 1 // thinking content lines
-		summary := styles.ThinkingHeader + hintSeparator + plural(n, "line") + hintSeparator + expandHint
-		return styles.ThinkingStyle.Render(summary)
+		// COLLAPSED: one rail'd header line, no body — "│ Thought for 10s" (committed) or
+		// "│ thinking" (live). No arrow, no glyph, no "· N lines · ctrl+t" summary.
+		return styles.ThinkingStyle.Render(thinkingRail + header)
 	}
-	out := []string{styles.ThinkingStyle.Render(thinkingRail + styles.ThinkingHeader)}
+	out := []string{styles.ThinkingStyle.Render(thinkingRail + header)}
 	for _, raw := range strings.Split(s, "\n") {
 		for _, line := range wrapToWidth(raw, width-barWidth) {
 			out = append(out, styles.ThinkingStyle.Render(thinkingRail+line))
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// formatThought renders a committed thinking block's header from its measured streaming
+// span: a zero duration (a cold restore / backlog carries no streaming timestamps) yields
+// the bare "Thought"; a sub-second span yields "Thought for <1s"; under a minute "Thought
+// for Ns" (whole seconds, truncated); a minute or more "Thought for Nm Ss". It is the
+// committed counterpart of the live tail's present-tense "thinking" header — the same rail,
+// flipped from present to past once the step commits.
+func formatThought(d time.Duration) string {
+	if d <= 0 {
+		return "Thought"
+	}
+	if d < time.Second {
+		return "Thought for <1s"
+	}
+	secs := int(d / time.Second)
+	if secs < 60 {
+		return "Thought for " + strconv.Itoa(secs) + "s"
+	}
+	return "Thought for " + strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "s"
 }
 
 // wrapToWidth word-wraps s to width columns and returns the resulting rows with

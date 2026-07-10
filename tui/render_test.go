@@ -5,9 +5,45 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/looprig/cli/tui/styles"
 )
+
+// TestFormatThought covers the committed thinking-header formatter: a zero span (a cold
+// restore / backlog with no streaming timestamps) is the bare "Thought"; a sub-second span
+// is "Thought for <1s"; under a minute is "Thought for Ns" (whole seconds, truncated); a
+// minute or more is "Thought for Nm Ss".
+func TestFormatThought(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{name: "zero is the bare fallback", d: 0, want: "Thought"},
+		{name: "negative degrades to the fallback", d: -5 * time.Second, want: "Thought"},
+		{name: "sub-second", d: 400 * time.Millisecond, want: "Thought for <1s"},
+		{name: "just under a second", d: 999 * time.Millisecond, want: "Thought for <1s"},
+		{name: "exactly one second", d: time.Second, want: "Thought for 1s"},
+		{name: "ten seconds", d: 10 * time.Second, want: "Thought for 10s"},
+		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "Thought for 10s"},
+		{name: "just under a minute", d: 59 * time.Second, want: "Thought for 59s"},
+		{name: "exactly one minute", d: 60 * time.Second, want: "Thought for 1m 0s"},
+		{name: "minutes and seconds", d: 90 * time.Second, want: "Thought for 1m 30s"},
+		{name: "several minutes", d: 5*time.Minute + 5*time.Second, want: "Thought for 5m 5s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatThought(tt.d); got != tt.want {
+				t.Errorf("formatThought(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
 
 // ansiSGR matches ANSI SGR (color/style) escape sequences. The markdown renderer
 // emits per-word color spans, so substring assertions on narration text must strip
@@ -338,9 +374,11 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 			want:     []string{strings.TrimSpace(styles.Dot), multipleActionsHeadline},
 		},
 		{
+			// A committed thinking-only segment renders the rail'd header "│ Thought"
+			// (formatThought(0), no captured duration) with no assistant bullet.
 			name:     "thinking only renders the rail with no bullet",
 			thinking: "mulling it over",
-			want:     []string{"thinking"},
+			want:     []string{"│ Thought"},
 			absent:   []string{strings.TrimSpace(styles.Dot)},
 		},
 		{
@@ -353,7 +391,7 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stripANSI(renderAssistant(tt.thinking, tt.text, tt.headline, false, 80))
+			got := stripANSI(renderAssistant(tt.thinking, tt.text, tt.headline, false, 80, formatThought(0)))
 			for _, w := range tt.want {
 				if !strings.Contains(got, w) {
 					t.Errorf("renderAssistant() = %q, want to contain %q", got, w)
@@ -599,12 +637,11 @@ func TestRenderLiveRunningCardIsHeaderOnly(t *testing.T) {
 	})
 }
 
-// TestRenderThinking covers the dim reasoning block under the unified ctrl+t flag.
-// Expanded: EVERY line carries the "│ " left rail — the header renders as
-// "│ thinking" and each body line as "│ <text>", producing an unbroken vertical
-// rail down the left margin. Collapsed: a single compact summary line
-// "thinking · N lines · ctrl+t" (N = number of thinking content lines, singularised
-// to "1 line"), with NO "│ "-prefixed body and NO rail (it is a one-liner). Empty or
+// TestRenderThinking covers the dim reasoning block under the unified ctrl+t flag, behind
+// its caller-supplied header. COLLAPSED: a SINGLE rail'd line "│ <header>" — no reasoning
+// body, no "· N lines · ctrl+t" summary. EXPANDED: that same "│ <header>" line followed by
+// the "│ "-railed reasoning — an unbroken left rail. The header is the LIVE tail's
+// present-tense "thinking" or a COMMITTED entry's "Thought for Ns" / "Thought". Empty or
 // whitespace-only input renders nothing in either mode.
 func TestRenderThinking(t *testing.T) {
 	t.Parallel()
@@ -612,41 +649,44 @@ func TestRenderThinking(t *testing.T) {
 	tests := []struct {
 		name         string
 		in           string
+		header       string
 		expand       bool
 		wantContains []string
 		wantAbsent   []string
 		wantEmpty    bool
 	}{
-		{name: "empty renders nothing collapsed", in: "", expand: false, wantEmpty: true},
-		{name: "empty renders nothing expanded", in: "", expand: true, wantEmpty: true},
-		{name: "whitespace renders nothing collapsed", in: "   \n  ", expand: false, wantEmpty: true},
-		{name: "whitespace renders nothing expanded", in: "   \n  ", expand: true, wantEmpty: true},
+		{name: "empty renders nothing collapsed", in: "", header: "Thought", expand: false, wantEmpty: true},
+		{name: "empty renders nothing expanded", in: "", header: "Thought", expand: true, wantEmpty: true},
+		{name: "whitespace renders nothing collapsed", in: "   \n  ", header: "Thought", expand: false, wantEmpty: true},
+		{name: "whitespace renders nothing expanded", in: "   \n  ", header: "Thought", expand: true, wantEmpty: true},
 		{
-			// Expanded: the header carries the rail ("│ thinking", not bare "thinking")
-			// and every body line carries the rail too — an unbroken left rail.
-			name:         "expanded multi-line rails every line including header",
+			// COLLAPSED committed: a single rail'd line "│ Thought for 10s" — no body, no
+			// "· N lines · ctrl+t" summary, no bare (rail-less) header.
+			name:         "collapsed committed is a single rail'd Thought line",
 			in:           "line one\nline two",
+			header:       "Thought for 10s",
+			expand:       false,
+			wantContains: []string{"│ Thought for 10s"},
+			wantAbsent:   []string{"│ line one", "│ line two", "ctrl+t", "lines"},
+		},
+		{
+			// COLLAPSED live: the present-tense header on the rail — "│ thinking".
+			name:         "collapsed live is a single rail'd thinking line",
+			in:           "line one\nline two",
+			header:       "thinking",
+			expand:       false,
+			wantContains: []string{"│ thinking"},
+			wantAbsent:   []string{"│ line one", "· ", "ctrl+t"},
+		},
+		{
+			// EXPANDED: the header carries the rail ("│ Thought for 10s", not bare) and
+			// every body line carries the rail too — an unbroken left rail.
+			name:         "expanded rails every line including the header",
+			in:           "line one\nline two",
+			header:       "Thought for 10s",
 			expand:       true,
-			wantContains: []string{"│ thinking", "│ line one", "│ line two"},
-			wantAbsent:   []string{"\nthinking", "more lines"},
-		},
-		{
-			// Collapsed two-line thinking → a compact summary mentioning "thinking",
-			// the line count (2), and "ctrl+t"; the "│ "-prefixed body is hidden.
-			name:         "collapsed multi-line is a compact summary line",
-			in:           "line one\nline two",
-			expand:       false,
-			wantContains: []string{"thinking", "2 lines", "ctrl+t"},
-			wantAbsent:   []string{"│ line one", "│ line two"},
-		},
-		{
-			// A single thinking line still renders a sensible summary (count = 1),
-			// singularised to "1 line" (not "1 lines").
-			name:         "collapsed single line summary",
-			in:           "only one line",
-			expand:       false,
-			wantContains: []string{"thinking", "1 line", "ctrl+t"},
-			wantAbsent:   []string{"│ only one line", "1 lines"},
+			wantContains: []string{"│ Thought for 10s", "│ line one", "│ line two"},
+			wantAbsent:   []string{"\nThought", "more lines"},
 		},
 	}
 
@@ -654,7 +694,7 @@ func TestRenderThinking(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stripANSI(renderThinking(tt.in, tt.expand, 80))
+			got := stripANSI(renderThinking(tt.in, tt.expand, 80, tt.header))
 			if tt.wantEmpty {
 				if got != "" {
 					t.Errorf("renderThinking(%q, %v) = %q, want empty", tt.in, tt.expand, got)
@@ -683,7 +723,7 @@ func TestRenderThinkingExpandedRailOnEveryLine(t *testing.T) {
 	t.Parallel()
 
 	const rail = "│ "
-	got := stripANSI(renderThinking("line one\nline two\nline three", true, 80))
+	got := stripANSI(renderThinking("line one\nline two\nline three", true, 80, styles.ThinkingHeader))
 	lines := strings.Split(got, "\n")
 	if len(lines) < 4 { // header + three body lines
 		t.Fatalf("expanded thinking = %q, want at least 4 lines (header + body)", got)
@@ -700,9 +740,9 @@ func TestRenderThinkingExpandedRailOnEveryLine(t *testing.T) {
 
 // TestRenderAssistantUnifiedExpand covers Task 12: ONE flag drives BOTH the
 // thinking block and the tool-result folding. Collapsed (expand=false): thinking
-// renders as the compact summary line (no "│ " body) AND the long tool result is
-// folded (first K lines + "more lines" marker). Expanded (expand=true): the full
-// "│ "-prefixed thinking body renders AND the tool result shows every line. The
+// renders as a single rail'd header line "│ Thought" (no "│ " body) AND the long tool
+// result is folded (first K lines + "more lines" marker). Expanded (expand=true): the
+// full "│ "-railed thinking body renders AND the tool result shows every line. The
 // SAME flag flips both — there is no separate thinking key.
 func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 	t.Parallel()
@@ -713,22 +753,20 @@ func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 	// The thinking fold (renderAssistant) honors the ctrl+t expand flag. The tool-result
 	// preview (renderToolCalls) is HARD-capped to previewLineCap lines regardless of expand,
 	// so a huge result can never fill the live tail or strand a commit-time gap.
-	thinkCollapsed := stripANSI(renderAssistant(thinking, "the answer", "", false, 80))
-	thinkExpanded := stripANSI(renderAssistant(thinking, "the answer", "", true, 80))
+	thinkCollapsed := stripANSI(renderAssistant(thinking, "the answer", "", false, 80, formatThought(0)))
+	thinkExpanded := stripANSI(renderAssistant(thinking, "the answer", "", true, 80, formatThought(0)))
 	toolCollapsed := stripANSI(renderToolCalls(calls, false, 80))
 	toolExpanded := stripANSI(renderToolCalls(calls, true, 80))
 
-	// Thinking DOES flip: collapsed is the compact "thinking · N lines · ctrl+t" summary
-	// (no "│ " body); expanded is the full "│ "-prefixed body.
-	for _, w := range []string{"thinking", "3 lines", "ctrl+t"} {
-		if !strings.Contains(thinkCollapsed, w) {
-			t.Errorf("collapsed thinking missing %q in %q", w, thinkCollapsed)
-		}
+	// Thinking DOES flip: collapsed is the single rail'd header "│ Thought" (no body);
+	// expanded is that header PLUS the full "│ "-railed body.
+	if !strings.Contains(thinkCollapsed, "│ Thought") {
+		t.Errorf("collapsed thinking missing the rail'd header in %q", thinkCollapsed)
 	}
 	if strings.Contains(thinkCollapsed, "│ reason one") {
 		t.Errorf("collapsed thinking must NOT show the body in %q", thinkCollapsed)
 	}
-	for _, w := range []string{"│ thinking", "│ reason one", "│ reason three"} {
+	for _, w := range []string{"│ Thought", "│ reason one", "│ reason three"} {
 		if !strings.Contains(thinkExpanded, w) {
 			t.Errorf("expanded thinking missing %q in %q", w, thinkExpanded)
 		}
@@ -760,9 +798,9 @@ func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 func TestRenderAssistantThinkingBlock(t *testing.T) {
 	t.Parallel()
 
-	got := stripANSI(renderAssistant("my reasoning", "the final answer", "", true, 80)) // expanded
+	got := stripANSI(renderAssistant("my reasoning", "the final answer", "", true, 80, formatThought(0))) // expanded
 
-	for _, w := range []string{"│ thinking", "│ my reasoning", "the final answer"} {
+	for _, w := range []string{"│ Thought", "│ my reasoning", "the final answer"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("renderAssistant() = %q, want to contain %q", got, w)
 		}
@@ -781,7 +819,7 @@ func TestRenderAssistantHeadline(t *testing.T) {
 
 	dot := strings.TrimSpace(styles.Dot)
 
-	got := stripANSI(renderAssistant("", "", multipleActionsHeadline, false, 80))
+	got := stripANSI(renderAssistant("", "", multipleActionsHeadline, false, 80, formatThought(0)))
 	if !strings.Contains(got, dot) {
 		t.Errorf("renderAssistant(headline) = %q, want the dot glyph %q", got, dot)
 	}
@@ -789,7 +827,7 @@ func TestRenderAssistantHeadline(t *testing.T) {
 		t.Errorf("renderAssistant(headline) = %q, want the %q headline beside the dot", got, multipleActionsHeadline)
 	}
 
-	empty := stripANSI(renderAssistant("", "", "", false, 80))
+	empty := stripANSI(renderAssistant("", "", "", false, 80, formatThought(0)))
 	if strings.Contains(empty, dot) {
 		t.Errorf("renderAssistant(no text, no headline) = %q, want no bullet", empty)
 	}

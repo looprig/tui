@@ -3,11 +3,12 @@ package tui
 import (
 	"context"
 	"reflect"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/event"
 )
 
 // DisplayProjection is the committed TUI projection of a fold over the primary loop's
@@ -41,16 +42,76 @@ func FoldDisplay(events []event.Event, primaryLoopID uuid.UUID) DisplayProjectio
 	return DisplayProjection{transcript: tr, interaction: in}
 }
 
-// EqualTranscript reports whether p and other have the byte-for-byte identical
-// committed transcript (the displayed scrollback), via reflect.DeepEqual over the
-// transcript reducer state. It is the headline-property comparator: a restored
-// session's repainted transcript EqualTranscript the original session's live transcript
-// iff the repaint reproduced the displayed view exactly. The interaction surface (its
-// input editor carries cursor state and completion-panel closures that are not value-
-// comparable) is intentionally NOT part of this equality — assert PendingPrompts for
-// the pending-gate dimension instead.
+// EqualTranscript reports whether p and other have the byte-for-byte identical committed
+// transcript (the displayed scrollback), via reflect.DeepEqual over the transcript reducer
+// state — IGNORING the live-only thinking DURATION. It is the headline-property comparator:
+// a restored session's repainted transcript EqualTranscript the original session's live
+// transcript iff the repaint reproduced the displayed view exactly. The interaction surface
+// (its input editor carries cursor state and completion-panel closures that are not value-
+// comparable) is intentionally NOT part of this equality — assert PendingPrompts for the
+// pending-gate dimension instead.
+//
+// The thinking duration (entry.thinkDur and the live segment's streaming timestamps) is
+// EXCLUDED from the comparison: it is measured from streaming TokenDelta timestamps, which
+// are Ephemeral and NEVER journaled, so a cold-restore fold replays only the persisted
+// StepDone events and legitimately produces dur == 0 (the restored row correctly shows
+// "│ Thought" with no number) while the same row folded live shows "│ Thought for 10s".
+// That divergence is the ACCEPTED display behavior, not a repaint bug, so it is normalized
+// out (normalizeThinkTiming) before DeepEqual; every OTHER field (the committed rows,
+// ordering, blocks, tool cards, gate state) is compared exactly.
 func (p DisplayProjection) EqualTranscript(other DisplayProjection) bool {
-	return reflect.DeepEqual(p.transcript, other.transcript)
+	return reflect.DeepEqual(normalizeThinkTiming(p.transcript), normalizeThinkTiming(other.transcript))
+}
+
+// normalizeThinkTiming returns a copy of m with every LIVE-ONLY thinking timing datum
+// zeroed — each committed entry's thinkDur (root fold AND every per-loop projection) and
+// the live segment's streaming timestamps (root + projections) — so EqualTranscript can
+// ignore the duration when comparing a live fold against a cold-restore fold (see
+// EqualTranscript). It NEVER mutates m: the committed slices and the projection map/pointers
+// are rebuilt fresh, so the input model's state is untouched. Only the duration is
+// normalized; every other field is carried through unchanged for the DeepEqual.
+func normalizeThinkTiming(m transcriptModel) transcriptModel {
+	m.committed = zeroThinkDur(m.committed)
+	m.live = zeroLiveThinkTiming(m.live)
+	if m.projections != nil {
+		next := make(map[uuid.UUID]*loopProjection, len(m.projections))
+		for k, p := range m.projections {
+			if p == nil {
+				next[k] = nil
+				continue
+			}
+			cp := *p
+			cp.committed = zeroThinkDur(cp.committed)
+			cp.live = zeroLiveThinkTiming(cp.live)
+			next[k] = &cp
+		}
+		m.projections = next
+	}
+	return m
+}
+
+// zeroThinkDur returns a fresh copy of the committed entries with every entry's thinkDur
+// zeroed (nil in → nil out, so the nil/empty distinction DeepEqual cares about is
+// preserved). The input slice is never mutated.
+func zeroThinkDur(in []entry) []entry {
+	if in == nil {
+		return nil
+	}
+	out := make([]entry, len(in))
+	copy(out, in)
+	for i := range out {
+		out[i].thinkDur = 0
+	}
+	return out
+}
+
+// zeroLiveThinkTiming returns a copy of a live segment with its streaming thinking
+// timestamps cleared. These are reset with the segment at every StepDone/terminal, so they
+// are already zero on a well-formed fold; clearing them here makes the exclusion defensive
+// against a comparison captured mid-thinking.
+func zeroLiveThinkTiming(s liveSeg) liveSeg {
+	s.thinkStart, s.thinkLast, s.thinkEnd = time.Time{}, time.Time{}, time.Time{}
+	return s
 }
 
 // CommittedLen is the number of committed (finalized) transcript entries — the rows the

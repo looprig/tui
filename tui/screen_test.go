@@ -11,11 +11,11 @@ import (
 
 	"github.com/looprig/cli/tui/components"
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/hub"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/core/uuid"
 )
 
 // compile-time assertion that the test double satisfies the (widened) Agent
@@ -1063,7 +1063,7 @@ func TestCtrlTTogglesExpandGlobally(t *testing.T) {
 }
 
 // TestCtrlTFlipsThinkingNotToolOutputInLiveTail pins that ctrl+t flips the live tail's
-// THINKING block (full "│ " body ↔ compact "thinking · N lines" summary), while the
+// THINKING block (full "│ " body ↔ the single rail'd header "│ thinking"), while the
 // tool-result preview stays HARD-capped to previewLineCap lines in BOTH states — the
 // ctrl+t fold no longer un-caps tool output (so a huge result can't fill the live tail).
 func TestCtrlTFlipsThinkingNotToolOutputInLiveTail(t *testing.T) {
@@ -1107,11 +1107,11 @@ func TestCtrlTFlipsThinkingNotToolOutputInLiveTail(t *testing.T) {
 		t.Errorf("default live tail tool result not hard-capped; got %q", def)
 	}
 
-	// First ctrl+t: thinking collapses to its compact summary; tool output UNCHANGED (capped).
+	// First ctrl+t: thinking collapses to its single rail'd header; tool output UNCHANGED (capped).
 	m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	col := stripANSI(m.renderLiveTail())
-	if !strings.Contains(col, "thinking"+hintSeparator) {
-		t.Errorf("collapsed live tail missing the compact thinking summary; got %q", col)
+	if !strings.Contains(col, "│ thinking") {
+		t.Errorf("collapsed live tail missing the rail'd thinking header; got %q", col)
 	}
 	if strings.Contains(col, thinkingBody) {
 		t.Errorf("collapsed live tail still shows the full thinking body; got %q", col)

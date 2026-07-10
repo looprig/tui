@@ -24,7 +24,10 @@ func renderEntry(e entry, expand bool, width int) []string {
 	case kindUser:
 		return splitNonEmpty(renderUser(renderInlineBlocks(e.Blocks), width))
 	case kindAssistant:
-		return splitNonEmpty(renderAssistant(thinkingText(e.Blocks), assistantText(e.Blocks), e.headline, expand, width))
+		// A committed thinking block's header carries its measured streaming span
+		// (formatThought(e.thinkDur)): "│ Thought for Ns", or the bare "│ Thought" when no
+		// duration was captured (a cold restore has no streaming timestamps).
+		return splitNonEmpty(renderAssistant(thinkingText(e.Blocks), assistantText(e.Blocks), e.headline, expand, width, formatThought(e.thinkDur)))
 	case kindTool:
 		// A reconciled Subagent card (Agent set) renders as its OWN "●"-level card with
 		// "⎿" children and a done line (design §5), never as an ordinary "⎿" card.

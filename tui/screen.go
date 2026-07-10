@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/harness/pkg/event"
 )
 
@@ -714,7 +715,11 @@ func (m Screen) spillableAssistantLines() []string {
 	if live.Thinking == "" && live.Text == "" {
 		return nil
 	}
-	return splitNonEmpty(renderAssistant(live.Thinking, live.Text, "", m.expand, m.width))
+	// The spill renders the STILL-STREAMING live segment, so its reasoning header is the
+	// present-tense "thinking" (styles.ThinkingHeader) — the same header renderLiveAssistant
+	// uses — so the spilled prefix matches the live tail. It flips to "Thought for Ns" only
+	// when StepDone commits the step and renderEntry repaints it.
+	return splitNonEmpty(renderAssistant(live.Thinking, live.Text, "", m.expand, m.width, styles.ThinkingHeader))
 }
 
 func dropLiveSpillPrefix(tail string, n int) string {
