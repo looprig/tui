@@ -12,9 +12,9 @@ import (
 
 	"github.com/looprig/cli/tui"
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/core/uuid"
 )
 
 // fakeAgent is a no-op tui.Agent stand-in: construction-success path needs a live
@@ -64,6 +64,28 @@ func (p *fakeProgram) Run() (tea.Model, error) {
 	return p.final, p.err
 }
 func (p *fakeProgram) Quit() {}
+
+// fakeHolder is a tea.Model that ALSO satisfies tui.AgentHolder, standing in for a final
+// model whose live agent Run's teardown must resolve via the AgentHolder interface rather
+// than the concrete ModernScreen — e.g. the fresh agent a /clear swapped in mid-session.
+// Its Agent() returns a distinct agent so a test can prove teardown closes the FINAL model's
+// agent, not the initial one.
+type fakeHolder struct {
+	agent tui.Agent
+}
+
+func (f fakeHolder) Init() tea.Cmd                       { return nil }
+func (f fakeHolder) Update(tea.Msg) (tea.Model, tea.Cmd) { return f, nil }
+func (f fakeHolder) View() tea.View                      { return tea.NewView("") }
+func (f fakeHolder) Agent() tui.Agent                    { return f.agent }
+
+// Compile-time proof fakeHolder is exactly the two contracts the teardown path needs: a
+// tea.Model (so the fake program can return it as its final model) and a tui.AgentHolder
+// (so Run's teardown assertion resolves its Agent()).
+var (
+	_ tea.Model       = fakeHolder{}
+	_ tui.AgentHolder = fakeHolder{}
+)
 
 type failingWriter struct {
 	err error
@@ -283,6 +305,65 @@ func TestRunProgramError(t *testing.T) {
 	}
 	if !closed {
 		t.Error("agent was not Closed after a run error")
+	}
+}
+
+// TestRunBuildsModernScreen proves Run wires the MODERN VIEWPORT as the design: the model
+// it hands the program seam is a tui.ModernScreen (NewModern), not the legacy scrollback
+// Screen. Rev 3 dropped the --modern flag / env / RunOption, so every entry point that calls
+// Run now launches the viewport with no toggle.
+//
+// The Run* tests swap the package-level newProgram seam, so they share mutable global state
+// and must NOT run in parallel with each other.
+func TestRunBuildsModernScreen(t *testing.T) {
+	var captured tea.Model
+	swapNewProgram(t, func(m tea.Model, _ ...tea.ProgramOption) program {
+		captured = m
+		return &fakeProgram{final: m}
+	})
+
+	var closed bool
+	newAgent := func(context.Context) (tui.Agent, error) {
+		return &fakeAgent{loopID: newLoopID(t), closed: &closed}, nil
+	}
+
+	got := Run(context.Background(), newAgent, Banner{Name: "SWE"})
+	if got != exitOK {
+		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
+	}
+	if _, ok := captured.(tui.ModernScreen); !ok {
+		t.Fatalf("Run built %T, want tui.ModernScreen", captured)
+	}
+	if !closed {
+		t.Error("agent was not Closed at teardown")
+	}
+}
+
+// TestRunTeardownViaAgentHolder proves teardown resolves the agent to Close through the
+// tui.AgentHolder interface off the FINAL model — not the concrete ModernScreen and not the
+// initially-constructed agent. The fake program returns a fakeHolder wrapping a DISTINCT agent
+// (as a /clear swap would), so Run must Close that final-model agent and leave the initial one
+// untouched.
+func TestRunTeardownViaAgentHolder(t *testing.T) {
+	var initialClosed, finalClosed bool
+	finalAgent := &fakeAgent{loopID: newLoopID(t), closed: &finalClosed}
+	swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
+		return &fakeProgram{final: fakeHolder{agent: finalAgent}}
+	})
+
+	newAgent := func(context.Context) (tui.Agent, error) {
+		return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
+	}
+
+	got := Run(context.Background(), newAgent, Banner{Name: "SWE"})
+	if got != exitOK {
+		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
+	}
+	if !finalClosed {
+		t.Error("final model's agent (resolved via tui.AgentHolder) was not Closed")
+	}
+	if initialClosed {
+		t.Error("initial agent was Closed; teardown must prefer the final model's agent")
 	}
 }
 

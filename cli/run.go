@@ -1,7 +1,7 @@
 // Package cli is the shared CLI runtime for looprig's TUI entry points. It owns the
 // process-level plumbing that every entry point repeats — structured logging to
 // ~/.looprig/looprig.log, signal-driven shutdown, stdout/stderr capture so third-party
-// libraries don't corrupt live scrollback, building and running the Bubble Tea
+// libraries don't corrupt the managed TUI frame, building and running the Bubble Tea
 // program, and bounded teardown — parameterized by an agent constructor and a
 // startup banner. Entry points (cmd/swe) stay thin: they select an agent
 // and call Run; all runtime behavior lives here.
@@ -19,9 +19,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/looprig/core/logging"
 	"github.com/looprig/cli/internal/ttylog"
 	"github.com/looprig/cli/tui"
+	"github.com/looprig/core/logging"
 )
 
 // Banner is the startup metadata shown in the TUI's session-ready notice: the
@@ -67,17 +67,21 @@ const (
 	envLogLevel = "LOOPRIG_LOG_LEVEL"
 )
 
-// ANSI terminal reset used at process start for normal-screen mode. EraseDisplay(2)
-// clears the visible screen, EraseDisplay(3) clears xterm-compatible scrollback, and
-// CursorHome removes blank rows left above the first managed TUI frame. This is
-// deliberately outside Bubble Tea: tea.ClearScreen only clears the renderer's managed
-// buffer after the program has started, which is too late to remove prior-process
-// residue.
+// ANSI terminal reset written to the real terminal at process start, BEFORE Bubble Tea
+// enters the alt-screen viewport. EraseDisplay(2) clears the visible (normal) screen,
+// EraseDisplay(3) clears xterm-compatible scrollback, and CursorHome homes the cursor —
+// so the NORMAL screen the terminal restores to when the alt-screen viewport exits is
+// clean rather than showing prior-process residue. It is kept under the alt-screen design:
+// it is harmless (it writes to the normal screen the program is about to leave, so it is
+// hidden behind the alt-screen buffer during the session) and still useful (a clean
+// normal-screen + scrollback on exit). It runs deliberately outside Bubble Tea: tea.ClearScreen
+// only clears the renderer's managed (alt-screen) buffer after the program has started and
+// never touches the normal screen/scrollback the user returns to on exit.
 const freshLaunchClearSequence = "\x1b[2J\x1b[3J\x1b[H"
 
-// clearTerminalForFreshLaunch clears the real terminal before Bubble Tea's inline
-// renderer starts. It is a var so tests can assert Run's startup ordering without
-// requiring a real TTY.
+// clearTerminalForFreshLaunch clears the real terminal before Bubble Tea's alt-screen
+// viewport starts (it writes to the normal screen the program later restores on exit). It
+// is a var so tests can assert Run's startup ordering without requiring a real TTY.
 var clearTerminalForFreshLaunch = func(w io.Writer) error {
 	_, err := io.WriteString(w, freshLaunchClearSequence)
 	return err
@@ -122,7 +126,7 @@ var newProgram = func(model tea.Model, opts ...tea.ProgramOption) program {
 
 // Run is the shared CLI runtime. It opens the structured log, installs
 // signal-driven shutdown, constructs the agent via newAgent, captures stdout/stderr
-// so third-party libraries land in the log instead of the live scrollback, builds
+// so third-party libraries land in the log instead of the managed TUI frame, builds
 // and runs the Bubble Tea TUI (with newAgent as the /clear reopen thunk), tears the
 // agent down within a bounded timeout, and returns a process exit code. It never
 // calls os.Exit — the caller does — so it stays the single exit point and Run is
@@ -161,16 +165,19 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 
 	// Hand the TUI a dedicated handle to the real terminal, then point the process's
 	// stdout+stderr at the log file. Libraries that log to stdout or stderr — e.g. the
-	// TDX attestation verifier, which calls logger.Init(os.Stdout) at package init —
-	// then land in the log instead of corrupting live scrollback. Best-effort: on
-	// failure the TUI renders to the real stdout as usual. Restored right after Run so
-	// the teardown/error reporting below still reaches the terminal.
+	// TDX attestation verifier, which calls logger.Init(os.Stdout) at package init — then
+	// land in the log instead of corrupting the managed TUI frame. Best-effort: on failure
+	// the TUI renders to the real stdout as usual. Restored right after Run so the
+	// teardown/error reporting below still reaches the terminal.
 	//
-	// The only program option ever needed is the ttylog redirect (WithOutput). In v2,
-	// scrollback-first = no alt-screen / no mouse is NOT a program option: it is
-	// achieved by screen.View() leaving the returned tea.View's AltScreen false and
-	// MouseMode at MouseModeNone (the v2 zero values), so the program stays on the
-	// normal screen (tea.Println writes to native scrollback) and never grabs the mouse.
+	// The only program option ever needed is the ttylog redirect (WithOutput). The TUI is
+	// ModernScreen, the ALT-SCREEN viewport: its View() returns AltScreen=true and
+	// MouseMode=MouseModeCellMotion (turned on per-frame in the shell, NOT via a program
+	// option), so Bubble Tea owns a managed full-screen frame and captures the mouse. That
+	// makes the redirect MORE load-bearing than under a normal-screen renderer, not less: a
+	// stray third-party write to stdout/stderr would otherwise punch straight through and
+	// corrupt the managed alt-screen frame. So WithOutput stays the single program option Run
+	// ever adds.
 	var progOpts []tea.ProgramOption
 	terminalOutput := io.Writer(os.Stdout)
 	restoreStdio := func() error { return nil }
@@ -186,7 +193,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 		logger.Warn("clear terminal failed", "err", err.Error())
 	}
 
-	screen := tui.New(ctx, agent, open, banner.agentBanner())
+	screen := tui.NewModern(ctx, agent, open, banner.agentBanner())
 	prog := newProgram(screen, progOpts...)
 
 	// SIGINT/SIGTERM (non-keyboard) cancels ctx → quit the TUI for a clean teardown;
@@ -207,12 +214,13 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 	_ = restoreStdio()
 
 	// Backstop bounded Close of the *current* agent (which /clear may have swapped),
-	// even on a Run error: prefer the live agent off the final model, else fall back
-	// to the initial one. Close is idempotent, so the double call with the TUI's own
+	// even on a Run error: prefer the live agent read off the final model through the
+	// tui.AgentHolder interface (which both ModernScreen and Screen satisfy), else fall
+	// back to the initial one. Close is idempotent, so the double call with the TUI's own
 	// Ctrl+C teardown is safe. Best-effort on teardown.
 	toClose := agent
-	if s, ok := final.(tui.Screen); ok {
-		toClose = s.Agent()
+	if h, ok := final.(tui.AgentHolder); ok {
+		toClose = h.Agent()
 	}
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
