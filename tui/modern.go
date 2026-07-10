@@ -28,11 +28,11 @@ import (
 // scrolling design turns on). Agent() is promoted from the embedded sessionCore, so
 // ModernScreen satisfies the composition root's agentHolder through that single definition.
 //
-// Stage-1 scope (this task): focus stays on the PRIMARY loop — focusedLoopID is structured
-// so Task 8's bar-click / ctrl+n / ctrl+p only need to change it. Full prompt handling,
-// submit auto-refocus, the bar's gate marker, and the parity items (clear/interrupt/queued/
-// restore/images) are deferred to Task 9; a bar click resolves its region but does not yet
-// switch focus (Task 8).
+// Focus switching (Task 8): ctrl+n / ctrl+p cycle focus over the bar's loops and a bar-region
+// click focuses the clicked loop, both repointing focusedLoopID and re-rendering that loop's
+// projection (focusLoop). Focus is VIEW-ONLY — it never submits/interrupts a loop. Full prompt
+// handling, submit auto-refocus, the bar's gate marker, and the parity items (clear/interrupt/
+// queued/restore/images) are deferred to Task 9.
 type ModernScreen struct {
 	sessionCore
 
@@ -40,10 +40,10 @@ type ModernScreen struct {
 	collapse collapseState // the retroactive thinking-fold state (ctrl+t + header-click)
 
 	// focusedLoopID selects which loop's projection the viewport renders
-	// (projectionFor(focusedLoopID)). It defaults to the agent's primary loop and — in
-	// Stage 1 — never changes; Task 8 repoints it on a bar click / focus chord. The whole
-	// viewport is a pure VIEW over already-received, already-projected state, so a focus
-	// change is a re-render, never a re-subscribe.
+	// (projectionFor(focusedLoopID)). It defaults to the agent's primary loop and is
+	// repointed by focusLoop on a bar click or a ctrl+n/ctrl+p focus chord (Task 8). The
+	// whole viewport is a pure VIEW over already-received, already-projected state, so a
+	// focus change is a re-render, never a re-subscribe.
 	focusedLoopID uuid.UUID
 
 	width, height int
@@ -282,9 +282,10 @@ func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 }
 
 // handleKey routes a key press in ACTUAL execution order: (1) the GLOBAL chords ctrl+c
-// (quit) and ctrl+t (toggle the global collapse fold) fire first, even with a prompt open
-// (ctrl+n/ctrl+p are RESERVED no-ops for Task 8's focus cycle so the composer never swallows
-// them); (2) an active prompt consumes its approve/deny/choice/answer keys; (3) with no
+// (quit), ctrl+t (toggle the global collapse fold), and ctrl+n/ctrl+p (cycle focus over the
+// bar's loops) fire first, even with a prompt open — focus/fold are pure VIEW state and the
+// composer must never swallow those chords; (2) an active prompt consumes its approve/deny/
+// choice/answer keys; (3) with no
 // prompt, Esc interrupts a running turn; (4) the viewport consumes ONLY its non-conflicting
 // nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
 // input — falls through to the composer.
@@ -306,11 +307,16 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.rerender()
 		return m, nil
 	case "ctrl+n":
-		// Task 8: focus the NEXT loop (bar.cycle(+1)). Reserved as a no-op so the chord is
-		// claimed by the viewport layer, never routed to the composer.
+		// Focus the NEXT loop in the bar's VISIBLE (creation) order, wrapping. bar().cycle
+		// reuses the exact ordering Render/HitTest draw, so the keyboard cycle and a bar click
+		// agree on which loop sits where. A single-loop session cycles back to the focused
+		// loop, so focusLoop no-ops. It is VIEW-ONLY — focusLoop never submits/interrupts, so
+		// the chord returns a nil command.
+		m.focusLoop(m.bar().cycle(1))
 		return m, nil
 	case "ctrl+p":
-		// Task 8: focus the PREVIOUS loop (bar.cycle(-1)). Reserved no-op (see ctrl+n).
+		// Focus the PREVIOUS loop (bar().cycle(-1), wrapping); see ctrl+n. View-only.
+		m.focusLoop(m.bar().cycle(-1))
 		return m, nil
 	}
 	// Precedence (2): an active prompt consumes its own approve/deny/choice/answer keys.
@@ -355,9 +361,9 @@ func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 // handleMouse routes a mouse event by the region it falls in. The wheel scrolls the content
 // wherever the pointer sits (the viewport reads only the wheel's direction), so it is routed
 // unconditionally. A content-region click/drag/release drives the viewport's select/copy and
-// (on a plain click) toggles the clicked entry's fold. A bar-region click resolves its region
-// but does NOT switch focus in Stage 1 (Task 8). The status/box regions have no mouse
-// behavior yet (keys drive the composer/prompt).
+// (on a plain click) toggles the clicked entry's fold. A bar-region LEFT click focuses the
+// loop whose segment covers the column (barMouse → focusLoop). The status/box regions have no
+// mouse behavior (keys drive the composer/prompt).
 func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
 		return m.viewport.handleMouse(w)
@@ -367,12 +373,51 @@ func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case regionContent:
 		return m.contentMouse(msg, mouse)
 	case regionBar:
-		// TODO(Task 8): resolve m.bar().HitTest(mouse.X) and repoint m.focusedLoopID +
-		// re-render. Stage 1 only proves content-vs-bar routing; focus-switching is deferred.
-		return nil
-	default: // regionStatus, regionBox — keys, not the mouse, drive these in Stage 1.
+		return m.barMouse(msg, mouse)
+	default: // regionStatus, regionBox — keys, not the mouse, drive these.
 		return nil
 	}
+}
+
+// barMouse focuses the loop whose active-loops-bar segment covers a LEFT click's column
+// (design §Active-loops bar: focus is the bar's job). It builds the SAME loopBar View draws,
+// so the hit-tested column and the drawn segment agree, and maps the click to a loop id via
+// HitTest. The bar is drawn from column 0 of its row (composeBody stacks it as a full row),
+// so the global mouse column IS the bar-local column HitTest expects. A click on a gap, the
+// "… +N" overflow marker, or past the last segment (HitTest false) is a no-op, as is a
+// non-left click or motion/release (focus is a single click). It refuses to hit-test a bar
+// that would render EMPTY (width <= 0) — HitTest's precondition: resolving a click against a
+// row the user never saw would be wrong. It is VIEW-ONLY — focusLoop repoints focus and
+// re-renders, never submitting/interrupting — so it always returns a nil command.
+func (m *ModernScreen) barMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
+	click, ok := msg.(tea.MouseClickMsg)
+	if !ok || click.Button != tea.MouseLeft || m.width <= 0 {
+		return nil
+	}
+	if id, hit := m.bar().HitTest(mouse.X); hit {
+		m.focusLoop(id)
+	}
+	return nil
+}
+
+// focusLoop repoints the viewport to loopID's projection (design §Active-loops bar + focus).
+// It is a strict no-op when loopID already has focus (no needless re-render or tail reset).
+// Otherwise it is VIEW-ONLY — it changes ONLY the view (focusedLoopID + the viewport), never
+// the transcript and never a submit/interrupt/approve command: focus lets the user READ any
+// loop's live stream, it must never message or interrupt one. On the swap it (1) clears any
+// active selection — its (entry, sub) anchors belong to the OLD projection's buffer and are
+// meaningless in the new one; (2) resets the viewport to the tail so the new loop's LATEST
+// content shows; and (3) re-renders the new projection (rerender pins to the just-set tail).
+// The whole viewport is a pure view over already-received, already-projected state, so this
+// is a re-render, never a re-subscribe.
+func (m *ModernScreen) focusLoop(loopID uuid.UUID) {
+	if loopID == m.focusedLoopID {
+		return
+	}
+	m.focusedLoopID = loopID
+	m.viewport.clearSelection()
+	m.viewport.resetToTail()
+	m.rerender()
 }
 
 // contentMouse forwards a content-region mouse event to the viewport (which draws its own
@@ -579,15 +624,37 @@ func (m ModernScreen) bottomBoxView() string {
 }
 
 // surfaceInputs builds the agent-free snapshot the shared bottom-box + status primitives
-// read: the interaction model, the focused loop's status signals, and the frame dimensions.
+// read: the interaction model, the FOCUSED loop's status + live signals, and the frame
+// dimensions.
 func (m ModernScreen) surfaceInputs() surfaceInputs {
 	return surfaceInputs{
 		Interaction: m.interaction,
-		Status:      m.status,
+		Status:      m.focusedStatus(),
 		StatusState: m.statusInputs(),
 		Width:       m.width,
 		Height:      m.height,
 	}
+}
+
+// focusedStatus is the turn-lifecycle Status the status line reflects for the FOCUSED loop
+// (design §Status line). For the PRIMARY loop — and the zero id (the single-loop default) —
+// it is the shared session/turn status the core derives (m.status), preserving idle/running
+// PLUS the interrupt/clear transitions the core owns. For a NON-PRIMARY focused loop the core
+// status (which tracks ONLY the primary) does not apply, so it is derived from that loop's own
+// projection: its live segment being active — set on the loop's TurnStarted, cleared on the
+// loop's terminal — reads Running, else Idle. statusInputs() then refines a Running label into
+// thinking…/streaming… from the same projection's live signals. This is a deliberately MINIMAL
+// "you are viewing loop X, and whether it is live" indication, NOT a full per-loop status
+// machine: Interrupting/Resetting are primary-only concerns and are never shown for a subagent.
+func (m ModernScreen) focusedStatus() Status {
+	if m.focusedLoopID == m.transcript.primaryLoopID || m.focusedLoopID.IsZero() {
+		return m.status
+	}
+	_, live := m.transcript.projectionFor(m.focusedLoopID)
+	if live.active {
+		return StatusRunning
+	}
+	return StatusIdle
 }
 
 // statusInputs snapshots the status signals for the FOCUSED loop: whether its live segment
@@ -643,7 +710,7 @@ func (m ModernScreen) composeBody(lay modernLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
-	rows = append(rows, renderStatusLine(m.status, m.statusInputs(), 0))
+	rows = append(rows, renderStatusLine(m.focusedStatus(), m.statusInputs(), 0))
 	rows = append(rows, m.bar().Render(m.width))
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...)
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)

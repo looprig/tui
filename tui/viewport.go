@@ -102,6 +102,27 @@ func (m *viewportModel) scrollBy(n int) {
 	m.atTail = m.offset >= m.maxOffset()
 }
 
+// resetToTail re-pins the viewport to the tail: it SETS the auto-follow flag and snaps the
+// offset to the bottom of the current buffer, so the newly focused loop's LATEST content is
+// what shows after a focus swap. A following SetLines/SetSize keeps it pinned (reclamp reads
+// atTail), so a focus change lands the view at the new projection's tail regardless of where
+// the old projection was scrolled. It is the focus-swap companion of scrollBy (the other
+// atTail writer).
+func (m *viewportModel) resetToTail() {
+	m.atTail = true
+	m.offset = m.maxOffset()
+}
+
+// clearSelection drops any active or completed selection AND the frozen drag snapshot. A
+// selection is anchored to (entry, sub) ids in the buffer it was made over; after a focus
+// swap those ids belong to the OLD loop's projection and are meaningless in the new one, so
+// the swap must clear the selection rather than carry a dangling anchor into the new view.
+func (m *viewportModel) clearSelection() {
+	m.hasSel = false
+	m.sel = selection{}
+	m.frozen = nil
+}
+
 // handleKey consumes the viewport's non-conflicting navigation keys — PageUp/PageDown
 // (a page is height-1 rows, one row of overlap) and Home/End — mutating in place and
 // returning whether the key was consumed so the composing shell can route un-consumed

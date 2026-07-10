@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 )
 
@@ -463,5 +464,312 @@ func TestScreenSubscribeUsesPrimaryOnlyFilter(t *testing.T) {
 	}
 	if _, ok := agent.subFilter.Ephemeral.Loops[primary]; !ok {
 		t.Errorf("scrollback Ephemeral scope missing the primary loop; got %+v", agent.subFilter.Ephemeral)
+	}
+}
+
+// ctrlKey builds a ctrl+<r> key press (e.g. ctrl+n / ctrl+p), the focus-cycle chords.
+func ctrlKey(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl}
+}
+
+// barSpanOf returns the bar segment for loop id (and whether one exists), so a focus test
+// can click at a segment's exact drawn cell span.
+func barSpanOf(segs []barSeg, id uuid.UUID) (barSeg, bool) {
+	for _, s := range segs {
+		if s.id == id {
+			return s, true
+		}
+	}
+	return barSeg{}, false
+}
+
+// TestModernFocusRendersFocusedProjection is the core focus-swap assertion: with focus on the
+// primary the viewport shows the PRIMARY's stream, and focusing a subagent re-renders THAT
+// loop's projection — the viewport lines equal a fresh renderFocused() of the focused loop and
+// carry the focused loop's content, not the other loop's.
+func TestModernFocusRendersFocusedProjection(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("primary question")})
+	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "primary answer")))
+	m = feedModern(t, m, loopStarted(sub, "reviewer"))
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subagent task")})
+	m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", "subagent answer")))
+
+	// Focus starts on the primary: the viewport shows the primary's stream only.
+	if !containsPlain(m.viewport.lines, "primary answer") {
+		t.Fatalf("primary focus missing primary content; got %q", plainAll(m.viewport.lines))
+	}
+	if containsPlain(m.viewport.lines, "subagent answer") {
+		t.Errorf("primary focus leaked subagent content; got %q", plainAll(m.viewport.lines))
+	}
+
+	// Focusing the subagent re-renders ITS projection.
+	m.focusLoop(sub)
+	if m.focusedLoopID != sub {
+		t.Fatalf("focusedLoopID = %v, want sub %v", m.focusedLoopID, sub)
+	}
+	if !containsPlain(m.viewport.lines, "subagent answer") {
+		t.Errorf("subagent focus missing subagent content; got %q", plainAll(m.viewport.lines))
+	}
+	if containsPlain(m.viewport.lines, "primary answer") {
+		t.Errorf("subagent focus leaked primary content; got %q", plainAll(m.viewport.lines))
+	}
+	// The rendered lines must equal a fresh render of the (now-focused) projection.
+	if got, want := plainAll(m.viewport.lines), plainAll(m.renderFocused()); got != want {
+		t.Errorf("viewport lines != renderFocused(sub):\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestModernCtrlNPCyclesFocusInLoopOrder pins that ctrl+n / ctrl+p move focus in loops()
+// (creation) order and WRAP at both ends — the same order the bar draws, so the keyboard cycle
+// and a bar click agree — and that each cycle is view-only (a nil command).
+func TestModernCtrlNPCyclesFocusInLoopOrder(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+	subB := callID(3)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	// Establish the creation order [primary, subA, subB] in loops().
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, loopStarted(subA, "a"))
+	m = feedModern(t, m, loopStarted(subB, "b"))
+	if got := len(m.transcript.loops()); got != 3 {
+		t.Fatalf("loops() = %d, want 3 (primary, subA, subB)", got)
+	}
+
+	steps := []struct {
+		key  tea.KeyPressMsg
+		want uuid.UUID
+	}{
+		{ctrlKey('n'), subA},
+		{ctrlKey('n'), subB},
+		{ctrlKey('n'), primary}, // forward wrap
+		{ctrlKey('p'), subB},    // backward wrap
+		{ctrlKey('p'), subA},
+		{ctrlKey('p'), primary},
+	}
+	for i, s := range steps {
+		var cmd tea.Cmd
+		m, cmd = updateModern(t, m, s.key)
+		if m.focusedLoopID != s.want {
+			t.Errorf("step %d (%s): focusedLoopID = %v, want %v", i, s.key.String(), m.focusedLoopID, s.want)
+		}
+		if cmd != nil {
+			t.Errorf("step %d (%s): focus cycle returned a non-nil cmd (view-only)", i, s.key.String())
+		}
+	}
+}
+
+// TestModernSingleLoopCycleIsNoop pins that with only the primary loop present a focus cycle is
+// a no-op: there is nowhere else to focus, so ctrl+n / ctrl+p leave focus on the primary.
+func TestModernSingleLoopCycleIsNoop(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	if got := len(m.transcript.loops()); got != 1 {
+		t.Fatalf("loops() = %d, want 1 (primary only)", got)
+	}
+
+	for _, key := range []tea.KeyPressMsg{ctrlKey('n'), ctrlKey('p')} {
+		var cmd tea.Cmd
+		m, cmd = updateModern(t, m, key)
+		if m.focusedLoopID != primary {
+			t.Errorf("%s over a single loop moved focus to %v, want primary %v", key.String(), m.focusedLoopID, primary)
+		}
+		if cmd != nil {
+			t.Errorf("%s single-loop cycle returned a non-nil cmd", key.String())
+		}
+	}
+}
+
+// TestModernBarClickFocuses pins the bar's click focus: a left click inside a loop's drawn
+// segment focuses it, while a click on the inter-segment gap or past the last segment (both
+// HitTest false) leaves focus unchanged. The click column is the segment's own drawn cell span
+// (the bar draws from column 0 of its row, so the global column IS the bar-local column).
+func TestModernBarClickFocuses(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+
+	tests := []struct {
+		name string
+		colX func(segs []barSeg) int
+		want uuid.UUID
+	}{
+		{
+			name: "click on subA's span focuses subA",
+			colX: func(segs []barSeg) int { s, _ := barSpanOf(segs, subA); return s.start },
+			want: subA,
+		},
+		{
+			name: "click on the gap before subA is a no-op",
+			colX: func(segs []barSeg) int { s, _ := barSpanOf(segs, subA); return s.start - 1 },
+			want: primary,
+		},
+		{
+			name: "click past the last segment is a no-op",
+			colX: func(segs []barSeg) int { return segs[len(segs)-1].end + 5 },
+			want: primary,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feedModern(t, m, loopStarted(subA, "reviewer"))
+
+			lay := m.layout()
+			segs, _ := m.bar().layout()
+			if _, ok := barSpanOf(segs, subA); !ok {
+				t.Fatalf("bar has no segment for subA; segs=%+v", segs)
+			}
+			x := tt.colX(segs)
+			// A no-op column must genuinely miss every segment (guard the fixture).
+			if tt.want == primary {
+				if _, hit := m.bar().HitTest(x); hit {
+					t.Fatalf("column %d expected to be a gap/overflow but HitTest hit a segment", x)
+				}
+			}
+
+			m, cmd := updateModern(t, m, tea.MouseClickMsg{X: x, Y: lay.barY, Button: tea.MouseLeft})
+			if m.focusedLoopID != tt.want {
+				t.Errorf("bar click at x=%d focused %v, want %v", x, m.focusedLoopID, tt.want)
+			}
+			if cmd != nil {
+				t.Error("bar-click focus returned a non-nil cmd (view-only)")
+			}
+		})
+	}
+}
+
+// TestModernFocusResetsTailAndClearsSelection pins the two view resets a focus swap performs:
+// the viewport re-pins to the tail (so the new loop's latest content shows) and any active
+// selection is cleared (its (entry, sub) anchors belong to the OLD projection's buffer).
+func TestModernFocusResetsTailAndClearsSelection(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 8) // small height so content scrolls
+
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	for i := 0; i < 20; i++ {
+		m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("primary %d", i))))
+	}
+	m = feedModern(t, m, loopStarted(sub, "reviewer"))
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	for i := 0; i < 20; i++ {
+		m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", fmt.Sprintf("sub %d", i))))
+	}
+
+	// Scroll off the tail, then begin a selection in the primary's buffer.
+	m, _ = updateModern(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.viewport.atTail {
+		t.Fatal("precondition: viewport should be off the tail after a wheel-up")
+	}
+	m, _ = updateModern(t, m, tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	if !m.viewport.hasSel {
+		t.Fatal("precondition: a content click should begin a selection")
+	}
+
+	m.focusLoop(sub)
+
+	if !m.viewport.atTail {
+		t.Error("focus swap did not re-pin the viewport to the tail")
+	}
+	if m.viewport.offset != m.viewport.maxOffset() {
+		t.Errorf("focus swap offset = %d, want maxOffset %d (tail)", m.viewport.offset, m.viewport.maxOffset())
+	}
+	if m.viewport.hasSel {
+		t.Error("focus swap did not clear the stale selection")
+	}
+	if m.viewport.frozen != nil {
+		t.Error("focus swap did not clear the frozen drag snapshot")
+	}
+}
+
+// TestModernFocusIsViewOnly pins the view-only invariant: focusing a loop changes ONLY the view
+// (focusedLoopID + viewport) — it returns no command, mutates no transcript entry, and issues
+// no agent command (submit/approve/deny/answer). Focus must never message or interrupt a loop.
+func TestModernFocusIsViewOnly(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, loopStarted(sub, "reviewer"))
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", "sub answer")))
+
+	committedBefore := len(m.transcript.committed)
+
+	m, cmd := updateModern(t, m, ctrlKey('n'))
+	if cmd != nil {
+		t.Error("ctrl+n focus returned a non-nil cmd (must not submit/interrupt)")
+	}
+	if m.focusedLoopID != sub {
+		t.Fatalf("ctrl+n did not focus the subagent (focused=%v)", m.focusedLoopID)
+	}
+	if got := len(m.transcript.committed); got != committedBefore {
+		t.Errorf("focus mutated the transcript: committed %d -> %d", committedBefore, got)
+	}
+	if agent.submitCalled || agent.approveCalled || agent.denyCalled || agent.answerCalled {
+		t.Error("focus issued an agent command (submit/approve/deny/answer) — not view-only")
+	}
+}
+
+// TestModernStatusReflectsFocusedLoop pins that the status line follows the FOCUSED loop: with
+// the primary idle and a subagent mid-turn streaming, the status reads "idle" on the primary
+// and "streaming…" once the live subagent is focused (focusedStatus derives Running from the
+// subagent projection's active live segment; statusInputs refines it to streaming).
+func TestModernStatusReflectsFocusedLoop(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, event.TurnDone{Header: hdr(primary)}) // primary parks idle
+	m = feedModern(t, m, loopStarted(sub, "reviewer"))
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
+
+	// Focused on the idle primary → idle.
+	if got := m.focusedStatus(); got != StatusIdle {
+		t.Errorf("primary focus status = %d, want StatusIdle", got)
+	}
+	if got := statusLabel(m.focusedStatus(), m.statusInputs()); got != labelIdle {
+		t.Errorf("primary focus label = %q, want %q", got, labelIdle)
+	}
+
+	// Focus the live subagent → running/streaming.
+	m.focusLoop(sub)
+	if got := m.focusedStatus(); got != StatusRunning {
+		t.Errorf("subagent focus status = %d, want StatusRunning", got)
+	}
+	if got := statusLabel(m.focusedStatus(), m.statusInputs()); got != labelStreaming {
+		t.Errorf("subagent focus label = %q, want %q (live subagent narration)", got, labelStreaming)
 	}
 }
