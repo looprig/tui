@@ -310,92 +310,10 @@ func TestCloseAgent(t *testing.T) {
 	}
 }
 
-func TestPrintPayload(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		actions []printAction
-		want    string
-	}{
-		{
-			name:    "empty slice yields empty string",
-			actions: nil,
-			want:    "",
-		},
-		{
-			name:    "single action",
-			actions: []printAction{{Lines: []string{"a", ""}}},
-			want:    "a\n",
-		},
-		{
-			name:    "two actions",
-			actions: []printAction{{Lines: []string{"a", ""}}, {Lines: []string{"b", ""}}},
-			want:    "a\n\nb\n",
-		},
-		{
-			name:    "action with multiple content lines",
-			actions: []printAction{{Lines: []string{"a", "b", "c", ""}}},
-			want:    "a\nb\nc\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := printPayload(tt.actions)
-			if got != tt.want {
-				t.Errorf("printPayload = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestPrintPayloadReadOnly asserts printPayload never mutates the caller's
-// actions or their Lines slices (no append-aliasing into a caller's slice).
-func TestPrintPayloadReadOnly(t *testing.T) {
-	t.Parallel()
-
-	lines := []string{"a", ""}
-	actions := []printAction{{EntryID: 1, Lines: lines}}
-	_ = printPayload(actions)
-
-	if got, want := len(actions[0].Lines), 2; got != want {
-		t.Errorf("Lines length mutated: got %d, want %d", got, want)
-	}
-	if actions[0].Lines[0] != "a" || actions[0].Lines[1] != "" {
-		t.Errorf("Lines content mutated: %q", actions[0].Lines)
-	}
-}
-
-func TestPrintToScrollback(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		actions []printAction
-		wantNil bool
-	}{
-		{name: "empty is no-op (nil cmd)", actions: nil, wantNil: true},
-		{name: "non-empty returns a command", actions: []printAction{{Lines: []string{"a", ""}}}, wantNil: false},
-		// Defensive: an action carrying no renderable content (Lines that join to "")
-		// must NOT dispatch tea.Println("") — see printToScrollback's blank-payload guard.
-		{name: "action with nil lines is no-op", actions: []printAction{{EntryID: 1, Lines: nil}}, wantNil: true},
-		{name: "action with a single empty line is no-op", actions: []printAction{{EntryID: 1, Lines: []string{""}}}, wantNil: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cmd := printToScrollback(tt.actions)
-			if (cmd == nil) != tt.wantNil {
-				t.Errorf("printToScrollback nil = %v, want %v", cmd == nil, tt.wantNil)
-			}
-		})
-	}
-}
+// NOTE: TestPrintPayload / TestPrintPayloadReadOnly / TestPrintToScrollback were
+// removed with the scrollback Screen — printPayload/printToScrollback and the
+// printAction type were exclusive to that shell's native-scrollback flush and were
+// archived alongside it (see ../archive/cli-oldscreen).
 
 // TestApproveCmd covers the bounded approve dispatch: every allowed scope is
 // forwarded verbatim with the call ID, and a configured error surfaces on the

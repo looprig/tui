@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,14 +17,6 @@ import (
 // reads as a calm "working" pulse — fast enough to feel live, slow enough not to
 // strobe or churn the render loop.
 const blinkInterval = 450 * time.Millisecond
-
-// blinkTick schedules ONE live-surface animation tick after blinkInterval, delivering
-// a blinkMsg. It is a single-shot tick (tea.Tick semantics); the blinkMsg handler
-// reschedules it ONLY while the turn is still Running, so the loop self-terminates at
-// Idle with no orphaned timer. It never touches scrollback.
-func blinkTick() tea.Cmd {
-	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return blinkMsg(t) })
-}
 
 // interruptTimeout bounds an Interrupt ack so Update never waits on a wedged session.
 const interruptTimeout = 2 * time.Second
@@ -193,39 +184,4 @@ func closeAgent(agent Agent) tea.Cmd {
 		_ = agent.Close(ctx) // best-effort; Close is idempotent, nothing actionable at the UI
 		return nil
 	}
-}
-
-// printPayload flattens every action's Lines, in order, into a single string
-// joined by "\n". Each action's trailing "" line therefore yields the blank-line
-// separation between entries in scrollback. It is pure: the input actions and
-// their Lines are read-only, and a fresh slice is built (never appended into a
-// caller's backing array). No actions yields "".
-func printPayload(actions []printAction) string {
-	var all []string
-	for _, a := range actions {
-		all = append(all, a.Lines...)
-	}
-	return strings.Join(all, "\n")
-}
-
-// printToScrollback emits the assembled payload to the native terminal scrollback
-// via tea.Println. It returns nil (a no-op command) when there is nothing to print,
-// so the caller can dispatch it unconditionally.
-//
-// Two no-op cases: no actions, and a non-empty action set whose assembled payload is
-// still empty. The latter is defensive-in-depth: every COMMITTED entry renders to at
-// least one line (renderEntry's assistant/user/tool/notice paths are all non-empty for a
-// committed entry — empty assistant/prose is rejected at the commit guards, every
-// committed tool entry carries exactly one card), so a blank payload should never occur.
-// But the non-emptiness rests on those UPSTREAM commit invariants, not on anything local
-// here; guarding on the assembled payload keeps this layer self-contained rather than
-// leaning on the renderer's own `len(str)==0` early-return in insertAbove. A blank
-// payload is dropped (a stray tea.Println("") would page nothing anyway) so it is never
-// silently turned into a scrollback no-op we cannot see — it simply does not dispatch.
-func printToScrollback(actions []printAction) tea.Cmd {
-	payload := printPayload(actions)
-	if payload == "" {
-		return nil
-	}
-	return tea.Println(payload)
 }

@@ -184,53 +184,6 @@ func restoreBacklogCmd(ctx context.Context, agent Agent, primaryLoopID uuid.UUID
 	}
 }
 
-// handleRestored applies the background fold's result ONCE (Task 10.2 cold-restore
-// handoff). On a non-nil err it commits a faint, NON-FATAL restore-error notice (the
-// live stream is unaffected; history simply did not repaint) and flushes it. A NEW
-// session folds to an EMPTY backlog and is a no-op: the live transcript (already
-// carrying commitStartup's banner/greeting) is left untouched, so a fresh session
-// behaves exactly as today (no repaint) — and, crucially, the startup entries' displayIDs
-// are NOT stranded against a reset transcript counter, whether those entries are still
-// active-surface-only or have already printed (see the inline note). For a RESTORED
-// session it INSTALLS the rebuilt transcript + interaction wholesale (the state arrived
-// pre-folded — no per-event work here) and flushes the committed backlog to scrollback
-// ONCE via the print-once engine. The live Subscribe path is attached separately
-// (handleSubscribed) and, since cold restore comes up idle, live events only follow a
-// user Submit — so there is no backlog/live overlap and no dedup is needed.
-//
-// KEEP IN SYNC WITH ModernScreen.handleRestored (tui/modern.go) — the restore install
-// (transcript+interaction+startup-flag reset, empty→no-op, err→notice) must stay identical;
-// only the presentation differs (flush here vs rerender there, plus this shell's scrollback-
-// only startupEntryIDs reset). An eventual shared sessionCore.applyRestored is a deferred
-// follow-up; until then, a fix to the install logic here must land in both.
-func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
-	if msg.err != nil {
-		m.transcript = m.transcript.CommitError(msg.err)
-		return m.flush()
-	}
-	// A NEW (non-restored) session folds to an EMPTY backlog — there is nothing to
-	// repaint. Installing it would DISCARD the opening entries commitStartup already
-	// committed (the banner, and the optional greeting) and reset the transcript's
-	// displayID counter to zero. If those startup entries have printed already, the
-	// first user row can then reuse an already-printed displayID and vanish from
-	// scrollback; if they are still active-surface-only, the visible banner disappears
-	// before the first real row can flush it. So leave the live transcript (banner
-	// intact) untouched when there is no backlog to repaint — a fresh session then
-	// behaves exactly as today.
-	if len(msg.transcript.committed) == 0 {
-		return nil
-	}
-	// A RESTORED session repaints its historical backlog: install the rebuilt transcript +
-	// interaction wholesale (the state arrived pre-folded — no per-event work here) and
-	// flush the committed backlog to scrollback ONCE via the print-once engine.
-	m.startupPending = false
-	m.startupCommitted = false
-	m.startupEntryIDs = nil
-	m.transcript = msg.transcript
-	m.interaction = msg.interaction
-	return m.flush()
-}
-
 // compile-time guard: a restoredMsg is a tea.Msg (any value satisfies tea.Msg, but the
 // assignment documents intent and fails loudly if the alias ever narrows).
 var _ tea.Msg = restoredMsg{}

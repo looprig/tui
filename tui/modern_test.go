@@ -467,25 +467,9 @@ func TestModernSubscribeUsesAllLoopsFilter(t *testing.T) {
 	}
 }
 
-// TestScreenSubscribeUsesPrimaryOnlyFilter is the contrast case: the scrollback Screen keeps
-// the primary-only Ephemeral scope after the filter-injection refactor — its behavior is
-// unchanged by the shared seam.
-func TestScreenSubscribeUsesPrimaryOnlyFilter(t *testing.T) {
-	t.Parallel()
-
-	primary := callID(4)
-	agent := &fakeAgent{primaryLoopID: primary}
-	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-
-	_ = m.subscribe()()
-
-	if agent.subFilter.Ephemeral.All {
-		t.Error("scrollback Ephemeral scope = All, want primary-only")
-	}
-	if _, ok := agent.subFilter.Ephemeral.Loops[primary]; !ok {
-		t.Errorf("scrollback Ephemeral scope missing the primary loop; got %+v", agent.subFilter.Ephemeral)
-	}
-}
+// NOTE: TestScreenSubscribeUsesPrimaryOnlyFilter (the scrollback Screen's primary-only
+// Ephemeral-filter contrast case) was removed with that shell. The modern all-loops filter
+// is covered by TestModernSubscribeUsesAllLoopsFilter above.
 
 // ctrlKey builds a ctrl+<r> key press (e.g. ctrl+n / ctrl+p), the focus-cycle chords.
 func ctrlKey(r rune) tea.KeyPressMsg {

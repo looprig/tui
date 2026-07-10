@@ -13,11 +13,8 @@ type AgentHolder interface {
 	Agent() Agent
 }
 
-// Compile-time assertions that BOTH presentation shells satisfy AgentHolder, so cli/run.go's
-// teardown assertion resolves for whichever shell is wired (ModernScreen today, Screen as the
-// unwired legacy fallback). Agent() is a value receiver on the embedded sessionCore, so the
-// zero-value struct literals satisfy the interface — no fields are needed to promote it.
-var (
-	_ AgentHolder = Screen{}
-	_ AgentHolder = ModernScreen{}
-)
+// Compile-time assertion that the presentation shell satisfies AgentHolder, so cli/run.go's
+// teardown assertion resolves for the wired shell (ModernScreen). Agent() is a value receiver
+// on the embedded sessionCore, so the zero-value struct literal satisfies the interface — no
+// fields are needed to promote it.
+var _ AgentHolder = ModernScreen{}

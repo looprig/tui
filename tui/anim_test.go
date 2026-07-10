@@ -1,14 +1,11 @@
 package tui
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/core/content"
-	"github.com/looprig/harness/pkg/event"
-	"github.com/looprig/harness/pkg/identity"
 )
 
 // TestAnimStateAdvance covers the per-tick animation step: blink toggles each call
@@ -310,177 +307,8 @@ func TestCommittedAssistantNeverDimmed(t *testing.T) {
 	}
 }
 
-// TestHandleBlinkWhileRunning covers the tick handler in the Running state: it
-// advances the animation AND reschedules the tick (non-nil cmd).
-func TestHandleBlinkWhileRunning(t *testing.T) {
-	t.Parallel()
-
-	agent := &fakeAgent{}
-	m := runningScreen(t, agent)
-	m.anim = animState{ticking: true} // a tick loop is in flight
-
-	got, cmd := updateScreen(t, m, blinkMsg{})
-
-	if cmd == nil {
-		t.Fatal("blinkMsg while Running returned nil cmd, want a rescheduled tick")
-	}
-	if !got.anim.blink {
-		t.Error("blinkMsg while Running did not advance blink (still false)")
-	}
-	if got.anim.frame != 1 {
-		t.Errorf("blinkMsg while Running frame = %d, want 1 (advanced)", got.anim.frame)
-	}
-	if !got.anim.ticking {
-		t.Error("blinkMsg while Running cleared ticking; the loop must keep running")
-	}
-}
-
-// TestHandleBlinkWhileIdle covers the tick handler at Idle (and other non-Running
-// states): it does NOT reschedule (nil cmd) and resets the animation state, so the
-// loop self-terminates with no orphan tick and no lingering blink.
-func TestHandleBlinkWhileIdle(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		status Status
-	}{
-		{name: "idle", status: StatusIdle},
-		{name: "interrupting", status: StatusInterrupting},
-		{name: "resetting", status: StatusResetting},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			agent := &fakeAgent{}
-			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-			m.status = tt.status
-			m.anim = animState{blink: true, frame: 9, ticking: true}
-
-			got, cmd := updateScreen(t, m, blinkMsg{})
-
-			if cmd != nil {
-				t.Errorf("blinkMsg at %s returned non-nil cmd, want nil (loop must stop)", tt.name)
-			}
-			if got.anim != (animState{}) {
-				t.Errorf("blinkMsg at %s left anim = %+v, want reset to zero", tt.name, got.anim)
-			}
-		})
-	}
-}
-
-// TestStartBlinkGuard covers the double-start guard: starting a turn from a
-// not-ticking state returns a tick cmd and sets ticking; starting again while already
-// ticking returns nil (no parallel loop) and leaves ticking set.
-func TestStartBlinkGuard(t *testing.T) {
-	t.Parallel()
-
-	t.Run("first start kicks off the tick", func(t *testing.T) {
-		t.Parallel()
-
-		agent := &fakeAgent{}
-		m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-		if m.anim.ticking {
-			t.Fatal("fresh Screen already ticking")
-		}
-		cmd := m.startBlink()
-		if cmd == nil {
-			t.Fatal("first startBlink returned nil cmd, want a tick")
-		}
-		if !m.anim.ticking {
-			t.Error("first startBlink did not set ticking")
-		}
-	})
-
-	t.Run("second start does not double-start", func(t *testing.T) {
-		t.Parallel()
-
-		agent := &fakeAgent{}
-		m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-		m.anim.ticking = true // a loop is already in flight
-		cmd := m.startBlink()
-		if cmd != nil {
-			t.Error("startBlink while already ticking returned non-nil cmd, want nil (no parallel loop)")
-		}
-		if !m.anim.ticking {
-			t.Error("startBlink cleared ticking; it must stay set")
-		}
-	})
-}
-
-// TestTurnStartTicking covers the integration point now driven by the subscription:
-// the PRIMARY loop's TurnStarted event transitions to Running and kicks off the
-// animation tick (ticking set, and a non-nil cmd batching subNext + the tick). A
-// SUBAGENT loop's TurnStarted must NOT start the primary turn nor its tick.
-func TestTurnStartTicking(t *testing.T) {
-	t.Parallel()
-
-	primary := callID(0xAA)
-	subagent := callID(0xBB)
-
-	t.Run("primary TurnStarted ticks", func(t *testing.T) {
-		t.Parallel()
-
-		agent := &fakeAgent{primaryLoopID: primary}
-		m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-		m.sub = newFakeSubscription()
-
-		m, cmd := updateScreen(t, m, eventMsg{ev: event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}}}})
-		if m.status != StatusRunning {
-			t.Errorf("status = %d, want StatusRunning", m.status)
-		}
-		if !m.anim.ticking {
-			t.Error("primary TurnStarted did not start the animation tick (ticking false)")
-		}
-		if cmd == nil {
-			t.Error("event cmd = nil, want batched subNext + tick")
-		}
-	})
-
-	t.Run("subagent TurnStarted does not tick", func(t *testing.T) {
-		t.Parallel()
-
-		agent := &fakeAgent{primaryLoopID: primary}
-		m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-		m.sub = newFakeSubscription()
-
-		m, _ = updateScreen(t, m, eventMsg{ev: event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: subagent}}}})
-		if m.status != StatusIdle {
-			t.Errorf("status = %d, want StatusIdle (subagent turn must not flip primary)", m.status)
-		}
-		if m.anim.ticking {
-			t.Error("subagent TurnStarted started the primary animation tick; it must not")
-		}
-	})
-}
-
-// TestBlinkDoesNotFlushScrollback is the load-bearing invariant: a blinkMsg is a PURE
-// active-surface re-render and must NEVER write to scrollback. With a committed-but-
-// unflushed entry present, a blinkMsg must leave the print-once set untouched (it did
-// not flush) and must not return a print command — only the re-scheduled tick.
-func TestBlinkDoesNotFlushScrollback(t *testing.T) {
-	t.Parallel()
-
-	agent := &fakeAgent{}
-	m := runningScreen(t, agent)
-	m.anim = animState{ticking: true}
-	m.width = 80
-	m.scrollback = newScrollbackModel(80)
-
-	// Commit an entry WITHOUT flushing it — so a stray flush would be observable as a
-	// growth in the print-once set.
-	m.transcript = m.transcript.CommitUser([]content.Block{&content.TextBlock{Text: "pending"}})
-	if len(m.transcript.committed) == 0 {
-		t.Fatal("setup: no committed entry to detect a flush against")
-	}
-	printedBefore := len(m.scrollback.printed)
-
-	got, _ := updateScreen(t, m, blinkMsg{})
-
-	if len(got.scrollback.printed) != printedBefore {
-		t.Errorf("blinkMsg flushed to scrollback: printed set grew %d → %d; a tick must never flush",
-			printedBefore, len(got.scrollback.printed))
-	}
-}
+// NOTE: the old scrollback Screen's blink/tick tests (TestHandleBlinkWhileRunning,
+// TestHandleBlinkWhileIdle, TestStartBlinkGuard, TestTurnStartTicking,
+// TestBlinkDoesNotFlushScrollback) were removed when that shell was archived. The
+// modern shell's equivalent shimmer-tick behavior is covered by TestModernTickLifecycle
+// and TestModernAnimTick in modern_test.go.
