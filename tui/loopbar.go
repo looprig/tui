@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -74,9 +75,14 @@ func (b loopBar) Render(width int) string {
 
 // HitTest maps cell column x to the loop id whose rendered segment covers it, returning
 // (id, true) for an in-segment column and (uuid.UUID{}, false) for a gap between segments,
-// the "… +N" overflow marker, or any column past the last segment. It computes the SAME
-// width-independent layout Render draws (segment widths via lipgloss.Width), so the returned
-// id is always the loop actually drawn at x.
+// the "… +N" overflow marker, or any column past the last segment (a negative x is likewise
+// (_, false)). It computes the SAME width-independent layout Render draws (segment widths via
+// lipgloss.Width), so the returned id is always the loop actually drawn at x.
+//
+// PRECONDITION: hit-test only a bar you actually rendered. HitTest takes no width because the
+// segment layout is width-independent, but a Render(width) with width <= 0 draws NOTHING —
+// hit-testing such a bar would resolve a click against a row the user never saw. The caller
+// (the modern shell) must not route clicks to a bar it rendered at width <= 0.
 func (b loopBar) HitTest(x int) (uuid.UUID, bool) {
 	segs, _ := b.layout()
 	for _, s := range segs {
@@ -163,13 +169,12 @@ func (b loopBar) priorityOrder() []int {
 	for i := range idx {
 		idx[i] = i
 	}
-	// Insertion sort by descending priority: n is tiny (a capped handful) and this avoids a
-	// sort import while staying stable (equal priorities keep creation order).
-	for i := 1; i < len(idx); i++ {
-		for j := i; j > 0 && b.priority(idx[j]) > b.priority(idx[j-1]); j-- {
-			idx[j], idx[j-1] = idx[j-1], idx[j]
-		}
-	}
+	// Sort by descending priority (highest first). priority is injective — each index maps to
+	// a distinct score — so ties never occur; SliceStable is used only to keep the ordering a
+	// single, unambiguous stdlib call.
+	sort.SliceStable(idx, func(i, j int) bool {
+		return b.priority(idx[i]) > b.priority(idx[j])
+	})
 	return idx
 }
 
