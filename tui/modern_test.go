@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
 )
 
@@ -1341,5 +1344,206 @@ func TestModernImageRejectedAtBoundary(t *testing.T) {
 	// The rejection is surfaced in the viewport (repainted), not lost mid-turn.
 	if len(m.viewport.lines) == 0 {
 		t.Error("viewport did not repaint the rejection")
+	}
+}
+
+// TestFormatElapsed pins the status-line elapsed formatter: whole seconds under a minute as
+// "Ns", a minute or more as "Nm Ss", and a negative span floored to "0s".
+func TestFormatElapsed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{name: "zero", d: 0, want: "0s"},
+		{name: "sub-second truncates to 0s", d: 900 * time.Millisecond, want: "0s"},
+		{name: "eight seconds", d: 8 * time.Second, want: "8s"},
+		{name: "boundary 59s", d: 59 * time.Second, want: "59s"},
+		{name: "boundary 60s", d: 60 * time.Second, want: "1m 0s"},
+		{name: "the example 2m 34s", d: 154 * time.Second, want: "2m 34s"},
+		{name: "over an hour stays Nm Ss", d: 3661 * time.Second, want: "61m 1s"},
+		{name: "negative floors to 0s", d: -5 * time.Second, want: "0s"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatElapsed(tt.d); got != tt.want {
+				t.Errorf("formatElapsed(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+// hdrAt builds an event Header carrying a loop id and a creation timestamp — the two fields
+// the status-line turn timer keys on (LoopID selects the loop, CreatedAt anchors elapsed).
+func hdrAt(loopID uuid.UUID, at time.Time) event.Header {
+	return event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, CreatedAt: at}
+}
+
+// TestModernStatusTimerSuffix pins the live turn-elapsed suffix: it appears (as "(Nm Ss)")
+// only while the focused loop is running with a known turn start, is driven by the tick's
+// carried time (never a wall clock), and disappears once the turn ends. No real time is read
+// — the turn start and "now" both come from event/tick timestamps.
+func TestModernStatusTimerSuffix(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		drive       func(t *testing.T, m ModernScreen) ModernScreen
+		wantSuffix  string // substring the status line must contain ("" = assert none)
+		wantNoParen bool   // assert no "(" appears at all (idle)
+	}{
+		{
+			name:        "idle: no suffix",
+			drive:       func(_ *testing.T, m ModernScreen) ModernScreen { return m },
+			wantNoParen: true,
+		},
+		{
+			name: "running 154s: (2m 34s)",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateModern(t, m, tickMsg{at: base.Add(154 * time.Second)})
+				return m
+			},
+			wantSuffix: "(2m 34s)",
+		},
+		{
+			name: "running 8s: (8s)",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateModern(t, m, tickMsg{at: base.Add(8 * time.Second)})
+				return m
+			},
+			wantSuffix: "(8s)",
+		},
+		{
+			name: "turn ended: suffix gone",
+			drive: func(t *testing.T, m ModernScreen) ModernScreen {
+				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateModern(t, m, tickMsg{at: base.Add(20 * time.Second)})
+				m = feedModern(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(30*time.Second))})
+				return m
+			},
+			wantNoParen: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+			m = tt.drive(t, m)
+			status := plainFromStyled(m.modernStatusLine())
+			if tt.wantSuffix != "" && !strings.Contains(status, tt.wantSuffix) {
+				t.Errorf("status = %q, want it to contain %q", status, tt.wantSuffix)
+			}
+			if tt.wantNoParen && strings.Contains(status, "(") {
+				t.Errorf("status = %q, want no elapsed suffix", status)
+			}
+		})
+	}
+}
+
+// TestModernTickLifecycle pins that the 1s tick starts when a turn becomes active and stops
+// once the session goes idle, so the timer never ticks forever: a TurnStarted arms the tick;
+// a tick while running re-arms; after the turn ends a final tick does NOT re-arm.
+func TestModernTickLifecycle(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	if m.ticking {
+		t.Fatal("tick armed before any turn started")
+	}
+	// A turn becoming active arms the tick and records the turn start.
+	m, cmd := updateModern(t, m, eventMsg{ev: event.TurnStarted{Header: hdrAt(primary, base)}})
+	if !m.ticking {
+		t.Error("tick not armed after TurnStarted")
+	}
+	if cmd == nil {
+		t.Error("handleEventModern returned nil cmd on TurnStarted, want a batch with the tick")
+	}
+	if _, ok := m.turnStartedAt[primary]; !ok {
+		t.Error("turnStartedAt missing the running loop")
+	}
+	// A tick while the turn is still running re-arms (chain continues).
+	m, cmd = updateModern(t, m, tickMsg{at: base.Add(time.Second)})
+	if !m.ticking || cmd == nil {
+		t.Errorf("tick did not re-arm while running: ticking=%v cmd=%v", m.ticking, cmd)
+	}
+	// The turn ends; its start is cleared.
+	m = feedModern(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(2*time.Second))})
+	if _, ok := m.turnStartedAt[primary]; ok {
+		t.Error("turnStartedAt still holds a finished loop")
+	}
+	// The in-flight tick fires with nothing running: it must NOT re-arm.
+	m, cmd = updateModern(t, m, tickMsg{at: base.Add(3 * time.Second)})
+	if m.ticking {
+		t.Error("tick re-armed after the session went idle (would tick forever)")
+	}
+	if cmd != nil {
+		t.Errorf("idle tick returned a non-nil cmd %v, want nil (chain stops)", cmd)
+	}
+}
+
+// TestModernUserRowGrayBackground pins the MODERN user-message gray panel: the focused
+// projection's user-row lines carry the gray background fill and are padded to the full
+// content width, while the SAME entry rendered through the scrollback renderEntry carries no
+// background (Screen stays bare). The ANSI-free plain text is unchanged, so selection/copy
+// still extract clean text.
+func TestModernUserRowGrayBackground(t *testing.T) {
+	t.Parallel()
+
+	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+	const width = 40
+
+	primary := callID(1)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, width, 24)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hi there")})
+
+	// Locate the user row in the rendered viewport.
+	var userLines []renderedLine
+	for _, ln := range m.viewport.lines {
+		if strings.Contains(ln.plain, "hi there") {
+			userLines = append(userLines, ln)
+		}
+	}
+	if len(userLines) == 0 {
+		t.Fatalf("no user row rendered; viewport:\n%s", plainAll(m.viewport.lines))
+	}
+	for _, ln := range userLines {
+		if !strings.Contains(ln.styled, bgSGR) {
+			t.Errorf("modern user line missing gray background; styled=%q", ln.styled)
+		}
+		if got := lipgloss.Width(ln.styled); got != width {
+			t.Errorf("modern user line width = %d, want %d (padded to content width)", got, width)
+		}
+		if strings.ContainsRune(ln.plain, 0x1b) {
+			t.Errorf("modern user line plain text carries an escape; plain=%q", ln.plain)
+		}
+	}
+
+	// The SAME entry via the scrollback renderer must NOT carry the background.
+	var userEntry entry
+	for _, e := range m.transcript.committed {
+		if e.Kind == kindUser {
+			userEntry = e
+		}
+	}
+	for _, line := range renderEntry(userEntry, true, width) {
+		if strings.Contains(line, bgSGR) {
+			t.Errorf("scrollback user line unexpectedly carries the gray background; line=%q", line)
+		}
 	}
 }

@@ -1,6 +1,9 @@
 package components
 
 import (
+	"image/color"
+	"strings"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -33,9 +36,20 @@ const placeholder = "Type a message…"
 // InputBox wraps a bubbles textarea: an auto-growing editor with the shared "▌"
 // accent bar as its prompt (matching user-message rows), rendered inside a bordered
 // box. No char limit, no line numbers, no "> " prompt. The box height tracks the
-// content between minInputLines and maxInputLines.
+// content between minLines and maxInputLines.
+//
+// minLines and bg are per-INSTANCE so a single composer implementation serves both
+// shells: the scrollback Screen keeps the historical 1-line, background-free editor (the
+// NewInputBox defaults), and the modern viewport opts into a taller, gray-filled panel via
+// SetMinLines/SetBackground. Nothing else changes, so the scrollback composer stays
+// byte-identical.
 type InputBox struct {
-	ta textarea.Model
+	ta       textarea.Model
+	minLines int    // visible-height floor; default minInputLines (1)
+	width    int    // last Resize width — the column budget each row's fill spans
+	hasBG    bool   // whether the modern gray panel fill is enabled (default: off)
+	bgOpen   string // SGR that turns the fill on (derived once in SetBackground); "" when off
+	bgReset  string // SGR that turns the fill off
 }
 
 // NewInputBox returns a configured, focused prompt editor.
@@ -100,9 +114,44 @@ func NewInputBox() InputBox {
 	ta.MinHeight = minInputLines
 	ta.MaxHeight = contentHeightCeiling
 	ta.Focus()
-	b := InputBox{ta: ta}
+	b := InputBox{ta: ta, minLines: minInputLines}
 	b.capHeight()
 	return b
+}
+
+// SetMinLines sets the composer's minimum visible height (default minInputLines). The
+// MODERN viewport uses 2 for a roomier panel; the scrollback Screen never calls this, so
+// it keeps the historical single line. Below-1 values are ignored (fail-safe). It moves
+// BOTH the textarea's own MinHeight and the visible cap in lockstep, then re-caps so the
+// change takes effect immediately.
+func (b *InputBox) SetMinLines(n int) {
+	if n < 1 {
+		return
+	}
+	b.minLines = n
+	b.ta.MinHeight = n
+	b.capHeight()
+}
+
+// SetBackground enables the MODERN gray panel fill of color bg behind every composer row.
+// It derives bg's SGR open/reset pair ONCE (styles.DeriveBackgroundSGR) and View then paints
+// each rendered line to the box width with it — a per-row fill that re-opens the background
+// after the textarea's internal SGR resets, so it never leaves the holes a plain
+// Background() wrap does (and the empty end-of-buffer rows fill too). It does NOT tint the
+// textarea's own Base style: the focused cursor line therefore keeps the empty style
+// NewInputBox already set (no default "black box"), and the uniform post-fill supplies the
+// gray instead. The scrollback Screen never calls this, so its composer stays
+// background-free (styles.BoxStyle). MODERN-safe: the viewport re-renders the whole frame
+// per tick, so the fill never strands into scrollback the way it could in the print-once
+// surface.
+func (b *InputBox) SetBackground(bg color.Color) {
+	open, reset := styles.DeriveBackgroundSGR(bg)
+	if open == "" {
+		return // degenerate derivation: leave the composer background-free (fail-safe)
+	}
+	b.hasBG = true
+	b.bgOpen = open
+	b.bgReset = reset
 }
 
 // Height is the editor's visible content height in rows: the textarea's current row
@@ -115,7 +164,7 @@ func NewInputBox() InputBox {
 // has applied the visible cap this returns that capped value, and before capping it
 // returns the true content height — both already within [min, max] after clamp.
 func (b InputBox) Height() int {
-	return clamp(b.ta.Height(), minInputLines, maxInputLines)
+	return clamp(b.ta.Height(), b.minLines, maxInputLines)
 }
 
 // capHeight pins the visible viewport window to [minInputLines, maxInputLines]. The
@@ -147,6 +196,7 @@ func (b *InputBox) SetValue(s string) {
 // Resize sets the box width; the inner textarea is the box width minus the border's
 // horizontal frame. The height auto-grows with content, so it is not set here.
 func (b *InputBox) Resize(width int) {
+	b.width = width
 	inner := width - styles.BoxStyle.GetHorizontalFrameSize()
 	if inner < 1 {
 		inner = 1
@@ -168,10 +218,21 @@ func (b *InputBox) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// View renders the editor inside the bordered box. The box grows with the content
-// because the inner textarea height tracks Height().
+// View renders the editor inside the bordered box. The box grows with the content because
+// the inner textarea height tracks Height(). In MODERN mode (SetBackground called) every
+// rendered row — the ▌ edge, its one-column left pad, the text, and any empty end-of-buffer
+// rows — is filled to the box width with the gray panel color, so the composer reads as one
+// continuous panel; the default (scrollback) box paints nothing.
 func (b *InputBox) View() string {
-	return styles.BoxStyle.Render(b.ta.View())
+	view := styles.BoxStyle.Render(b.ta.View())
+	if !b.hasBG {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		lines[i] = styles.FillLineBackgroundWith(line, b.width, b.bgOpen, b.bgReset)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // clamp constrains v to the inclusive range [lo, hi].

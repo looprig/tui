@@ -4,6 +4,9 @@
 package styles
 
 import (
+	"image/color"
+	"strings"
+
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
@@ -184,6 +187,77 @@ var AccentBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
 // InputAccent colors the composer's left ▌ edge — the same mid gray as the
 // AccentBarStyle bar on user rows, so the input reads as the same accent.
 var InputAccent = lipgloss.Color("#737373")
+
+// ModernPanelBg is the subtle dark-gray fill painted behind MODERN mode's user-message
+// rows and its composer panel — a quiet block that sets the user's own input apart from
+// the assistant narration without competing with the accent bar. It sits in the same
+// neutral family as AccentBarStyle's #737373 and is dark enough that both bold text and
+// the dim placeholder stay readable on a dark terminal. MODERN-ONLY: the scrollback rows
+// and the scrollback composer never paint a background (see BoxStyle's rationale) — the
+// fill is safe in the alt-screen viewport because it re-renders the whole frame each tick.
+var ModernPanelBg = lipgloss.Color("#303030")
+
+// UserBgStyle is the background-only style the modern gray fill is derived from (its SGR
+// open/close pair). It carries no foreground, so a filled row's own accent bar and markdown
+// keep their colors on top of the fill.
+var UserBgStyle = lipgloss.NewStyle().Background(ModernPanelBg)
+
+// SGR reset sequences a styled line may carry. glamour ends its spans with the long form
+// ("\x1b[0m"); lipgloss/x-ansi use the short form ("\x1b[m"). Both fully reset — INCLUDING
+// any background — so a naive Background() wrap loses the fill at the first one.
+const (
+	sgrResetLong  = "\x1b[0m"
+	sgrResetShort = "\x1b[m"
+)
+
+// modernBgOpen / modernBgReset are the SGR pair that turns the ModernPanelBg fill on and
+// off, derived ONCE from UserBgStyle so the color has a single source of truth and no
+// escape is hardcoded here.
+var modernBgOpen, modernBgReset = DeriveBackgroundSGR(ModernPanelBg)
+
+// DeriveBackgroundSGR returns the SGR pair that turns a background fill of color bg on
+// (open) and off (reset). It renders a NUL sentinel through a background-only style
+// (lipgloss emits open + NUL + reset) and splits on the sentinel, so no escape is ever
+// hardcoded. A caller filling many lines with one color derives the pair once and passes it
+// to FillLineBackgroundWith. A degenerate result (open == "") signals the caller to skip
+// filling (fail-safe).
+func DeriveBackgroundSGR(bg color.Color) (open, reset string) {
+	rendered := lipgloss.NewStyle().Background(bg).Render("\x00")
+	if i := strings.IndexByte(rendered, 0); i >= 0 {
+		return rendered[:i], rendered[i+1:]
+	}
+	return "", sgrResetShort
+}
+
+// FillLineBackground paints the ModernPanelBg gray fill behind one already-styled line to
+// width display columns — the convenience over FillLineBackgroundWith for the one shared
+// gray. See FillLineBackgroundWith for the fill semantics. MODERN-ONLY: scrollback never
+// fills a background (see BoxStyle).
+func FillLineBackground(line string, width int) string {
+	return FillLineBackgroundWith(line, width, modernBgOpen, modernBgReset)
+}
+
+// FillLineBackgroundWith paints the fill whose SGR pair is (open, reset) behind one
+// already-styled line so it spans width display columns: it opens the fill, RE-OPENS it
+// after every inner SGR reset (glamour and lipgloss end their spans with full resets that
+// would otherwise punch holes in the fill — a plain Background() wrap only tints up to the
+// first reset), pads the visible content out to width with fill-carrying spaces, and closes
+// with a reset. An empty open returns the line unchanged (fail-safe: a degenerate
+// derivation must never emit a broken escape). A width at or below the line's own display
+// width adds no padding (the fill still spans the content). It is the shared primitive
+// behind MODERN mode's gray user rows and its gray composer panel.
+func FillLineBackgroundWith(line string, width int, open, reset string) string {
+	if open == "" {
+		return line
+	}
+	body := strings.ReplaceAll(line, sgrResetLong, sgrResetLong+open)
+	body = strings.ReplaceAll(body, sgrResetShort, sgrResetShort+open)
+	pad := width - lipgloss.Width(line)
+	if pad < 0 {
+		pad = 0
+	}
+	return open + body + strings.Repeat(" ", pad) + reset
+}
 
 // composerBorder draws ONLY a left ▌ edge (no top/right/bottom), so the accent runs
 // down the left of the (auto-growing) editor.

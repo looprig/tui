@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ansiEscape matches ANSI CSI/SGR escape sequences (e.g. "\x1b[7;37m"). v2's focused
@@ -393,5 +394,74 @@ func TestInputBoxFocus(t *testing.T) {
 	b := NewInputBox()
 	if cmd := b.Focus(); cmd == nil {
 		t.Error("Focus() = nil cmd, want non-nil (Blink)")
+	}
+}
+
+// TestInputBoxMinLinesConfigurable covers the per-instance minimum height: the default is
+// minInputLines (1, unchanged for scrollback), SetMinLines raises the floor (modern uses 2),
+// the box still auto-grows past the floor with content, and still caps at maxInputLines.
+func TestInputBoxMinLinesConfigurable(t *testing.T) {
+	tests := []struct {
+		name   string
+		min    int // 0 = leave the default
+		value  string
+		wantHt int
+	}{
+		{name: "default empty is 1", min: 0, value: "", wantHt: 1},
+		{name: "modern empty is 2", min: 2, value: "", wantHt: 2},
+		{name: "modern single line still 2 (floor)", min: 2, value: "one line", wantHt: 2},
+		{name: "modern grows past the floor", min: 2, value: "a\nb\nc\nd", wantHt: 4},
+		{name: "modern still caps at max", min: 2, value: strings.Repeat("x\n", 20), wantHt: maxInputLines},
+		{name: "below-1 min ignored", min: -3, value: "", wantHt: 1},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := NewInputBox()
+			b.Resize(60)
+			if tt.min != 0 {
+				b.SetMinLines(tt.min)
+			}
+			b.SetValue(tt.value)
+			if got := b.Height(); got != tt.wantHt {
+				t.Errorf("Height() = %d, want %d", got, tt.wantHt)
+			}
+		})
+	}
+}
+
+// TestInputBoxBackground covers the per-instance gray panel fill: the default composer
+// paints no background, and after SetBackground every rendered row is filled to the box
+// width with the fill so the composer reads as one continuous panel (no holes on the empty
+// placeholder / end-of-buffer rows).
+func TestInputBoxBackground(t *testing.T) {
+	t.Parallel()
+
+	const width = 40
+	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+
+	// Default (scrollback) composer: no background anywhere.
+	def := NewInputBox()
+	def.Resize(width)
+	if v := def.View(); strings.Contains(v, "\x1b[48;2;") {
+		t.Errorf("default composer View unexpectedly carries a background; view=%q", v)
+	}
+
+	// Modern composer: gray fill on every rendered row, each padded to the box width.
+	mod := NewInputBox()
+	mod.Resize(width)
+	mod.SetBackground(lipgloss.Color("#303030"))
+	view := mod.View()
+	if !strings.Contains(view, bgSGR) {
+		t.Fatalf("modern composer View missing the gray fill; view=%q", view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if !strings.HasPrefix(line, bgSGR) {
+			t.Errorf("composer row %d does not open with the gray fill; line=%q", i, line)
+		}
+		if got := lipgloss.Width(line); got != width {
+			t.Errorf("composer row %d width = %d, want %d (filled to box width)", i, got, width)
+		}
 	}
 }

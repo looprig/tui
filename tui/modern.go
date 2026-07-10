@@ -2,13 +2,17 @@ package tui
 
 import (
 	"context"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+
+	"github.com/looprig/cli/tui/styles"
 )
 
 // ModernScreen is the MODERN VIEWPORT presentation shell over the shared sessionCore
@@ -67,6 +71,38 @@ type ModernScreen struct {
 	// header/body collapse toggle): a MouseMotion with the button held sets it, and a
 	// release with it UNSET is treated as a click. It is reset on each fresh press.
 	mouseDragging bool
+
+	// turnStartedAt records each running loop's current-turn start time — set from the
+	// loop's TurnStarted event CreatedAt, deleted on its terminal (TurnDone/Failed/
+	// Interrupted). The focused loop's entry drives the live status-line elapsed timer
+	// (turnElapsed): elapsed is now - turnStartedAt[focused], measured from event/tick
+	// timestamps, never a render-time wall clock.
+	turnStartedAt map[uuid.UUID]time.Time
+
+	// now is the timer's CLOCK: the latest tickMsg time (seeded from a TurnStarted's
+	// CreatedAt so the first frame reads a sane elapsed before the first tick lands). The
+	// status line reads it as "now" so elapsed advances only on the 1s tick, never from a
+	// per-render time.Now().
+	now time.Time
+
+	// ticking guards the 1s tick chain so at most ONE is in flight: a turn becoming active
+	// starts it (maybeStartTick); each tick reschedules only while a turn is still active
+	// and otherwise stops, so the timer never ticks forever once the session goes idle.
+	ticking bool
+}
+
+// modernTickInterval is the status-line timer's cadence: one tick per second while a turn
+// is active, matching the whole-second granularity of formatElapsed.
+const modernTickInterval = time.Second
+
+// tickMsg is one 1s timer tick carrying the tick's own time — the clock the status-line
+// elapsed timer advances on (never a render-time wall clock).
+type tickMsg struct{ at time.Time }
+
+// tickCmd schedules the next 1s timer tick. It is re-issued from handleTick only while a
+// turn is active, so the chain self-terminates when the session goes idle.
+func tickCmd() tea.Cmd {
+	return tea.Tick(modernTickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
 }
 
 // modernLoopBarCap is the visible-cap the modern active-loops bar renders under: at most
@@ -88,12 +124,33 @@ const liveTailEntryID displayID = 0
 // The viewport starts pinned to the tail (atTail) so streaming content auto-follows, the
 // collapse state starts folded (dense; ctrl+t expands), and focus starts on the primary loop.
 func NewModern(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) ModernScreen {
-	return ModernScreen{
+	m := ModernScreen{
 		sessionCore:   newSessionCore(ctx, agent, open, banner, allLoopsFilter),
 		viewport:      viewportModel{atTail: true},
 		collapse:      newCollapseState(),
 		focusedLoopID: agent.PrimaryLoopID(),
+		turnStartedAt: make(map[uuid.UUID]time.Time),
 	}
+	m.interaction = modernizeComposer(m.interaction)
+	return m
+}
+
+// modernComposerMinLines is the modern composer's default visible height — two rows
+// instead of the scrollback composer's one, so the input reads as a roomier panel while
+// still auto-growing to maxInputLines.
+const modernComposerMinLines = 2
+
+// modernizeComposer applies the MODERN composer treatment to in's input box — the 2-line
+// default height and the gray panel fill (styles.ModernPanelBg) — and returns the updated
+// model. It runs at every site that installs a FRESH (default 1-line, background-free)
+// interaction for a ModernScreen: initial construction (NewModern) and the cold-restore
+// install (handleRestored replaces the whole interaction with a freshly-built one). The
+// /clear reopen keeps the same input (ClearPrompts preserves it), so it needs no re-apply.
+// Scrollback's Screen never calls this, so its composer stays byte-identical.
+func modernizeComposer(in interactionModel) interactionModel {
+	in.input.SetMinLines(modernComposerMinLines)
+	in.input.SetBackground(styles.ModernPanelBg)
+	return in
 }
 
 // Init focuses the composer (starting the cursor blink), schedules the opening banner
@@ -153,6 +210,9 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case systemReadyMsg:
 		cmd := m.handleSystemReady()
+		return m, cmd
+	case tickMsg:
+		cmd := m.handleTick(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -221,8 +281,57 @@ func (m *ModernScreen) commitStartup() {
 // The turn-phase cue is unused in Stage 1 (a static status line; Task 9 threads the blink).
 func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 	rearm, _ := m.sessionCore.handleEvent(ev)
+	m.trackTurnClock(ev)
 	m.rerender()
-	return rearm
+	// A turn becoming active (re)starts the 1s status-line tick if none is in flight; the
+	// tick self-terminates once every turn has ended (handleTick), so it never leaks past
+	// an idle session.
+	return tea.Batch(rearm, m.maybeStartTick())
+}
+
+// trackTurnClock maintains turnStartedAt from a loop's turn-lifecycle events: a TurnStarted
+// records its start time (and seeds the clock so the first pre-tick frame reads a sane
+// elapsed); any terminal (TurnDone/TurnFailed/TurnInterrupted) clears it. Both the primary
+// loop's turn events (via the core) and every subagent's (via the all-loops stream) reach
+// here, so every focusable loop's timer is tracked. Non-turn events are ignored.
+func (m *ModernScreen) trackTurnClock(ev event.Event) {
+	h := ev.EventHeader()
+	switch ev.(type) {
+	case event.TurnStarted:
+		if m.turnStartedAt == nil {
+			m.turnStartedAt = make(map[uuid.UUID]time.Time)
+		}
+		m.turnStartedAt[h.LoopID] = h.CreatedAt
+		if m.now.Before(h.CreatedAt) {
+			m.now = h.CreatedAt
+		}
+	case event.TurnDone, event.TurnFailed, event.TurnInterrupted:
+		delete(m.turnStartedAt, h.LoopID)
+	}
+}
+
+// maybeStartTick launches the 1s status-line tick chain, but only when a turn is active
+// AND no tick is already in flight — so a second concurrent TurnStarted never spawns a
+// second chain, and an idle session never ticks. Returns nil when a tick is unnecessary.
+func (m *ModernScreen) maybeStartTick() tea.Cmd {
+	if m.ticking || len(m.turnStartedAt) == 0 {
+		return nil
+	}
+	m.ticking = true
+	return tickCmd()
+}
+
+// handleTick advances the timer clock to the tick's time and reschedules the tick ONLY
+// while a turn is still active, so the chain stops the moment the session goes idle. It
+// does NOT re-render the viewport: the transcript is unchanged, and the status line (which
+// carries the live elapsed) is recomposed by View every frame — so advancing the clock and
+// letting View redraw is the whole update.
+func (m *ModernScreen) handleTick(msg tickMsg) tea.Cmd {
+	m.ticking = false
+	if msg.at.After(m.now) {
+		m.now = msg.at
+	}
+	return m.maybeStartTick()
 }
 
 // handleRestored applies the cold-restore backlog fold's result ONCE, MIRRORING Screen's
@@ -258,7 +367,9 @@ func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
 	m.startupPending = false
 	m.startupCommitted = false
 	m.transcript = msg.transcript
-	m.interaction = msg.interaction
+	// The restore fold built a FRESH (default 1-line, background-free) interaction; re-apply
+	// the modern composer treatment so a cold-restored session keeps the 2-line gray panel.
+	m.interaction = modernizeComposer(msg.interaction)
 	m.rerender()
 	return nil
 }
@@ -629,7 +740,12 @@ func (m ModernScreen) renderFocused() []renderedLine {
 	width := m.contentWidth()
 	var out []renderedLine
 	for i := range committed {
-		out = append(out, renderEntryLines(committed[i], width, m.collapse.Effective(committed[i].ID))...)
+		lines := renderEntryLines(committed[i], width, m.collapse.Effective(committed[i].ID))
+		// MODERN-ONLY: paint the gray panel behind user rows (scrollback keeps them bare).
+		if committed[i].Kind == kindUser {
+			lines = paintUserBackground(lines, width)
+		}
+		out = append(out, lines...)
 	}
 	out = append(out, m.liveTailLines(live)...)
 	return out
@@ -741,6 +857,59 @@ func (m ModernScreen) statusInputs() statusInputs {
 	return in
 }
 
+// modernStatusLine is the focused loop's status line for the frame: the shared gradient
+// status label PLUS, while the focused loop's turn is running, a faint live-elapsed suffix
+// " (Ns)" / " (Nm Ss)". Idle / no active turn → no suffix. The suffix is a single faint
+// Render call so its "(2m 34s)" text stays contiguous (substring-findable) rather than
+// split by per-glyph styling.
+func (m ModernScreen) modernStatusLine() string {
+	line := renderStatusLine(m.focusedStatus(), m.statusInputs(), 0)
+	if d, ok := m.turnElapsed(); ok {
+		line += styles.StatusStyle.Render(" (" + formatElapsed(d) + ")")
+	}
+	return line
+}
+
+// turnElapsed returns the focused loop's live turn-elapsed duration and whether to show it.
+// It shows ONLY when the focused loop is Running and has a recorded, non-zero turn start:
+// "awaiting approval" is a Running sub-state, so its timer keeps counting, while idle,
+// interrupting, and clearing carry none. Elapsed is now - turnStartedAt[focused] (the tick
+// clock less the event start time), floored at zero so a not-yet-arrived tick never shows a
+// negative span. A zero start (a restore/backlog with no streaming timestamps) reads as "no
+// timer" — mirroring formatThought's bare-"Thought" fallback.
+func (m ModernScreen) turnElapsed() (time.Duration, bool) {
+	if m.focusedStatus() != StatusRunning {
+		return 0, false
+	}
+	lid := m.focusedLoopID
+	if lid.IsZero() {
+		lid = m.transcript.primaryLoopID
+	}
+	start, ok := m.turnStartedAt[lid]
+	if !ok || start.IsZero() {
+		return 0, false
+	}
+	d := m.now.Sub(start)
+	if d < 0 {
+		d = 0
+	}
+	return d, true
+}
+
+// formatElapsed renders a live turn-elapsed span in whole seconds: under a minute as "Ns"
+// (e.g. "8s"), a minute or more as "Nm Ss" (e.g. "2m 34s"), matching the status-line
+// examples. A negative span floors to "0s" (a defensive guard; turnElapsed already floors).
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	secs := int(d / time.Second)
+	if secs < 60 {
+		return strconv.Itoa(secs) + "s"
+	}
+	return strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "s"
+}
+
 // View composes the frame top to bottom — the viewport content (the focused projection with
 // collapse), one status line, the active-loops bar, and the bottom box — and returns a
 // per-frame View with the modern configuration: AltScreen on and cell-motion mouse (the v2
@@ -778,7 +947,7 @@ func (m ModernScreen) composeBody(lay modernLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
-	rows = append(rows, renderStatusLine(m.focusedStatus(), m.statusInputs(), 0))
+	rows = append(rows, m.modernStatusLine())
 	rows = append(rows, m.bar().Render(m.width))
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...)
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
