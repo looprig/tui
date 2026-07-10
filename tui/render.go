@@ -583,30 +583,6 @@ func renderMDRail(md string, width int, bar string) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderQueued renders the pending queued-input affordances as compact, DIM
-// user-style lines — the transient "this is queued, not yet running" hint shown
-// below the live tail until the loop's TurnStarted/TurnFoldedInto promotes each to
-// a committed user row (or InputCancelled/TurnRejected drops it). Each queued
-// message's first line of text is prefixed with the gray "▌ " accent bar and
-// rendered faint (QueuedStyle), so it reads as a quieter echo of the bold
-// committed user row. Empty queued yields "" so the surface omits the region. It is
-// deliberately a one-line-per-message preview, not a full word-wrap: this is a
-// throwaway affordance, never committed scrollback.
-func renderQueued(messages [][]content.Block, width int) string {
-	if len(messages) == 0 {
-		return ""
-	}
-	bar := styles.AccentBarStyle.Render(styles.AccentBarPrompt)
-	var out []string
-	for _, blocks := range messages {
-		text := firstLine(renderInlineBlocks(blocks))
-		for _, line := range wrapToWidth(text, width-barWidth) {
-			out = append(out, bar+styles.QueuedStyle.Render(line))
-		}
-	}
-	return strings.Join(out, "\n")
-}
-
 // firstLine returns the first "\n"-delimited line of s (s itself when single-line).
 // The queued affordance previews only the first line of a multi-line submission —
 // it is a compact pending hint, not the full committed row.
@@ -653,7 +629,7 @@ func renderThinking(s string, expand bool, width int, header string) string {
 
 // formatThought renders a committed thinking block's header from its measured span (the
 // modern shell stamps the model clock onto each Ephemeral thinking chunk — see
-// ModernScreen.handleEventModern): a zero duration (a cold restore / backlog carries no
+// Screen.handleEventModern): a zero duration (a cold restore / backlog carries no
 // timing, or thinking under one clock tick) yields the bare lowercase "thought"; a
 // sub-second span yields "thought for <1sec"; under a minute "thought for Nsec" (whole
 // seconds, truncated); a minute or more "thought for Nm Nsec". It is the committed

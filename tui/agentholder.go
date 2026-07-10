@@ -4,7 +4,7 @@ package tui
 // composition root (cli/run.go — a DIFFERENT package) type-asserts against at teardown:
 // it exposes ONLY the live Agent, so Run can bound a best-effort Close of whichever agent
 // a /clear may have swapped in, without depending on either concrete shell type. Both
-// Screen and ModernScreen satisfy it through the Agent() method promoted from the embedded
+// Screen and Screen satisfy it through the Agent() method promoted from the embedded
 // sessionCore (a value receiver), so Run asserts the final tea.Model against this one
 // interface and teardown works whichever shell cli.Run wires. It is exported because the
 // cross-package assertion in cli/run.go needs the name, and deliberately tiny — one method
@@ -14,7 +14,7 @@ type AgentHolder interface {
 }
 
 // Compile-time assertion that the presentation shell satisfies AgentHolder, so cli/run.go's
-// teardown assertion resolves for the wired shell (ModernScreen). Agent() is a value receiver
+// teardown assertion resolves for the wired shell (Screen). Agent() is a value receiver
 // on the embedded sessionCore, so the zero-value struct literal satisfies the interface — no
 // fields are needed to promote it.
-var _ AgentHolder = ModernScreen{}
+var _ AgentHolder = Screen{}

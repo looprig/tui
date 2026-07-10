@@ -47,7 +47,7 @@ func subscribeCmd(agent Agent) tea.Cmd {
 // session-lifetime subscription with the GIVEN event filter and reports the outcome.
 // The filter is INJECTED by the embedding shell via sessionCore.subscribe — the
 // scrollback Screen supplies the primary-only DefaultEventFilter, the modern
-// ModernScreen the AllLoopsEventFilter — so each mode's subscription scope is chosen at
+// Screen the AllLoopsEventFilter — so each mode's subscription scope is chosen at
 // the composition seam, not hard-coded in the command. subscribeCmd is the
 // primary-only convenience retained for the tests that assert the single-loop default.
 func subscribeWith(agent Agent, filter event.EventFilter) tea.Cmd {

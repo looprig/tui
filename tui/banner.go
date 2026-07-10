@@ -9,7 +9,7 @@ import "strings"
 //
 // It lives in its own file (not the shell) because it is shared state on the embedded
 // sessionCore that BOTH the composition root and the presentation shell read — see
-// sessioncore.go's banner field and ModernScreen's use of bannerText.
+// sessioncore.go's banner field and Screen's use of bannerText.
 type AgentBanner struct {
 	Name        string
 	Description string

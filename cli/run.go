@@ -171,7 +171,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 	// teardown/error reporting below still reaches the terminal.
 	//
 	// The only program option ever needed is the ttylog redirect (WithOutput). The TUI is
-	// ModernScreen, the ALT-SCREEN viewport: its View() returns AltScreen=true and
+	// Screen, the ALT-SCREEN viewport: its View() returns AltScreen=true and
 	// MouseMode=MouseModeCellMotion (turned on per-frame in the shell, NOT via a program
 	// option), so Bubble Tea owns a managed full-screen frame and captures the mouse. That
 	// makes the redirect MORE load-bearing than under a normal-screen renderer, not less: a
@@ -193,7 +193,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 		logger.Warn("clear terminal failed", "err", err.Error())
 	}
 
-	screen := tui.NewModern(ctx, agent, open, banner.agentBanner())
+	screen := tui.New(ctx, agent, open, banner.agentBanner())
 	prog := newProgram(screen, progOpts...)
 
 	// SIGINT/SIGTERM (non-keyboard) cancels ctx → quit the TUI for a clean teardown;
@@ -215,7 +215,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 
 	// Backstop bounded Close of the *current* agent (which /clear may have swapped),
 	// even on a Run error: prefer the live agent read off the final model through the
-	// tui.AgentHolder interface (which both ModernScreen and Screen satisfy), else fall
+	// tui.AgentHolder interface (which both Screen and Screen satisfy), else fall
 	// back to the initial one. Close is idempotent, so the double call with the TUI's own
 	// Ctrl+C teardown is safe. Best-effort on teardown.
 	toClose := agent

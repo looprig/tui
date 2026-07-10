@@ -194,7 +194,7 @@ type entry struct {
 	// the TokenDelta timestamps at commit (liveSeg.thinkDuration) and rendered as the
 	// "│ thought for Nsec" header (formatThought). The harness never stamps Ephemeral
 	// TokenDeltas, so the modern shell stamps each with its model clock (m.now) before the
-	// reducer folds it — the timing source in live modern mode (see ModernScreen.stampEphemeralClock).
+	// reducer folds it — the timing source in live modern mode (see Screen.stampEphemeralClock).
 	// It is LIVE-ONLY: a cold restore replays only persisted Enduring StepDone events, which
 	// carry NO chunk timing, so a restored thinking entry legitimately has thinkDur == 0 and
 	// renders the bare "│ thought" — the accepted restore behavior, NOT a bug. Because that makes a

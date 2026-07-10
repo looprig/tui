@@ -18,35 +18,35 @@ import (
 	"github.com/looprig/harness/pkg/tool"
 )
 
-// compile-time assertion that ModernScreen satisfies tea.Model (a value receiver, so the
+// compile-time assertion that Screen satisfies tea.Model (a value receiver, so the
 // concrete value — not a pointer — is the model the runtime drives).
-var _ tea.Model = ModernScreen{}
+var _ tea.Model = Screen{}
 
-// updateModern drives m.Update with msg and returns the concrete ModernScreen plus the
-// cmd, failing the test if the model is not a ModernScreen. It mirrors updateScreen.
-func updateModern(t *testing.T, m ModernScreen, msg tea.Msg) (ModernScreen, tea.Cmd) {
+// updateScreen drives m.Update with msg and returns the concrete Screen plus the
+// cmd, failing the test if the model is not a Screen. It mirrors updateScreen.
+func updateScreen(t *testing.T, m Screen, msg tea.Msg) (Screen, tea.Cmd) {
 	t.Helper()
 	model, cmd := m.Update(msg)
-	got, ok := model.(ModernScreen)
+	got, ok := model.(Screen)
 	if !ok {
-		t.Fatalf("Update returned %T, want ModernScreen", model)
+		t.Fatalf("Update returned %T, want Screen", model)
 	}
 	return got, cmd
 }
 
-// newModernSized builds a ModernScreen over agent and gives it a first terminal size, the
+// newScreenSized builds a Screen over agent and gives it a first terminal size, the
 // common starting point for the viewport tests (ready + a sized viewport).
-func newModernSized(t *testing.T, agent Agent, w, h int) ModernScreen {
+func newScreenSized(t *testing.T, agent Agent, w, h int) Screen {
 	t.Helper()
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
-	m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: w, Height: h})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	return m
 }
 
-// feedModern drives one synthetic stream event through Update and returns the new model.
-func feedModern(t *testing.T, m ModernScreen, ev event.Event) ModernScreen {
+// feed drives one synthetic stream event through Update and returns the new model.
+func feed(t *testing.T, m Screen, ev event.Event) Screen {
 	t.Helper()
-	m, _ = updateModern(t, m, eventMsg{ev: ev})
+	m, _ = updateScreen(t, m, eventMsg{ev: ev})
 	return m
 }
 
@@ -86,11 +86,11 @@ func TestModernUpdateRoutesEventToTranscriptAndViewport(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	before := len(m.transcript.committed)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "hello from the agent")))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "hello from the agent")))
 
 	if len(m.transcript.committed) <= before {
 		t.Fatalf("committed did not grow: before=%d after=%d", before, len(m.transcript.committed))
@@ -111,10 +111,10 @@ func TestModernRendersLiveSegment(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "streaming words"}})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "streaming words"}})
 
 	if len(m.transcript.committed) != 0 {
 		t.Fatalf("committed = %d, want 0 (live text is not committed yet)", len(m.transcript.committed))
@@ -146,9 +146,9 @@ func TestModernViewAltScreenAndMouse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: callID(1)}
-			m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 			if tt.sized {
-				m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+				m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 			}
 			v := m.View()
 			if v.AltScreen != tt.wantAlt {
@@ -184,7 +184,7 @@ func TestModernWindowSizeSizesViewport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: callID(1)}
-			m := newModernSized(t, agent, tt.w, tt.h)
+			m := newScreenSized(t, agent, tt.w, tt.h)
 			if m.width != tt.w || m.height != tt.h {
 				t.Fatalf("dims = %dx%d, want %dx%d", m.width, m.height, tt.w, tt.h)
 			}
@@ -206,18 +206,18 @@ func TestModernWheelScrolls(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 8)
+	m := newScreenSized(t, agent, 80, 8)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	for i := 0; i < 20; i++ {
-		m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("committed line %d", i))))
+		m = feed(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("committed line %d", i))))
 	}
 	if m.viewport.maxOffset() == 0 {
 		t.Fatalf("not enough content to scroll (maxOffset==0, lines=%d height=%d)", len(m.viewport.lines), m.viewport.height)
 	}
 
 	before := m.viewport.offset
-	m, _ = updateModern(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m, _ = updateScreen(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	if m.viewport.offset >= before {
 		t.Errorf("wheel-up did not scroll: before=%d after=%d", before, m.viewport.offset)
 	}
@@ -234,17 +234,17 @@ func TestModernCtrlTExpandsThinking(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
 
 	if !m.collapse.globalCollapsed {
 		t.Fatal("modern collapse should start collapsed (dense)")
 	}
 	collapsedCount := len(m.viewport.lines)
 
-	m, _ = updateModern(t, m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 
 	if m.collapse.globalCollapsed {
 		t.Error("globalCollapsed still true after ctrl+t")
@@ -261,16 +261,16 @@ func TestModernPrintableGoesToComposer(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 10)
+	m := newScreenSized(t, agent, 80, 10)
 
 	// Give the viewport scrollable content so a mis-routed key would be observable as a scroll.
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	for i := 0; i < 20; i++ {
-		m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("line %d", i))))
+		m = feed(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("line %d", i))))
 	}
 	offsetBefore := m.viewport.offset
 
-	m, _ = updateModern(t, m, keyPress("a"))
+	m, _ = updateScreen(t, m, keyPress("a"))
 
 	if got := m.interaction.input.Value(); got != "a" {
 		t.Errorf("composer value = %q, want %q (printable routed to composer)", got, "a")
@@ -287,15 +287,15 @@ func TestModernViewportNavGoesToViewport(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 8)
+	m := newScreenSized(t, agent, 80, 8)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	for i := 0; i < 20; i++ {
-		m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("line %d", i))))
+		m = feed(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("line %d", i))))
 	}
 	before := m.viewport.offset
 
-	m, _ = updateModern(t, m, keyPress("pgup"))
+	m, _ = updateScreen(t, m, keyPress("pgup"))
 
 	if m.viewport.offset >= before {
 		t.Errorf("PageUp did not scroll the viewport: before=%d after=%d", before, m.viewport.offset)
@@ -312,7 +312,7 @@ func TestModernRegionAt(t *testing.T) {
 	t.Parallel()
 
 	agent := &fakeAgent{primaryLoopID: callID(1)}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 	lay := m.layout()
 	if lay.contentH <= 0 {
 		t.Fatalf("expected a positive content height, got %d", lay.contentH)
@@ -321,7 +321,7 @@ func TestModernRegionAt(t *testing.T) {
 	tests := []struct {
 		name string
 		y    int
-		want modernRegion
+		want screenRegion
 	}{
 		{name: "top content row", y: 0, want: regionContent},
 		{name: "last content row", y: lay.contentH - 1, want: regionContent},
@@ -351,17 +351,17 @@ func TestModernMouseRoutesByRegion(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "some content here")))
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "some content here")))
 	lay := m.layout()
 
-	content, _ := updateModern(t, m, tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	content, _ := updateScreen(t, m, tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
 	if !content.viewport.hasSel {
 		t.Error("content-region click did not begin a viewport selection")
 	}
 
-	bar, _ := updateModern(t, m, tea.MouseClickMsg{X: 0, Y: lay.barY, Button: tea.MouseLeft})
+	bar, _ := updateScreen(t, m, tea.MouseClickMsg{X: 0, Y: lay.barY, Button: tea.MouseLeft})
 	if bar.viewport.hasSel {
 		t.Error("bar-region click was mis-routed into the viewport selection")
 	}
@@ -378,34 +378,34 @@ func TestModernContentClickCollapse(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		gesture    func(t *testing.T, m ModernScreen) ModernScreen
+		gesture    func(t *testing.T, m Screen) Screen
 		wantChange bool // did the rendered line count change (i.e. a fold toggled)?
 	}{
 		{
 			name: "header click (sub 0) toggles the fold",
-			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
-				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+			gesture: func(t *testing.T, m Screen) Screen {
+				m, _ = updateScreen(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+				m, _ = updateScreen(t, m, tea.MouseReleaseMsg{X: 0, Y: 0, Button: tea.MouseLeft})
 				return m
 			},
 			wantChange: true,
 		},
 		{
 			name: "body click (sub > 0) does not toggle",
-			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
+			gesture: func(t *testing.T, m Screen) Screen {
 				y := len(m.viewport.lines) - 1 // the last line is narration — an entry BODY row
-				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
-				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 0, Y: y, Button: tea.MouseLeft})
+				m, _ = updateScreen(t, m, tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
+				m, _ = updateScreen(t, m, tea.MouseReleaseMsg{X: 0, Y: y, Button: tea.MouseLeft})
 				return m
 			},
 			wantChange: false,
 		},
 		{
 			name: "drag (press, motion, release) is a selection, never a toggle",
-			gesture: func(t *testing.T, m ModernScreen) ModernScreen {
-				m, _ = updateModern(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
-				m, _ = updateModern(t, m, tea.MouseMotionMsg{X: 5, Y: 1, Button: tea.MouseLeft})
-				m, _ = updateModern(t, m, tea.MouseReleaseMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+			gesture: func(t *testing.T, m Screen) Screen {
+				m, _ = updateScreen(t, m, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+				m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+				m, _ = updateScreen(t, m, tea.MouseReleaseMsg{X: 5, Y: 1, Button: tea.MouseLeft})
 				return m
 			},
 			wantChange: false,
@@ -417,9 +417,9 @@ func TestModernContentClickCollapse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
-			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-			m = feedModern(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
+			m := newScreenSized(t, agent, 80, 24)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+			m = feed(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
 
 			before := len(m.viewport.lines)
 			m = tt.gesture(t, m)
@@ -431,31 +431,31 @@ func TestModernContentClickCollapse(t *testing.T) {
 	}
 }
 
-// TestModernAgentReachable pins that ModernScreen exposes Agent() (promoted from the embedded
+// TestModernAgentReachable pins that Screen exposes Agent() (promoted from the embedded
 // sessionCore), so it satisfies the composition root's agentHolder shape.
 func TestModernAgentReachable(t *testing.T) {
 	t.Parallel()
 
 	agent := &fakeAgent{primaryLoopID: callID(7)}
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
 	if m.Agent() != agent {
 		t.Error("Agent() did not return the wrapped agent")
 	}
 	var h interface{ Agent() Agent } = m
 	if h.Agent() != agent {
-		t.Error("ModernScreen does not satisfy the agentHolder shape (Agent() Agent)")
+		t.Error("Screen does not satisfy the agentHolder shape (Agent() Agent)")
 	}
 }
 
-// TestModernSubscribeUsesAllLoopsFilter pins the filter injection: ModernScreen subscribes
+// TestModernSubscribeUsesAllLoopsFilter pins the filter injection: Screen subscribes
 // with the ALL-LOOPS scope (every loop's live Ephemeral stream), not the primary-only
 // default — a focused subagent projection must not starve.
 func TestModernSubscribeUsesAllLoopsFilter(t *testing.T) {
 	t.Parallel()
 
 	agent := &fakeAgent{primaryLoopID: callID(3)}
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
 	_ = m.subscribe()() // drive agent.Subscribe with the injected filter and capture it
 
@@ -497,13 +497,13 @@ func TestModernFocusRendersFocusedProjection(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("primary question")})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "primary answer")))
-	m = feedModern(t, m, loopStarted(sub, "reviewer"))
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subagent task")})
-	m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", "subagent answer")))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("primary question")})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "primary answer")))
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subagent task")})
+	m = feed(t, m, stepDoneFrom(sub, aiMessage("", "subagent answer")))
 
 	// Focus starts on the primary: the viewport shows the primary's stream only.
 	if !containsPlain(m.viewport.lines, "primary answer") {
@@ -540,12 +540,12 @@ func TestModernCtrlNPCyclesFocusInLoopOrder(t *testing.T) {
 	subA := callID(2)
 	subB := callID(3)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	// Establish the creation order [primary, subA, subB] in loops().
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, loopStarted(subA, "a"))
-	m = feedModern(t, m, loopStarted(subB, "b"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(subA, "a"))
+	m = feed(t, m, loopStarted(subB, "b"))
 	if got := len(m.transcript.loops()); got != 3 {
 		t.Fatalf("loops() = %d, want 3 (primary, subA, subB)", got)
 	}
@@ -563,7 +563,7 @@ func TestModernCtrlNPCyclesFocusInLoopOrder(t *testing.T) {
 	}
 	for i, s := range steps {
 		var cmd tea.Cmd
-		m, cmd = updateModern(t, m, s.key)
+		m, cmd = updateScreen(t, m, s.key)
 		if m.focusedLoopID != s.want {
 			t.Errorf("step %d (%s): focusedLoopID = %v, want %v", i, s.key.String(), m.focusedLoopID, s.want)
 		}
@@ -580,15 +580,15 @@ func TestModernSingleLoopCycleIsNoop(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	if got := len(m.transcript.loops()); got != 1 {
 		t.Fatalf("loops() = %d, want 1 (primary only)", got)
 	}
 
 	for _, key := range []tea.KeyPressMsg{ctrlKey('n'), ctrlKey('p')} {
 		var cmd tea.Cmd
-		m, cmd = updateModern(t, m, key)
+		m, cmd = updateScreen(t, m, key)
 		if m.focusedLoopID != primary {
 			t.Errorf("%s over a single loop moved focus to %v, want primary %v", key.String(), m.focusedLoopID, primary)
 		}
@@ -635,9 +635,9 @@ func TestModernBarClickFocuses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
-			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-			m = feedModern(t, m, loopStarted(subA, "reviewer"))
+			m := newScreenSized(t, agent, 80, 24)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feed(t, m, loopStarted(subA, "reviewer"))
 
 			lay := m.layout()
 			segs, _ := m.bar().layout()
@@ -652,7 +652,7 @@ func TestModernBarClickFocuses(t *testing.T) {
 				}
 			}
 
-			m, cmd := updateModern(t, m, tea.MouseClickMsg{X: x, Y: lay.barY, Button: tea.MouseLeft})
+			m, cmd := updateScreen(t, m, tea.MouseClickMsg{X: x, Y: lay.barY, Button: tea.MouseLeft})
 			if m.focusedLoopID != tt.want {
 				t.Errorf("bar click at x=%d focused %v, want %v", x, m.focusedLoopID, tt.want)
 			}
@@ -675,24 +675,24 @@ func TestModernFocusResetsTailAndClearsSelection(t *testing.T) {
 	// A short-but-nonzero content region (height leaves a few content rows above the taller
 	// modern bottom chrome — status + two gap rows + the padded box + the bar) so content still
 	// scrolls AND a Y:0 click lands in the content region.
-	m := newModernSized(t, agent, 80, 14)
+	m := newScreenSized(t, agent, 80, 14)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	for i := 0; i < 20; i++ {
-		m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("primary %d", i))))
+		m = feed(t, m, stepDoneFrom(primary, aiMessage("", fmt.Sprintf("primary %d", i))))
 	}
-	m = feedModern(t, m, loopStarted(sub, "reviewer"))
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
 	for i := 0; i < 20; i++ {
-		m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", fmt.Sprintf("sub %d", i))))
+		m = feed(t, m, stepDoneFrom(sub, aiMessage("", fmt.Sprintf("sub %d", i))))
 	}
 
 	// Scroll off the tail, then begin a selection in the primary's buffer.
-	m, _ = updateModern(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	m, _ = updateScreen(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	if m.viewport.atTail {
 		t.Fatal("precondition: viewport should be off the tail after a wheel-up")
 	}
-	m, _ = updateModern(t, m, tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	m, _ = updateScreen(t, m, tea.MouseClickMsg{X: 1, Y: 0, Button: tea.MouseLeft})
 	if !m.viewport.hasSel {
 		t.Fatal("precondition: a content click should begin a selection")
 	}
@@ -722,15 +722,15 @@ func TestModernFocusIsViewOnly(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, loopStarted(sub, "reviewer"))
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
-	m = feedModern(t, m, stepDoneFrom(sub, aiMessage("", "sub answer")))
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feed(t, m, stepDoneFrom(sub, aiMessage("", "sub answer")))
 
 	committedBefore := len(m.transcript.committed)
 
-	m, cmd := updateModern(t, m, ctrlKey('n'))
+	m, cmd := updateScreen(t, m, ctrlKey('n'))
 	if cmd != nil {
 		t.Error("ctrl+n focus returned a non-nil cmd (must not submit/interrupt)")
 	}
@@ -755,13 +755,13 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, event.TurnDone{Header: hdr(primary)}) // primary parks idle
-	m = feedModern(t, m, loopStarted(sub, "reviewer"))
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
-	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, event.TurnDone{Header: hdr(primary)}) // primary parks idle
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feed(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
 
 	// Focused on the idle primary → idle.
 	if got := m.focusedStatus(); got != StatusIdle {
@@ -781,12 +781,12 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	}
 }
 
-// runningModern returns a ModernScreen wired for a live turn: sized (ready), a non-nil
+// runningScreen returns a Screen wired for a live turn: sized (ready), a non-nil
 // session subscription (subNext targets must be non-nil), and StatusRunning. It mirrors
 // runningScreen so the prompt/interrupt/queued-input parity tests exercise a mid-turn model.
-func runningModern(t *testing.T, agent Agent) ModernScreen {
+func runningScreen(t *testing.T, agent Agent) Screen {
 	t.Helper()
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 	m.sub = newFakeSubscription()
 	m.status = StatusRunning
 	return m
@@ -811,7 +811,7 @@ func TestModernInitTriggersRestore(t *testing.T) {
 
 	primary := callID(0xAA)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
 	cmd := m.Init()
 	if cmd == nil {
@@ -844,12 +844,12 @@ func TestModernHandleRestored(t *testing.T) {
 		name    string
 		backlog []event.Event
 		replay  error
-		check   func(t *testing.T, m ModernScreen)
+		check   func(t *testing.T, m Screen)
 	}{
 		{
 			name:    "restored backlog repaints history + projections + loop table",
 			backlog: restored,
-			check: func(t *testing.T, m ModernScreen) {
+			check: func(t *testing.T, m Screen) {
 				if len(m.transcript.committed) == 0 {
 					t.Fatal("restore did not populate committed transcript")
 				}
@@ -867,7 +867,7 @@ func TestModernHandleRestored(t *testing.T) {
 		{
 			name:   "read failure surfaces a faint error notice",
 			replay: errors.New("replay read"),
-			check: func(t *testing.T, m ModernScreen) {
+			check: func(t *testing.T, m Screen) {
 				if len(m.transcript.committed) == 0 {
 					t.Fatal("restore error did not commit a notice")
 				}
@@ -884,7 +884,7 @@ func TestModernHandleRestored(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary, backlog: tt.backlog, replayErr: tt.replay}
-			m := newModernSized(t, agent, 80, 24)
+			m := newScreenSized(t, agent, 80, 24)
 			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
 			m = feedRestored(t, m, msg)
 			tt.check(t, m)
@@ -893,9 +893,9 @@ func TestModernHandleRestored(t *testing.T) {
 }
 
 // feedRestored drives one restoredMsg through Update and returns the new model.
-func feedRestored(t *testing.T, m ModernScreen, msg restoredMsg) ModernScreen {
+func feedRestored(t *testing.T, m Screen, msg restoredMsg) Screen {
 	t.Helper()
-	m, _ = updateModern(t, m, msg)
+	m, _ = updateScreen(t, m, msg)
 	return m
 }
 
@@ -910,9 +910,9 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 
 	primary := callID(0xAA)
 	agent := &fakeAgent{primaryLoopID: primary, backlog: nil}
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
-	m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	m, _ = updateModern(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
 
 	if len(m.transcript.committed) == 0 {
 		t.Fatal("precondition: opening banner not committed before the empty-backlog restore")
@@ -956,16 +956,16 @@ func TestModernBarGateMarker(t *testing.T) {
 	primary := callID(1)
 	subA := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := runningModern(t, agent)
+	m := runningScreen(t, agent)
 
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, loopStarted(subA, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(subA, "reviewer"))
 	if e, ok := barEntryFor(m.bar(), subA); ok && e.gate {
 		t.Fatal("precondition: bar already marked a gate before any prompt")
 	}
 	focusBefore := m.focusedLoopID
 
-	m = feedModern(t, m, event.PermissionRequested{Header: hdr(subA), ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}})
+	m = feed(t, m, event.PermissionRequested{Header: hdr(subA), ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}})
 
 	if m.focusedLoopID != focusBefore {
 		t.Errorf("prompt-open stole focus: %v -> %v (must not steal)", focusBefore, m.focusedLoopID)
@@ -1008,16 +1008,16 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 	tests := []struct {
 		name      string
 		focusSub  bool // start focused on subA (else primary)
-		act       func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd)
+		act       func(t *testing.T, m Screen) (Screen, tea.Cmd)
 		wantFocus uuid.UUID
 		assert    func(t *testing.T, agent *fakeAgent)
 	}{
 		{
 			name:     "submit from a subagent view targets that loop and stays focused",
 			focusSub: true,
-			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+			act: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
 				m.interaction.input.SetValue("hello sub")
-				return updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+				return updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 			},
 			wantFocus: subA,
 			assert: func(t *testing.T, agent *fakeAgent) {
@@ -1038,9 +1038,9 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 		{
 			name:     "submit from the primary view targets the primary loop",
 			focusSub: false,
-			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+			act: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
 				m.interaction.input.SetValue("hello primary")
-				return updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+				return updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 			},
 			wantFocus: primary,
 			assert: func(t *testing.T, agent *fakeAgent) {
@@ -1058,8 +1058,8 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 		{
 			name:     "a plain edit does NOT move focus or submit",
 			focusSub: true,
-			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
-				return updateModern(t, m, keyPress("x"))
+			act: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
+				return updateScreen(t, m, keyPress("x"))
 			},
 			wantFocus: subA,
 			assert: func(t *testing.T, agent *fakeAgent) {
@@ -1071,15 +1071,15 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 		{
 			name:     "a non-submit action (approve) still routes through the core",
 			focusSub: false,
-			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+			act: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
 				// A pending permission gate on the primary loop; 'y' approves it (uiApprove),
 				// which must reach the core's approve path — NOT the submit interception.
-				m = feedModern(t, m, event.PermissionRequested{
+				m = feed(t, m, event.PermissionRequested{
 					Header:          hdr(primary),
 					ToolExecutionID: gateCall,
 					Request:         tool.BashRequest{Command: "ls"},
 				})
-				return updateModern(t, m, runeKey('y'))
+				return updateScreen(t, m, runeKey('y'))
 			},
 			wantFocus: primary,
 			assert: func(t *testing.T, agent *fakeAgent) {
@@ -1098,9 +1098,9 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
-			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-			m = feedModern(t, m, loopStarted(subA, "reviewer"))
+			m := newScreenSized(t, agent, 80, 24)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feed(t, m, loopStarted(subA, "reviewer"))
 			if tt.focusSub {
 				m.focusLoop(subA)
 				if m.focusedLoopID != subA {
@@ -1144,10 +1144,10 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 			primary := callID(1)
 			gateLoop := callID(9)
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := runningModern(t, agent)
-			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-			m = feedModern(t, m, loopStarted(gateLoop, "reviewer"))
-			m = feedModern(t, m, event.PermissionRequested{
+			m := runningScreen(t, agent)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feed(t, m, loopStarted(gateLoop, "reviewer"))
+			m = feed(t, m, event.PermissionRequested{
 				Header:          hdr(gateLoop),
 				ToolExecutionID: callID(7),
 				Request:         tool.BashRequest{Command: "ls"},
@@ -1161,7 +1161,7 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 				t.Error("gated loop not marked in the bar before resolving")
 			}
 
-			m, cmd := updateModern(t, m, tt.key)
+			m, cmd := updateScreen(t, m, tt.key)
 			if cmd == nil {
 				t.Fatal("permission key cmd = nil, want a bounded dispatch cmd")
 			}
@@ -1205,8 +1205,8 @@ func TestModernAskUserDispatches(t *testing.T) {
 		primary := callID(1)
 		gateLoop := callID(9)
 		agent := &fakeAgent{primaryLoopID: primary}
-		m := runningModern(t, agent)
-		m = feedModern(t, m, event.UserInputRequested{
+		m := runningScreen(t, agent)
+		m = feed(t, m, event.UserInputRequested{
 			Header:          hdr(gateLoop),
 			ToolExecutionID: callID(3),
 			Question:        "name?",
@@ -1219,9 +1219,9 @@ func TestModernAskUserDispatches(t *testing.T) {
 		}
 
 		for _, r := range "neo" {
-			m, _ = updateModern(t, m, runeKey(r))
+			m, _ = updateScreen(t, m, runeKey(r))
 		}
-		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 		if cmd == nil {
 			t.Fatal("answer submit cmd = nil, want provideAnswerCmd")
 		}
@@ -1240,8 +1240,8 @@ func TestModernAskUserDispatches(t *testing.T) {
 		primary := callID(1)
 		gateLoop := callID(9)
 		agent := &fakeAgent{primaryLoopID: primary}
-		m := runningModern(t, agent)
-		m = feedModern(t, m, event.UserInputRequested{
+		m := runningScreen(t, agent)
+		m = feed(t, m, event.UserInputRequested{
 			Header:          hdr(gateLoop),
 			ToolExecutionID: callID(4),
 			Question:        "pick one",
@@ -1254,7 +1254,7 @@ func TestModernAskUserDispatches(t *testing.T) {
 			t.Errorf("bottom box missing the choice list; got %q", m.bottomBoxView())
 		}
 
-		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 		if cmd == nil {
 			t.Fatal("choice enter cmd = nil, want provideAnswerCmd")
 		}
@@ -1275,14 +1275,14 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 
 	old := &fakeAgent{primaryLoopID: callID(1)}
 	fresh := &fakeAgent{primaryLoopID: callID(2)}
-	m := newModernSized(t, old, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
-	m = feedModern(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
-	m = feedModern(t, m, event.TurnDone{Header: hdr(callID(1))}) // return to idle so /clear is allowed
+	m := newScreenSized(t, old, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
+	m = feed(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
+	m = feed(t, m, event.TurnDone{Header: hdr(callID(1))}) // return to idle so /clear is allowed
 
 	// /clear while idle flips to Resetting and returns the reopen cmd.
 	m.interaction.input.SetValue("/clear")
-	m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.status != StatusResetting {
 		t.Fatalf("status = %d, want StatusResetting after /clear", m.status)
 	}
@@ -1291,7 +1291,7 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	}
 
 	// The reopen result swaps the agent and resets the modern presentation.
-	m, cmd = updateModern(t, m, reopenResultMsg{agent: fresh})
+	m, cmd = updateScreen(t, m, reopenResultMsg{agent: fresh})
 	if m.Agent() != fresh {
 		t.Errorf("agent = %p, want fresh %p", m.Agent(), fresh)
 	}
@@ -1328,8 +1328,8 @@ func TestModernInterruptAndQuit(t *testing.T) {
 	t.Run("esc interrupts a running turn", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{primaryLoopID: callID(1), interruptCancelled: true}
-		m := runningModern(t, agent)
-		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+		m := runningScreen(t, agent)
+		m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 		if cmd == nil {
 			t.Error("esc cmd = nil, want the bounded Interrupt")
 		}
@@ -1341,9 +1341,9 @@ func TestModernInterruptAndQuit(t *testing.T) {
 	t.Run("ctrl+c closes the subscription and quits", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{primaryLoopID: callID(1)}
-		m := runningModern(t, agent)
+		m := runningScreen(t, agent)
 		sub := m.sub
-		m, cmd := updateModern(t, m, ctrlKey('c'))
+		m, cmd := updateScreen(t, m, ctrlKey('c'))
 		if cmd == nil {
 			t.Fatal("ctrl+c cmd = nil, want closeAgent + quit")
 		}
@@ -1366,14 +1366,14 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 	primary := callID(1)
 	subA := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := runningModern(t, agent)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, loopStarted(subA, "reviewer"))
+	m := runningScreen(t, agent)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(subA, "reviewer"))
 	m.focusLoop(subA)
 
 	committedBefore := len(m.transcript.committed)
 	m.interaction.input.SetValue("queued while running")
-	m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if m.status != StatusRunning {
 		t.Errorf("status = %d, want StatusRunning (submit does not change the running turn)", m.status)
@@ -1401,10 +1401,10 @@ func TestModernImageRejectedAtBoundary(t *testing.T) {
 	t.Parallel()
 
 	agent := &fakeAgent{primaryLoopID: callID(1), acceptsImage: false}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 	m.interaction.input.SetValue("@photo.png") // an image on a text-only model → ImageUnsupportedError
 
-	m, _ = updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if agent.submitCalled {
 		t.Error("agent.Submit called on a rejected image, want no send")
@@ -1467,39 +1467,39 @@ func TestModernStatusTimerSuffix(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		drive       func(t *testing.T, m ModernScreen) ModernScreen
+		drive       func(t *testing.T, m Screen) Screen
 		wantSuffix  string // substring the status line must contain ("" = assert none)
 		wantNoParen bool   // assert no "(" appears at all (idle)
 	}{
 		{
 			name:        "idle: no suffix",
-			drive:       func(_ *testing.T, m ModernScreen) ModernScreen { return m },
+			drive:       func(_ *testing.T, m Screen) Screen { return m },
 			wantNoParen: true,
 		},
 		{
 			name: "running 154s: (2m 34s)",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m, _ = updateModern(t, m, tickMsg{at: base.Add(154 * time.Second)})
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateScreen(t, m, tickMsg{at: base.Add(154 * time.Second)})
 				return m
 			},
 			wantSuffix: "(2m 34s)",
 		},
 		{
 			name: "running 8s: (8s)",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m, _ = updateModern(t, m, tickMsg{at: base.Add(8 * time.Second)})
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateScreen(t, m, tickMsg{at: base.Add(8 * time.Second)})
 				return m
 			},
 			wantSuffix: "(8s)",
 		},
 		{
 			name: "turn ended: suffix gone",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m, _ = updateModern(t, m, tickMsg{at: base.Add(20 * time.Second)})
-				m = feedModern(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(30*time.Second))})
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m, _ = updateScreen(t, m, tickMsg{at: base.Add(20 * time.Second)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(30*time.Second))})
 				return m
 			},
 			wantNoParen: true,
@@ -1510,9 +1510,9 @@ func TestModernStatusTimerSuffix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
+			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
-			status := plainFromStyled(m.modernStatusLine())
+			status := plainFromStyled(m.statusLine())
 			if tt.wantSuffix != "" && !strings.Contains(status, tt.wantSuffix) {
 				t.Errorf("status = %q, want it to contain %q", status, tt.wantSuffix)
 			}
@@ -1532,13 +1532,13 @@ func TestModernTickLifecycle(t *testing.T) {
 	primary := callID(1)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	if m.ticking {
 		t.Fatal("tick armed before any turn started")
 	}
 	// A turn becoming active arms the tick and records the turn start.
-	m, cmd := updateModern(t, m, eventMsg{ev: event.TurnStarted{Header: hdrAt(primary, base)}})
+	m, cmd := updateScreen(t, m, eventMsg{ev: event.TurnStarted{Header: hdrAt(primary, base)}})
 	if !m.ticking {
 		t.Error("tick not armed after TurnStarted")
 	}
@@ -1549,17 +1549,17 @@ func TestModernTickLifecycle(t *testing.T) {
 		t.Error("turnStartedAt missing the running loop")
 	}
 	// A tick while the turn is still running re-arms (chain continues).
-	m, cmd = updateModern(t, m, tickMsg{at: base.Add(time.Second)})
+	m, cmd = updateScreen(t, m, tickMsg{at: base.Add(time.Second)})
 	if !m.ticking || cmd == nil {
 		t.Errorf("tick did not re-arm while running: ticking=%v cmd=%v", m.ticking, cmd)
 	}
 	// The turn ends; its start is cleared.
-	m = feedModern(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(2*time.Second))})
+	m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(2*time.Second))})
 	if _, ok := m.turnStartedAt[primary]; ok {
 		t.Error("turnStartedAt still holds a finished loop")
 	}
 	// The in-flight tick fires with nothing running: it must NOT re-arm.
-	m, cmd = updateModern(t, m, tickMsg{at: base.Add(3 * time.Second)})
+	m, cmd = updateScreen(t, m, tickMsg{at: base.Add(3 * time.Second)})
 	if m.ticking {
 		t.Error("tick re-armed after the session went idle (would tick forever)")
 	}
@@ -1578,21 +1578,21 @@ func TestModernStatusGradientAnimates(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	// A live subagent streaming narration, focused, reads "streaming…" (mirrors
 	// TestModernStatusReflectsFocusedLoop) — a real animated label to sample across frames.
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, event.TurnDone{Header: hdr(primary)})
-	m = feedModern(t, m, loopStarted(sub, "reviewer"))
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
-	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, event.TurnDone{Header: hdr(primary)})
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feed(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
 	m.focusLoop(sub)
 
 	m.anim.frame = 0
-	styled0 := m.modernStatusLine()
+	styled0 := m.statusLine()
 	m.anim.frame = 5
-	styled5 := m.modernStatusLine()
+	styled5 := m.statusLine()
 
 	if styled0 == styled5 {
 		t.Errorf("status line identical across anim frames 0 and 5 = %q; want the gradient to animate", styled0)
@@ -1617,18 +1617,18 @@ func TestModernAnimTick(t *testing.T) {
 	t.Run("advances the frame and re-arms while idle", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{primaryLoopID: callID(1)}
-		m := newModernSized(t, agent, 80, 24) // no turn active — idle still animates
+		m := newScreenSized(t, agent, 80, 24) // no turn active — idle still animates
 		if m.anim.frame != 0 {
 			t.Fatalf("fresh anim frame = %d, want 0", m.anim.frame)
 		}
-		m, cmd := updateModern(t, m, animMsg(base))
+		m, cmd := updateScreen(t, m, animMsg(base))
 		if m.anim.frame != 1 {
 			t.Errorf("anim frame after one tick = %d, want 1", m.anim.frame)
 		}
 		if cmd == nil {
 			t.Error("anim tick did not re-arm while idle; want a continuous reschedule")
 		}
-		m, cmd = updateModern(t, m, animMsg(base.Add(blinkInterval)))
+		m, cmd = updateScreen(t, m, animMsg(base.Add(blinkInterval)))
 		if m.anim.frame != 2 || cmd == nil {
 			t.Errorf("second anim tick: frame=%d cmd=%v, want frame=2 and a reschedule", m.anim.frame, cmd)
 		}
@@ -1637,14 +1637,14 @@ func TestModernAnimTick(t *testing.T) {
 	t.Run("does not re-render the transcript", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{primaryLoopID: callID(1)}
-		m := newModernSized(t, agent, 80, 24)
+		m := newScreenSized(t, agent, 80, 24)
 		// Commit an entry (the opening banner) so the viewport has a real buffer to guard.
-		m, _ = updateModern(t, m, systemReadyMsg{})
+		m, _ = updateScreen(t, m, systemReadyMsg{})
 		before := m.viewport.lines
 		if len(before) == 0 {
 			t.Fatal("expected committed viewport lines to test against")
 		}
-		m, cmd := updateModern(t, m, animMsg(base))
+		m, cmd := updateScreen(t, m, animMsg(base))
 		after := m.viewport.lines
 		// SetLines (the only re-render path) installs a FRESH slice; an anim tick must leave the
 		// SAME backing buffer untouched. Same length AND same first-element address proves it.
@@ -1659,13 +1659,13 @@ func TestModernAnimTick(t *testing.T) {
 	t.Run("stops on quit", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{primaryLoopID: callID(1)}
-		m := runningModern(t, agent)
-		m, _ = updateModern(t, m, ctrlKey('c'))
+		m := runningScreen(t, agent)
+		m, _ = updateScreen(t, m, ctrlKey('c'))
 		if !m.quitting {
 			t.Fatal("ctrl+c did not latch quitting")
 		}
 		frameBefore := m.anim.frame
-		m, cmd := updateModern(t, m, animMsg(base))
+		m, cmd := updateScreen(t, m, animMsg(base))
 		if cmd != nil {
 			t.Errorf("anim tick after quit returned cmd %v, want nil (chain stops, no leak)", cmd)
 		}
@@ -1739,17 +1739,17 @@ func TestModernRealThinkingDurationFromModelClock(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
+			m := newScreenSized(t, agent, 80, 24)
 
 			// TurnStarted seeds the model clock (m.now = base). The thinking chunks stream with
 			// no CreatedAt; the shell stamps them with m.now. A tick advances m.now by elapsed,
 			// so the first text chunk (which seals the thinking end) is stamped elapsed later.
-			m = feedModern(t, m, event.TurnStarted{Header: hdrAt(tt.loop, base)})
-			m = feedModern(t, m, realThinkDelta(tt.loop, "weigh "))
-			m = feedModern(t, m, realThinkDelta(tt.loop, "the options"))
-			m, _ = updateModern(t, m, tickMsg{at: base.Add(tt.elapsed)})
-			m = feedModern(t, m, realTextDelta(tt.loop, "here is the plan"))
-			m = feedModern(t, m, stepDoneFrom(tt.loop, aiMessage("weigh the options", "here is the plan")))
+			m = feed(t, m, event.TurnStarted{Header: hdrAt(tt.loop, base)})
+			m = feed(t, m, realThinkDelta(tt.loop, "weigh "))
+			m = feed(t, m, realThinkDelta(tt.loop, "the options"))
+			m, _ = updateScreen(t, m, tickMsg{at: base.Add(tt.elapsed)})
+			m = feed(t, m, realTextDelta(tt.loop, "here is the plan"))
+			m = feed(t, m, stepDoneFrom(tt.loop, aiMessage("weigh the options", "here is the plan")))
 
 			committed, _ := m.transcript.projectionFor(tt.loop)
 			gotDur, ok := firstThinkDurIn(committed)
@@ -1780,7 +1780,7 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 	primary := callID(1)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	if !m.collapse.globalCollapsed {
 		t.Fatal("modern collapse should start collapsed (dense)")
@@ -1788,8 +1788,8 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 
 	// LIVE: thinking streams (no StepDone yet). Despite the collapsed default, the live tail
 	// shows the present-tense "│ thinking" header AND the full multi-line reasoning body.
-	m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-	m = feedModern(t, m, realThinkDelta(primary, "reason line one\nreason line two"))
+	m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+	m = feed(t, m, realThinkDelta(primary, "reason line one\nreason line two"))
 
 	if !containsPlain(m.viewport.lines, "│ thinking") {
 		t.Errorf("live tail = %q, want the present-tense '│ thinking' header", plainAll(m.viewport.lines))
@@ -1802,7 +1802,7 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 
 	// COMMIT: the step's StepDone commits the thinking entry, which now follows the collapse
 	// default — a single "│ thought" header, the reasoning body hidden.
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("reason line one\nreason line two", "the answer")))
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("reason line one\nreason line two", "the answer")))
 
 	if !containsPlain(m.viewport.lines, "│ thought") {
 		t.Errorf("committed = %q, want the collapsed '│ thought' header", plainAll(m.viewport.lines))
@@ -1825,8 +1825,8 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, width, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hi there")})
+	m := newScreenSized(t, agent, width, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hi there")})
 
 	// Locate the user row in the rendered viewport.
 	var userLines []renderedLine
@@ -1873,14 +1873,14 @@ func TestModernComposerDefaultsToTwoLines(t *testing.T) {
 	t.Parallel()
 
 	agent := &fakeAgent{primaryLoopID: callID(1)}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
-	if got := m.interaction.input.Height(); got != modernComposerMinLines {
-		t.Errorf("modern composer empty height = %d, want %d", got, modernComposerMinLines)
+	if got := m.interaction.input.Height(); got != composerMinLines {
+		t.Errorf("modern composer empty height = %d, want %d", got, composerMinLines)
 	}
 	// The rendered bottom box reflects the 2-line default too.
-	if got := lipgloss.Height(m.bottomBoxView()); got < modernComposerMinLines {
-		t.Errorf("modern bottom-box height = %d, want >= %d", got, modernComposerMinLines)
+	if got := lipgloss.Height(m.bottomBoxView()); got < composerMinLines {
+		t.Errorf("modern bottom-box height = %d, want >= %d", got, composerMinLines)
 	}
 	// Screen's plain (unmodernized) composer, sized the same way, stays at the historical
 	// single line.
@@ -1904,16 +1904,16 @@ func TestModernRenderFocusedPrimaryExcludesSubagentLeak(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	// The PRIMARY orchestrator streams its own live narration.
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
-	m = feedModern(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "PRIMARY narration here"}})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "PRIMARY narration here"}})
 
 	// A concurrent subagent's live stream arrives on the all-loops firehose.
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub)})
-	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "SUBAGENT leaked words"}})
-	m = feedModern(t, m, event.ToolCallStarted{Header: hdr(sub), ToolExecutionID: callID(0x33), ToolName: "Bash", Summary: "subagent danger"})
+	m = feed(t, m, event.TurnStarted{Header: hdr(sub)})
+	m = feed(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "SUBAGENT leaked words"}})
+	m = feed(t, m, event.ToolCallStarted{Header: hdr(sub), ToolExecutionID: callID(0x33), ToolName: "Bash", Summary: "subagent danger"})
 
 	// (c) the PRIMARY-focused viewport shows only the primary's live content.
 	lines := m.renderFocused()
@@ -1952,17 +1952,17 @@ func TestModernBarActiveFilter(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		drive   func(t *testing.T, m ModernScreen) ModernScreen
+		drive   func(t *testing.T, m Screen) Screen
 		present []uuid.UUID
 		absent  []uuid.UUID
 	}{
 		{
 			name: "idle non-focused loop drops off; live loops stay",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-				m = feedModern(t, m, loopStarted(subA, "a"))
-				m = feedModern(t, m, loopStarted(subB, "b"))
-				m = feedModern(t, m, event.LoopIdle{Header: hdr(subB)}) // subB parks idle, not focused
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, loopStarted(subA, "a"))
+				m = feed(t, m, loopStarted(subB, "b"))
+				m = feed(t, m, event.LoopIdle{Header: hdr(subB)}) // subB parks idle, not focused
 				return m
 			},
 			present: []uuid.UUID{primary, subA},
@@ -1970,21 +1970,21 @@ func TestModernBarActiveFilter(t *testing.T) {
 		},
 		{
 			name: "the focused loop is kept even when idle",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-				m = feedModern(t, m, loopStarted(subB, "b"))
-				m = feedModern(t, m, event.LoopIdle{Header: hdr(subB)}) // subB idle...
-				m.focusLoop(subB)                                       // ...but focused → kept
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, loopStarted(subB, "b"))
+				m = feed(t, m, event.LoopIdle{Header: hdr(subB)}) // subB idle...
+				m.focusLoop(subB)                                 // ...but focused → kept
 				return m
 			},
 			present: []uuid.UUID{primary, subB},
 		},
 		{
 			name: "empty filter falls back to the primary",
-			drive: func(t *testing.T, m ModernScreen) ModernScreen {
-				m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-				m = feedModern(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
-				m.focusedLoopID = subB                                     // focus a loop absent from the table
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
+				m.focusedLoopID = subB                               // focus a loop absent from the table
 				return m
 			},
 			present: []uuid.UUID{primary},
@@ -1997,7 +1997,7 @@ func TestModernBarActiveFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{primaryLoopID: primary}
-			m := newModernSized(t, agent, 80, 24)
+			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 			bar := m.bar()
 			for _, id := range tt.present {
@@ -2024,9 +2024,9 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 	primary := callID(1)
 	sub := callID(2)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feedModern(t, m, loopStarted(sub, "operator"))
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(sub, "operator"))
 
 	// Primary focused: the unfocused subagent shows "○ operator (<id4>)"; a filled ● appears.
 	plain := stripANSI(m.bar().Render(m.width))
@@ -2081,14 +2081,14 @@ func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
-	m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	m, _ = updateModern(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
 
 	// A user turn then its assistant reply: three committed entries (banner, user, assistant), no
 	// live tail, so the only empty rows in the render are the trailing blank separators.
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hello there")})
-	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "hi back")))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hello there")})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "hi back")))
 
 	committed, _ := m.transcript.projectionFor(primary)
 	if len(committed) < 3 {
@@ -2178,10 +2178,10 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{primaryLoopID: primary}
-	m := newModernSized(t, agent, 80, 24)
+	m := newScreenSized(t, agent, 80, 24)
 
 	// A turn is running on the primary loop (no user row — just an active turn).
-	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 
 	// The user fires three messages mid-turn; each records its submit (submitResultMsg) then the
 	// loop's InputQueued reveals it — the real fire-and-forget order.
@@ -2194,8 +2194,8 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 		{callID(0x23), "third queued"},
 	}
 	for _, q := range msgs {
-		m, _ = updateModern(t, m, submitResultMsg{inputID: q.id, blocks: userBlocks(q.text)})
-		m = feedModern(t, m, queuedFor(q.id, primary))
+		m, _ = updateScreen(t, m, submitResultMsg{inputID: q.id, blocks: userBlocks(q.text)})
+		m = feed(t, m, queuedFor(q.id, primary))
 	}
 
 	// All three render as queued rows, in submit order, each faint (QueuedStyle) and marked queued.
@@ -2207,8 +2207,8 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 		if !strings.Contains(rows[i].plain, q.text) {
 			t.Errorf("queued row %d plain = %q, want to contain %q", i, rows[i].plain, q.text)
 		}
-		if !strings.Contains(rows[i].plain, modernQueuedTag) {
-			t.Errorf("queued row %d plain = %q, want the %q marker", i, rows[i].plain, modernQueuedTag)
+		if !strings.Contains(rows[i].plain, queuedTag) {
+			t.Errorf("queued row %d plain = %q, want the %q marker", i, rows[i].plain, queuedTag)
 		}
 		if !strings.Contains(rows[i].styled, "\x1b[2m") { // SGR 2 = faint, styles.QueuedStyle
 			t.Errorf("queued row %d not faint (QueuedStyle); styled = %q", i, rows[i].styled)
@@ -2217,7 +2217,7 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 
 	// Dequeue the first: its turn starts, committing the authoritative user row. It must stop
 	// showing as queued (no duplicate) while the other two remain queued.
-	m = feedModern(t, m, event.TurnStarted{
+	m = feed(t, m, event.TurnStarted{
 		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: msgs[0].id}},
 		Message: userMsg("first queued"),
 	})

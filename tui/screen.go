@@ -15,22 +15,22 @@ import (
 	"github.com/looprig/cli/tui/styles"
 )
 
-// ModernScreen is the MODERN VIEWPORT presentation shell over the shared sessionCore
+// Screen is the MODERN VIEWPORT presentation shell over the shared sessionCore
 // transport (embedded). Where the scrollback-first Screen lets the terminal own history,
-// ModernScreen owns an alt-screen VIEWPORT the user can scroll and select/copy from while
+// Screen owns an alt-screen VIEWPORT the user can scroll and select/copy from while
 // content streams: it renders the FOCUSED loop's projection into a hand-rolled
 // viewportModel (scroll + drag-select + copy), applies a RETROACTIVE collapse fold
 // (ctrl+t + header-click), draws a bottom active-loops bar and the reused composer, and
 // subscribes to EVERY loop's live stream (allLoopsFilter) so any focused subagent's tokens
 // render live rather than freezing at Enduring StepDone granularity.
 //
-// The core owns event routing exactly as it does for Screen; ModernScreen adds ONLY the
+// The core owns event routing exactly as it does for Screen; Screen adds ONLY the
 // viewport presentation. Update delegates transport to the core then re-renders the focused
 // projection into the viewport (keeping the auto-follow tail pinned); View composes, top to
 // bottom, the viewport content, one status line, a blank gap, the bottom box, a blank gap, and
 // the active-loops bar, and returns a per-frame View with AltScreen + cell-motion mouse (the
 // v2 fields the copy-while-scrolling design turns on). Agent() is promoted from the embedded
-// sessionCore, so ModernScreen satisfies the composition root's agentHolder through that single
+// sessionCore, so Screen satisfies the composition root's agentHolder through that single
 // definition.
 //
 // Focus switching (Task 8): ctrl+n / ctrl+p cycle focus over the bar's loops and a bar-region
@@ -47,7 +47,7 @@ import (
 // folds the backlog into the transcript + projections + loop table and re-renders. The remaining
 // parity items (/clear reopen, esc/ctrl+c interrupt, queued input, image @path rejection) all
 // flow through the shared sessionCore, so they are shared with Screen rather than re-implemented.
-type ModernScreen struct {
+type Screen struct {
 	sessionCore
 
 	viewport viewportModel // the scrollable/selectable content window
@@ -106,9 +106,9 @@ type ModernScreen struct {
 	quitting bool
 }
 
-// modernTickInterval is the status-line timer's cadence: one tick per second while a turn
+// tickInterval is the status-line timer's cadence: one tick per second while a turn
 // is active, matching the whole-second granularity of formatElapsed.
-const modernTickInterval = time.Second
+const tickInterval = time.Second
 
 // tickMsg is one 1s timer tick carrying the tick's own time — the clock the status-line
 // elapsed timer advances on (never a render-time wall clock).
@@ -117,7 +117,7 @@ type tickMsg struct{ at time.Time }
 // tickCmd schedules the next 1s timer tick. It is re-issued from handleTick only while a
 // turn is active, so the chain self-terminates when the session goes idle.
 func tickCmd() tea.Cmd {
-	return tea.Tick(modernTickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
+	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
 }
 
 // animMsg is one status-line animation tick carrying its own time (unused at the UI; it
@@ -134,10 +134,10 @@ func animCmd() tea.Cmd {
 	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return animMsg(t) })
 }
 
-// modernLoopBarCap is the visible-cap the modern active-loops bar renders under: at most
+// loopBarCap is the visible-cap the modern active-loops bar renders under: at most
 // this many loop segments show, the rest folding into a "… +N" overflow marker so the bar
 // never grows unbounded across a long session's accumulated loops.
-const modernLoopBarCap = 8
+const loopBarCap = 8
 
 // liveTailEntryID is the reserved provenance id every live-tail line carries. The live tail
 // is NOT a committed entry, and the first committed entry allocates displayID 1, so the zero
@@ -146,46 +146,46 @@ const modernLoopBarCap = 8
 // (a harmless no-op).
 const liveTailEntryID displayID = 0
 
-// NewModern constructs an idle ModernScreen driving agent, with open as the /clear thunk and
+// New constructs an idle Screen driving agent, with open as the /clear thunk and
 // banner the agent name/description shown as the opening info notice. It injects
 // allLoopsFilter so the session subscription delivers EVERY loop's live Ephemeral stream
 // (see AllLoopsEventFilter) — the modern mode renders any focused loop's whole live output.
 // The viewport starts pinned to the tail (atTail) so streaming content auto-follows, the
 // collapse state starts folded (dense; ctrl+t expands), and focus starts on the primary loop.
-func NewModern(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) ModernScreen {
-	m := ModernScreen{
+func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
+	m := Screen{
 		sessionCore:   newSessionCore(ctx, agent, open, banner, allLoopsFilter),
 		viewport:      viewportModel{atTail: true},
 		collapse:      newCollapseState(),
 		focusedLoopID: agent.PrimaryLoopID(),
 		turnStartedAt: make(map[uuid.UUID]time.Time),
 	}
-	m.interaction = modernizeComposer(m.interaction)
+	m.interaction = styleComposer(m.interaction)
 	return m
 }
 
-// modernComposerMinLines is the modern composer's default visible height — two rows
+// composerMinLines is the modern composer's default visible height — two rows
 // instead of the scrollback composer's one, so the input reads as a roomier panel while
 // still auto-growing to maxInputLines.
-const modernComposerMinLines = 2
+const composerMinLines = 2
 
-// modernComposerPadV is the modern composer's inner vertical padding: one background-filled
+// composerPadV is the modern composer's inner vertical padding: one background-filled
 // row above AND below the text region, so the input reads as a padded box rather than a bare
 // line. Scrollback's composer keeps the default 0 (no padding).
-const modernComposerPadV = 1
+const composerPadV = 1
 
-// modernizeComposer applies the MODERN composer treatment to in's input box — the 2-line
+// styleComposer applies the MODERN composer treatment to in's input box — the 2-line
 // default height, the gray panel fill (styles.ModernPanelBg), and one row of inner vertical
 // padding above/below the text — and returns the updated model. It runs at every site that
-// installs a FRESH (default 1-line, background-free, unpadded) interaction for a ModernScreen:
+// installs a FRESH (default 1-line, background-free, unpadded) interaction for a Screen:
 // initial construction (NewModern) and the cold-restore install (handleRestored replaces the
 // whole interaction with a freshly-built one). The /clear reopen keeps the same input
 // (ClearPrompts preserves it), so it needs no re-apply. Scrollback's Screen never calls this,
 // so its composer stays byte-identical.
-func modernizeComposer(in interactionModel) interactionModel {
-	in.input.SetMinLines(modernComposerMinLines)
-	in.input.SetBackground(styles.ModernPanelBg)
-	in.input.SetVerticalPadding(modernComposerPadV)
+func styleComposer(in interactionModel) interactionModel {
+	in.input.SetMinLines(composerMinLines)
+	in.input.SetBackground(styles.PanelBg)
+	in.input.SetVerticalPadding(composerPadV)
 	return in
 }
 
@@ -197,7 +197,7 @@ func modernizeComposer(in interactionModel) interactionModel {
 // agnostic command Screen batches, so both modes fold restore identically. A NEW session's
 // empty backlog makes it a no-op (the viewport comes up idle, driven by live events after the
 // first Submit); a restored session comes up idle too, so there is no backlog/live overlap.
-func (m ModernScreen) Init() tea.Cmd {
+func (m Screen) Init() tea.Cmd {
 	return tea.Batch(
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
@@ -210,12 +210,12 @@ func (m ModernScreen) Init() tea.Cmd {
 	)
 }
 
-// Update advances the model. It is a value receiver so ModernScreen satisfies tea.Model;
+// Update advances the model. It is a value receiver so Screen satisfies tea.Model;
 // the mutating handlers take a pointer to the addressable receiver and Update returns the
 // updated value. Note the two-statement pattern for the pointer-receiver handlers (cmd :=
 // …; return m, cmd): a `return m, m.handle(...)` would evaluate the first result (the OLD
 // m) before the handler mutates it, stranding the mutation.
-func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
@@ -225,7 +225,7 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleMouse(msg)
 		return m, cmd
 	case eventMsg:
-		cmd := m.handleEventModern(msg.ev)
+		cmd := m.handleEvent(msg.ev)
 		return m, cmd
 	case restoredMsg:
 		cmd := m.handleRestored(msg)
@@ -266,7 +266,7 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // line (they were laid out at the old width) and a deferred banner commit changed the buffer
 // — either needs a full rerender; a PURE height change only needs a size sync (the lines are
 // unchanged, so re-rendering the transcript is wasted work).
-func (m ModernScreen) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+func (m Screen) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	widthChanged := msg.Width != m.width
 	m.width, m.height = msg.Width, msg.Height
 	m.ready = true
@@ -287,7 +287,7 @@ func (m ModernScreen) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 // handleSystemReady commits the opening transcript once the frame has its first size. If
 // systemReadyMsg arrives before WindowSizeMsg the commit is deferred (startupPending) so the
 // banner renders in a real frame instead of at width 0.
-func (m *ModernScreen) handleSystemReady() tea.Cmd {
+func (m *Screen) handleSystemReady() tea.Cmd {
 	if m.startupCommitted {
 		return nil
 	}
@@ -306,7 +306,7 @@ func (m *ModernScreen) handleSystemReady() tea.Cmd {
 // Submit, no loop, never in the model's context). Unlike Screen's held-tail dance, the
 // viewport simply renders these committed entries directly, so there is no startup surface
 // to manage.
-func (m *ModernScreen) commitStartup() {
+func (m *Screen) commitStartup() {
 	if m.startupCommitted {
 		return
 	}
@@ -318,7 +318,7 @@ func (m *ModernScreen) commitStartup() {
 	}
 }
 
-// handleEventModern delegates one subscription event to the shared core (which routes it
+// handleEvent delegates one subscription event to the shared core (which routes it
 // through BOTH reducers, derives the primary turn status, and re-arms the reader) and then
 // re-renders the FOCUSED projection into the viewport, keeping the auto-follow tail pinned.
 // The turn-phase cue is unused in Stage 1 (a static status line; Task 9 threads the blink).
@@ -332,7 +332,7 @@ func (m *ModernScreen) commitStartup() {
 // tick) gives the reducer a real, second-granularity timestamp — so both the primary live
 // segment AND every subagent projection measure a genuine thinking span, deterministically
 // driven by injected event/tick times (no render-time wall clock).
-func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
+func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	ev = stampEphemeralClock(ev, m.now)
 	rearm, _ := m.sessionCore.handleEvent(ev)
 	m.trackTurnClock(ev)
@@ -370,7 +370,7 @@ func stampEphemeralClock(ev event.Event, clock time.Time) event.Event {
 // elapsed); any terminal (TurnDone/TurnFailed/TurnInterrupted) clears it. Both the primary
 // loop's turn events (via the core) and every subagent's (via the all-loops stream) reach
 // here, so every focusable loop's timer is tracked. Non-turn events are ignored.
-func (m *ModernScreen) trackTurnClock(ev event.Event) {
+func (m *Screen) trackTurnClock(ev event.Event) {
 	h := ev.EventHeader()
 	switch ev.(type) {
 	case event.TurnStarted:
@@ -389,7 +389,7 @@ func (m *ModernScreen) trackTurnClock(ev event.Event) {
 // maybeStartTick launches the 1s status-line tick chain, but only when a turn is active
 // AND no tick is already in flight — so a second concurrent TurnStarted never spawns a
 // second chain, and an idle session never ticks. Returns nil when a tick is unnecessary.
-func (m *ModernScreen) maybeStartTick() tea.Cmd {
+func (m *Screen) maybeStartTick() tea.Cmd {
 	if m.ticking || len(m.turnStartedAt) == 0 {
 		return nil
 	}
@@ -402,7 +402,7 @@ func (m *ModernScreen) maybeStartTick() tea.Cmd {
 // does NOT re-render the viewport: the transcript is unchanged, and the status line (which
 // carries the live elapsed) is recomposed by View every frame — so advancing the clock and
 // letting View redraw is the whole update.
-func (m *ModernScreen) handleTick(msg tickMsg) tea.Cmd {
+func (m *Screen) handleTick(msg tickMsg) tea.Cmd {
 	m.ticking = false
 	if msg.at.After(m.now) {
 		m.now = msg.at
@@ -417,7 +417,7 @@ func (m *ModernScreen) handleTick(msg tickMsg) tea.Cmd {
 // and View recomposes the status line from the new frame every render, so advancing the frame
 // and returning the reschedule is the whole update. Unlike Screen's blink it runs at EVERY
 // status (idle included), so the shimmer never freezes; the turn timer keeps its own 1s tick.
-func (m *ModernScreen) handleAnim() tea.Cmd {
+func (m *Screen) handleAnim() tea.Cmd {
 	if m.quitting {
 		return nil
 	}
@@ -446,7 +446,7 @@ func (m *ModernScreen) handleAnim() tea.Cmd {
 // (transcript+interaction+startup-flag reset, empty→no-op, err→notice) must stay identical;
 // only the presentation differs (rerender here vs flush there). An eventual shared
 // sessionCore.applyRestored is a deferred follow-up; until then, a fix here must land in both.
-func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
+func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	if msg.err != nil {
 		m.transcript = m.transcript.CommitError(msg.err)
 		m.rerender()
@@ -460,7 +460,7 @@ func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
 	m.transcript = msg.transcript
 	// The restore fold built a FRESH (default 1-line, background-free) interaction; re-apply
 	// the modern composer treatment so a cold-restored session keeps the 2-line gray panel.
-	m.interaction = modernizeComposer(msg.interaction)
+	m.interaction = styleComposer(msg.interaction)
 	m.rerender()
 	return nil
 }
@@ -468,7 +468,7 @@ func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
 // handleSubscribed installs the session-lifetime subscription via the core and starts the
 // reader. On error the core commits a fatal error entry the viewport re-renders; on success
 // it returns subNext, the single reader driving every subsequent event.
-func (m *ModernScreen) handleSubscribed(msg subscribedMsg) tea.Cmd {
+func (m *Screen) handleSubscribed(msg subscribedMsg) tea.Cmd {
 	cmd, present := m.sessionCore.applySubscribed(msg)
 	if present {
 		m.rerender()
@@ -479,7 +479,7 @@ func (m *ModernScreen) handleSubscribed(msg subscribedMsg) tea.Cmd {
 // handleSubClosed reacts to the reader observing a closed channel. A nil err is an
 // intentional Close (nothing to surface); a non-nil err (hub-forced loss) commits an error
 // entry the viewport re-renders.
-func (m *ModernScreen) handleSubClosed(msg subClosedMsg) tea.Cmd {
+func (m *Screen) handleSubClosed(msg subClosedMsg) tea.Cmd {
 	if m.sessionCore.applySubClosed(msg) {
 		m.rerender()
 	}
@@ -489,7 +489,7 @@ func (m *ModernScreen) handleSubClosed(msg subClosedMsg) tea.Cmd {
 // handleSubmitResult surfaces a fire-and-forget Submit outcome via the core. Success commits
 // nothing (the authoritative user row arrives from the loop's TurnStarted); a non-nil err
 // commits a faint error entry the viewport re-renders.
-func (m *ModernScreen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
+func (m *Screen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 	if m.sessionCore.applySubmitResult(msg) {
 		m.rerender()
 	}
@@ -499,7 +499,7 @@ func (m *ModernScreen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 // handleInterruptResult applies an Interrupt outcome via the core. On error it returns to
 // Running with a faint error entry the viewport re-renders; on success it stays Interrupting
 // until the loop's TurnInterrupted terminal lands Idle.
-func (m *ModernScreen) handleInterruptResult(msg interruptResultMsg) tea.Cmd {
+func (m *Screen) handleInterruptResult(msg interruptResultMsg) tea.Cmd {
 	if m.sessionCore.applyInterruptResult(msg) {
 		m.rerender()
 	}
@@ -508,7 +508,7 @@ func (m *ModernScreen) handleInterruptResult(msg interruptResultMsg) tea.Cmd {
 
 // handlePromptResult surfaces a bounded prompt-dispatch outcome via the core. A nil err is a
 // silent success; a non-nil err commits a faint error entry the viewport re-renders.
-func (m *ModernScreen) handlePromptResult(msg promptResultMsg) tea.Cmd {
+func (m *Screen) handlePromptResult(msg promptResultMsg) tea.Cmd {
 	if m.sessionCore.applyPromptResult(msg) {
 		m.rerender()
 	}
@@ -518,9 +518,9 @@ func (m *ModernScreen) handlePromptResult(msg promptResultMsg) tea.Cmd {
 // handleReopenResult applies a /clear reopen outcome. The core owns the transport ordering —
 // on error the old agent is kept and it returns Idle with an error entry the viewport
 // re-renders; on success it swaps in the fresh agent, resets the shared transport, and
-// re-subscribes with the INJECTED (all-loops) filter. ModernScreen then resets its own
+// re-subscribes with the INJECTED (all-loops) filter. Screen then resets its own
 // viewport/collapse/focus so no remnant of the old session survives the swap.
-func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
+func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	cmd, present := m.sessionCore.applyReopenResult(msg)
 	if present {
 		m.rerender()
@@ -544,7 +544,7 @@ func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 // prompt, Esc interrupts a running turn; (4) the viewport consumes ONLY its non-conflicting
 // nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
 // input — falls through to the composer.
-func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		// Latch quitting so the continuous anim tick chain self-terminates (handleAnim stops
@@ -611,7 +611,7 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // submit). Only uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
 // primary-loop submit path (mapAction → submit → Submit) is untouched.
-func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
@@ -640,7 +640,7 @@ func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 // (on a plain click) toggles the clicked entry's fold. A bar-region LEFT click focuses the
 // loop whose segment covers the column (barMouse → focusLoop). The status/box regions have no
 // mouse behavior (keys drive the composer/prompt).
-func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
+func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
 		return m.viewport.handleMouse(w)
 	}
@@ -665,7 +665,7 @@ func (m *ModernScreen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // that would render EMPTY (width <= 0) — HitTest's precondition: resolving a click against a
 // row the user never saw would be wrong. It is VIEW-ONLY — focusLoop repoints focus and
 // re-renders, never submitting/interrupting — so it always returns a nil command.
-func (m *ModernScreen) barMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
+func (m *Screen) barMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	click, ok := msg.(tea.MouseClickMsg)
 	if !ok || click.Button != tea.MouseLeft || m.width <= 0 {
 		return nil
@@ -686,7 +686,7 @@ func (m *ModernScreen) barMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 // content shows; and (3) re-renders the new projection (rerender pins to the just-set tail).
 // The whole viewport is a pure view over already-received, already-projected state, so this
 // is a re-render, never a re-subscribe.
-func (m *ModernScreen) focusLoop(loopID uuid.UUID) {
+func (m *Screen) focusLoop(loopID uuid.UUID) {
 	if loopID == m.focusedLoopID {
 		return
 	}
@@ -701,7 +701,7 @@ func (m *ModernScreen) focusLoop(loopID uuid.UUID) {
 // rule: a plain click (press+release with no intervening motion) on an entry's HEADER row
 // toggles just that entry's fold, while a drag is a text selection and never toggles. The
 // content region sits at row 0, so the global Y is already the viewport-local row.
-func (m *ModernScreen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
+func (m *Screen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	switch msg.(type) {
 	case tea.MouseClickMsg:
 		if mouse.Button == tea.MouseLeft {
@@ -729,12 +729,12 @@ func (m *ModernScreen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	return nil
 }
 
-// modernLayout is the frame's top-to-bottom region geometry, the SINGLE source both View
+// screenLayout is the frame's top-to-bottom region geometry, the SINGLE source both View
 // (which draws the regions) and regionAt (which hit-tests a mouse row) compute from, so a
 // drawn row and a hit-tested row can never disagree. Top to bottom: the content region
 // occupies rows [0, contentH); then the status line, a blank gap row, the bottom box, a
 // second blank gap row, and finally the active-loops bar at the very bottom.
-type modernLayout struct {
+type screenLayout struct {
 	contentH int // viewport content rows: region [0, contentH)
 	statusY  int // the status line row
 	gapTopY  int // the inert blank gap row between the status line and the box
@@ -757,7 +757,7 @@ type modernLayout struct {
 // drives the textarea's internal render/measure cache, so layout must run only on Bubble
 // Tea's single model goroutine (never concurrently — see the serial subtest note in the
 // tests).
-func (m ModernScreen) layout() modernLayout {
+func (m Screen) layout() screenLayout {
 	const statusH, barH, gapH = 1, 1, 1
 	boxH := lipgloss.Height(m.bottomBoxView())
 	if boxH < 1 {
@@ -772,7 +772,7 @@ func (m ModernScreen) layout() modernLayout {
 	boxTop := gapTopY + gapH
 	gapBotY := boxTop + boxH
 	barY := gapBotY + gapH
-	return modernLayout{
+	return screenLayout{
 		contentH: contentH,
 		statusY:  statusY,
 		gapTopY:  gapTopY,
@@ -783,13 +783,13 @@ func (m ModernScreen) layout() modernLayout {
 	}
 }
 
-// modernRegion is a frame region the mouse can fall in — the content viewport, the status
+// screenRegion is a frame region the mouse can fall in — the content viewport, the status
 // line, the bottom box, the loop bar, or an inert gap row — the discriminant handleMouse
 // routes on.
-type modernRegion uint8
+type screenRegion uint8
 
 const (
-	regionContent modernRegion = iota
+	regionContent screenRegion = iota
 	regionStatus
 	regionBar
 	regionBox
@@ -799,7 +799,7 @@ const (
 // regionAt maps a terminal row y to its frame region using the same layout View draws, so
 // mouse routing (content select/copy vs a bar focus click) matches what the user sees. The
 // two blank gap rows (and any row past the bar) are regionGap — inert, no mouse behavior.
-func (m ModernScreen) regionAt(y int) modernRegion {
+func (m Screen) regionAt(y int) screenRegion {
 	lay := m.layout()
 	switch {
 	case y < lay.contentH:
@@ -818,7 +818,7 @@ func (m ModernScreen) regionAt(y int) modernRegion {
 // contentWidth is the column budget the focused projection renders to — the full frame
 // width (the viewport draws no side gutter). A negative width (never in a real frame) floors
 // to 0 so the renderers stay well-defined.
-func (m ModernScreen) contentWidth() int {
+func (m Screen) contentWidth() int {
 	if m.width < 0 {
 		return 0
 	}
@@ -835,7 +835,7 @@ func (m ModernScreen) contentWidth() int {
 // in the transcript length: renderFocused re-renders every committed entry through glamour
 // (which builds a fresh renderer per block), which must NOT run per keystroke over a long
 // buffer.
-func (m *ModernScreen) resize() {
+func (m *Screen) resize() {
 	lay := m.layout()
 	m.viewport.SetSize(m.contentWidth(), lay.contentH)
 }
@@ -846,7 +846,7 @@ func (m *ModernScreen) resize() {
 // width change (a new width reflows every line). Keeping the viewport height tied to the
 // (variable) bottom chrome lets the mouse hit-test's row math (entryAt) agree with what View
 // drew, and the auto-follow tail stays pinned across the re-render.
-func (m *ModernScreen) rerender() {
+func (m *Screen) rerender() {
 	m.resize()
 	m.viewport.SetLines(m.renderFocused())
 }
@@ -862,7 +862,7 @@ func (m *ModernScreen) rerender() {
 // streaming live tail already sits exactly one blank below the last committed entry (one gap,
 // never two), so no special-casing is needed at the tail seam. Scrollback's renderEntry owns
 // its own spacing and is untouched.
-func (m ModernScreen) renderFocused() []renderedLine {
+func (m Screen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
 	var out []renderedLine
@@ -914,7 +914,7 @@ func blankSeparator(id displayID, lineCount int) renderedLine {
 // state (default collapsed → the one-line "│ thought for Nsec" summary), keyed on its committed
 // displayID (the live tail has none). A zero animState renders a static tail (Task 9 threads
 // the blink/spinner phase).
-func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
+func (m Screen) liveTailLines(live liveSeg) []renderedLine {
 	width := m.contentWidth()
 	calls := live.Calls
 	var pending []ToolCallView
@@ -952,12 +952,12 @@ const queuedTailEntryID displayID = ^displayID(0)
 // messages fired while a turn is still running — to viewport lines appended below the live
 // tail. It scopes the queue to the focused loop (QueuedInputsFor) so a subagent's queued
 // message never leaks under the primary view, and reuses the dim, "queued"-tagged
-// renderQueuedModern (the same styles.QueuedStyle faintness the scrollback affordance uses).
+// renderQueued (the faint styles.QueuedStyle rows).
 // Once a queued message's turn starts it commits as a real user row and drops from the queue
 // (startTurnUser → dropQueued), so it never renders both queued and committed. An empty queue
 // yields no lines.
-func (m ModernScreen) queuedTailLines() []renderedLine {
-	styled := renderQueuedModern(m.transcript.QueuedInputsFor(m.focusedLoopID), m.contentWidth())
+func (m Screen) queuedTailLines() []renderedLine {
+	styled := renderQueued(m.transcript.QueuedInputsFor(m.focusedLoopID), m.contentWidth())
 	if styled == "" {
 		return nil
 	}
@@ -982,14 +982,14 @@ func (m ModernScreen) queuedTailLines() []renderedLine {
 // non-focused loops. When that filter leaves nothing (nothing live and the focused loop absent
 // from the table), primaryBarEntry falls back to the primary so the bar still labels the
 // session; a brand-new session with no loops yet renders an empty bar (the pre-turn default).
-func (m ModernScreen) bar() loopBar {
+func (m Screen) bar() loopBar {
 	infos := m.transcript.loops()
 	gated := m.interaction.pendingGateLoops()
 	entries := activeBarEntries(infos, gated, m.focusedLoopID)
 	if len(entries) == 0 {
 		entries = primaryBarEntry(infos, gated, m.transcript.primaryLoopID)
 	}
-	return loopBar{entries: entries, focused: m.focusedLoopID, max: modernLoopBarCap}
+	return loopBar{entries: entries, focused: m.focusedLoopID, max: loopBarCap}
 }
 
 // activeBarEntries maps the loop table into bar entries, keeping only LIVE loops plus the
@@ -1021,14 +1021,14 @@ func primaryBarEntry(infos []loopInfo, gated map[uuid.UUID]bool, primary uuid.UU
 
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
 // or a prompt control when a prompt is active) via the shared surface primitive.
-func (m ModernScreen) bottomBoxView() string {
+func (m Screen) bottomBoxView() string {
 	return bottomBox(m.surfaceInputs())
 }
 
 // surfaceInputs builds the agent-free snapshot the shared bottom-box + status primitives
 // read: the interaction model, the FOCUSED loop's status + live signals, and the frame
 // dimensions.
-func (m ModernScreen) surfaceInputs() surfaceInputs {
+func (m Screen) surfaceInputs() surfaceInputs {
 	return surfaceInputs{
 		Interaction: m.interaction,
 		Status:      m.focusedStatus(),
@@ -1048,7 +1048,7 @@ func (m ModernScreen) surfaceInputs() surfaceInputs {
 // thinking…/streaming… from the same projection's live signals. This is a deliberately MINIMAL
 // "you are viewing loop X, and whether it is live" indication, NOT a full per-loop status
 // machine: Interrupting/Resetting are primary-only concerns and are never shown for a subagent.
-func (m ModernScreen) focusedStatus() Status {
+func (m Screen) focusedStatus() Status {
 	if m.focusedLoopID == m.transcript.primaryLoopID || m.focusedLoopID.IsZero() {
 		return m.status
 	}
@@ -1062,7 +1062,7 @@ func (m ModernScreen) focusedStatus() Status {
 // statusInputs snapshots the status signals for the FOCUSED loop: whether its live segment
 // is streaming narration or only thinking, and which prompt (if any) is active. The status
 // line reflects the focused loop's activity (design §Status line).
-func (m ModernScreen) statusInputs() statusInputs {
+func (m Screen) statusInputs() statusInputs {
 	_, live := m.transcript.projectionFor(m.focusedLoopID)
 	in := statusInputs{
 		streaming: live.Text != "",
@@ -1075,14 +1075,14 @@ func (m ModernScreen) statusInputs() statusInputs {
 	return in
 }
 
-// modernStatusLine is the focused loop's status line for the frame: the shared ANIMATED
+// statusLine is the focused loop's status line for the frame: the shared ANIMATED
 // gradient status label (label + dot flow with m.anim.frame — the same phase Screen threads,
 // advanced continuously by the anim tick so idle/waiting/thinking/streaming all shimmer) PLUS,
 // while the focused loop's turn is running, a faint live-elapsed suffix " (Ns)" / " (Nm Ss)".
 // Idle / no active turn → no suffix. The suffix is a single faint Render call so its "(2m 34s)"
 // text stays contiguous (substring-findable) rather than split by per-glyph styling, and it is
 // deliberately NOT part of the gradient so it reads as a quiet, static timer beside the shimmer.
-func (m ModernScreen) modernStatusLine() string {
+func (m Screen) statusLine() string {
 	line := renderStatusLine(m.focusedStatus(), m.statusInputs(), m.anim.frame)
 	if d, ok := m.turnElapsed(); ok {
 		line += styles.StatusStyle.Render(" (" + formatElapsed(d) + ")")
@@ -1097,7 +1097,7 @@ func (m ModernScreen) modernStatusLine() string {
 // clock less the event start time), floored at zero so a not-yet-arrived tick never shows a
 // negative span. A zero start (a restore/backlog with no streaming timestamps) reads as "no
 // timer" — mirroring formatThought's bare-"Thought" fallback.
-func (m ModernScreen) turnElapsed() (time.Duration, bool) {
+func (m Screen) turnElapsed() (time.Duration, bool) {
 	if m.focusedStatus() != StatusRunning {
 		return 0, false
 	}
@@ -1137,7 +1137,7 @@ func formatElapsed(d time.Duration) string {
 // per-frame fields the copy-while-scrolling design turns on), plus the composer's Kitty
 // keyboard request (see Screen.View for why). It returns an empty view until the first sized
 // frame (avoids a 0×0 first frame).
-func (m ModernScreen) View() tea.View {
+func (m Screen) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
 	}
@@ -1157,7 +1157,7 @@ func (m ModernScreen) View() tea.View {
 // the current layout even if the bottom chrome changed since the last Update-side
 // resize/rerender. Every line is width-clamped (truncate, never wrap) so no row exceeds the
 // frame width. The stacking order MUST match layout()/regionAt exactly.
-func (m ModernScreen) composeBody(lay modernLayout) string {
+func (m Screen) composeBody(lay screenLayout) string {
 	vp := m.viewport
 	vp.SetSize(m.contentWidth(), lay.contentH)
 
@@ -1171,7 +1171,7 @@ func (m ModernScreen) composeBody(lay modernLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
-	rows = append(rows, m.modernStatusLine())                      // status line
+	rows = append(rows, m.statusLine())                            // status line
 	rows = append(rows, "")                                        // inert gap: status → box
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
 	rows = append(rows, "")                                        // inert gap: box → bar
@@ -1179,5 +1179,5 @@ func (m ModernScreen) composeBody(lay modernLayout) string {
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
 }
 
-// compile-time assertion that ModernScreen is a tea.Model (Init/Update/View, value receiver).
-var _ tea.Model = ModernScreen{}
+// compile-time assertion that Screen is a tea.Model (Init/Update/View, value receiver).
+var _ tea.Model = Screen{}

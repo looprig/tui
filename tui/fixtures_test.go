@@ -15,7 +15,7 @@ import (
 // This file holds the package-wide test fixtures — the scriptable Agent/Subscription
 // doubles and the small pure helpers — shared by every *_test.go in package tui. They
 // live here (not co-located with any one shell) because they are shell-independent: a
-// fakeAgent drives sessionCore, ModernScreen, and the reducer/render unit tests alike.
+// fakeAgent drives sessionCore, Screen, and the reducer/render unit tests alike.
 
 // compile-time assertion that the test double satisfies the (widened) Agent
 // interface; if a method is added or its signature drifts, this fails to build.

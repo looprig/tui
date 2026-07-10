@@ -70,7 +70,7 @@ func (p *fakeProgram) Quit() {}
 
 // fakeHolder is a tea.Model that ALSO satisfies tui.AgentHolder, standing in for a final
 // model whose live agent Run's teardown must resolve via the AgentHolder interface rather
-// than the concrete ModernScreen — e.g. the fresh agent a /clear swapped in mid-session.
+// than the concrete Screen — e.g. the fresh agent a /clear swapped in mid-session.
 // Its Agent() returns a distinct agent so a test can prove teardown closes the FINAL model's
 // agent, not the initial one.
 type fakeHolder struct {
@@ -312,7 +312,7 @@ func TestRunProgramError(t *testing.T) {
 }
 
 // TestRunBuildsModernScreen proves Run wires the MODERN VIEWPORT as the design: the model
-// it hands the program seam is a tui.ModernScreen (NewModern), not the legacy scrollback
+// it hands the program seam is a tui.Screen (NewModern), not the legacy scrollback
 // Screen. Rev 3 dropped the --modern flag / env / RunOption, so every entry point that calls
 // Run now launches the viewport with no toggle.
 //
@@ -334,8 +334,8 @@ func TestRunBuildsModernScreen(t *testing.T) {
 	if got != exitOK {
 		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
 	}
-	if _, ok := captured.(tui.ModernScreen); !ok {
-		t.Fatalf("Run built %T, want tui.ModernScreen", captured)
+	if _, ok := captured.(tui.Screen); !ok {
+		t.Fatalf("Run built %T, want tui.Screen", captured)
 	}
 	if !closed {
 		t.Error("agent was not Closed at teardown")
@@ -343,7 +343,7 @@ func TestRunBuildsModernScreen(t *testing.T) {
 }
 
 // TestRunTeardownViaAgentHolder proves teardown resolves the agent to Close through the
-// tui.AgentHolder interface off the FINAL model — not the concrete ModernScreen and not the
+// tui.AgentHolder interface off the FINAL model — not the concrete Screen and not the
 // initially-constructed agent. The fake program returns a fakeHolder wrapping a DISTINCT agent
 // (as a /clear swap would), so Run must Close that final-model agent and leave the initial one
 // untouched.

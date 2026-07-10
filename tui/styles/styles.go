@@ -188,19 +188,19 @@ var AccentBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
 // AccentBarStyle bar on user rows, so the input reads as the same accent.
 var InputAccent = lipgloss.Color("#737373")
 
-// ModernPanelBg is the subtle dark-gray fill painted behind MODERN mode's user-message
+// PanelBg is the subtle dark-gray fill painted behind MODERN mode's user-message
 // rows and its composer panel — a quiet block that sets the user's own input apart from
 // the assistant narration without competing with the accent bar. It sits in the same
 // neutral family as AccentBarStyle's #737373 and is dark enough that both bold text and
 // the dim placeholder stay readable on a dark terminal. MODERN-ONLY: the scrollback rows
 // and the scrollback composer never paint a background (see BoxStyle's rationale) — the
 // fill is safe in the alt-screen viewport because it re-renders the whole frame each tick.
-var ModernPanelBg = lipgloss.Color("#303030")
+var PanelBg = lipgloss.Color("#303030")
 
 // UserBgStyle is the background-only style the modern gray fill is derived from (its SGR
 // open/close pair). It carries no foreground, so a filled row's own accent bar and markdown
 // keep their colors on top of the fill.
-var UserBgStyle = lipgloss.NewStyle().Background(ModernPanelBg)
+var UserBgStyle = lipgloss.NewStyle().Background(PanelBg)
 
 // SGR reset sequences a styled line may carry. glamour ends its spans with the long form
 // ("\x1b[0m"); lipgloss/x-ansi use the short form ("\x1b[m"). Both fully reset — INCLUDING
@@ -210,10 +210,10 @@ const (
 	sgrResetShort = "\x1b[m"
 )
 
-// modernBgOpen / modernBgReset are the SGR pair that turns the ModernPanelBg fill on and
+// bgOpen / bgReset are the SGR pair that turns the ModernPanelBg fill on and
 // off, derived ONCE from UserBgStyle so the color has a single source of truth and no
 // escape is hardcoded here.
-var modernBgOpen, modernBgReset = DeriveBackgroundSGR(ModernPanelBg)
+var bgOpen, bgReset = DeriveBackgroundSGR(PanelBg)
 
 // DeriveBackgroundSGR returns the SGR pair that turns a background fill of color bg on
 // (open) and off (reset). It renders a NUL sentinel through a background-only style
@@ -234,7 +234,7 @@ func DeriveBackgroundSGR(bg color.Color) (open, reset string) {
 // gray. See FillLineBackgroundWith for the fill semantics. MODERN-ONLY: scrollback never
 // fills a background (see BoxStyle).
 func FillLineBackground(line string, width int) string {
-	return FillLineBackgroundWith(line, width, modernBgOpen, modernBgReset)
+	return FillLineBackgroundWith(line, width, bgOpen, bgReset)
 }
 
 // FillLineBackgroundWith paints the fill whose SGR pair is (open, reset) behind one

@@ -190,7 +190,7 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 
 // NOTE: the old scrollback Screen's restore INTEGRATION tests (flush-once, live handoff,
 // read-error notice, new-session no-repaint, Init-triggers-restore) were removed when that
-// shell was archived. ModernScreen's equivalents live in modern_test.go —
+// shell was archived. Screen's equivalents live in modern_test.go —
 // TestModernHandleRestored, TestModernRestoreEmptyBacklogPreservesBanner, and
 // TestModernInitTriggersRestore. The shell-independent fold/reducer correctness stays here
 // (TestReplayBacklogSeam, TestRestoredMsgRepaintCorrectness, TestRestoreBacklogFoldsOffLoopOnce).

@@ -501,7 +501,7 @@ func TestFillLineBackgroundWith(t *testing.T) {
 func TestFillLineBackgroundModernPanel(t *testing.T) {
 	t.Parallel()
 
-	open, _ := DeriveBackgroundSGR(ModernPanelBg)
+	open, _ := DeriveBackgroundSGR(PanelBg)
 	if open == "" {
 		t.Fatal("DeriveBackgroundSGR(ModernPanelBg) returned an empty open")
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // sessionCore is the SHARED transport both TUI presentation shells embed: the
-// scrollback-first Screen and the modern viewport ModernScreen. It owns everything an
+// scrollback-first Screen and the modern viewport Screen. It owns everything an
 // event router must own — the agent wiring, the ONE session-lifetime subscription and
 // its lifecycle (stale/nil guards), the dispatch of each event into the transcript +
 // interaction reducers, the primary-loop turn status, the /clear reopen ordering, and
@@ -29,7 +29,7 @@ import (
 // Presentation stays in the embedding shell: the core's methods MUTATE the shared
 // transport state and return the TRANSPORT command (re-arm, submit, reopen, …) plus,
 // for the paths that commit an out-of-band entry, a boolean signal telling the shell to
-// present it (scrollback flush for Screen, viewport re-render for ModernScreen). The
+// present it (scrollback flush for Screen, viewport re-render for Screen). The
 // core never touches scrollback, held tails, animation, or a viewport.
 type sessionCore struct {
 	agent     Agent
@@ -47,7 +47,7 @@ type sessionCore struct {
 	// agent. It is INJECTED at construction so each presentation shell scopes its
 	// subscription without the transport hard-coding a filter: the scrollback Screen
 	// passes defaultLoopFilter (primary-loop Ephemeral, all-loops Enduring — the single-
-	// loop default), the modern ModernScreen passes allLoopsFilter (all-loops Ephemeral,
+	// loop default), the modern Screen passes allLoopsFilter (all-loops Ephemeral,
 	// so every focused subagent projection receives its live token stream instead of
 	// starving at Enduring StepDone granularity). subscribe reads it at every subscribe
 	// point — startup AND the /clear re-subscribe — so a /clear in modern mode re-attaches
@@ -69,7 +69,7 @@ type eventFilterFunc func(Agent) event.EventFilter
 // pre-refactor subscription behavior (the primary-only Ephemeral scope its tests gate).
 func defaultLoopFilter(a Agent) event.EventFilter { return DefaultEventFilter(a.PrimaryLoopID()) }
 
-// allLoopsFilter is the modern ModernScreen's injected filter: the all-loops
+// allLoopsFilter is the modern Screen's injected filter: the all-loops
 // AllLoopsEventFilter, so every loop's live Ephemeral stream is delivered and a focused
 // subagent projection is never starved. It ignores the agent (neither scope discriminates
 // by loop).
@@ -103,7 +103,7 @@ func (c sessionCore) subscribe() tea.Cmd {
 
 // Agent returns the live agent. cmd/swe uses this for a bounded backstop Close of
 // whichever agent /clear may have swapped in. It is a value receiver so it promotes
-// into every embedding shell's method set — both Screen and ModernScreen satisfy the
+// into every embedding shell's method set — both Screen and Screen satisfy the
 // composition root's agentHolder through this one definition.
 func (c sessionCore) Agent() Agent { return c.agent }
 

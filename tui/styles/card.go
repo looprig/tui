@@ -43,4 +43,4 @@ var CardHintStyle = lipgloss.NewStyle().Faint(true)
 // dialog look) rather than only the ▸ cursor. The fill reuses the neutral panel gray
 // so it stays readable on a dark terminal; the caller sets the row Width so the fill
 // spans the full card body.
-var CardSelectedStyle = lipgloss.NewStyle().Bold(true).Background(ModernPanelBg)
+var CardSelectedStyle = lipgloss.NewStyle().Bold(true).Background(PanelBg)
