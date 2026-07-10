@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // uiActionKind tags a uiAction. It is a closed enum: the interactionModel

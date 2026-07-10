@@ -9,9 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/core/uuid"
 )
 
 // TestSubNext covers the continuous reader: each staged event is delivered as an

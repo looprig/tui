@@ -8,10 +8,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/core/uuid"
 )
 
 // foldBacklog folds backlog through the SAME pure reducers the background fold uses,

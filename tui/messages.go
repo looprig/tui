@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/event"
 )
 
 // eventMsg carries one event pulled from the session-lifetime subscription.
