@@ -880,6 +880,12 @@ func (m ModernScreen) renderFocused() []renderedLine {
 		}
 	}
 	out = append(out, m.liveTailLines(live)...)
+	// The focused loop's pending queued inputs render LAST — below the live tail, where the
+	// next turn's input will land — so a user firing several messages mid-turn sees them
+	// stacked. They drop the instant each one's turn starts (startTurnUser commits the real
+	// user row and dropQueued removes the affordance), so a queued row never duplicates its
+	// committed row.
+	out = append(out, m.queuedTailLines()...)
 	return out
 }
 
@@ -930,6 +936,35 @@ func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
 	out := make([]renderedLine, len(lines))
 	for i, ln := range lines {
 		out[i] = renderedLine{styled: ln, plain: plainFromStyled(ln), entry: liveTailEntryID, sub: i}
+	}
+	return out
+}
+
+// queuedTailEntryID is the reserved provenance id every queued-affordance line carries. Like
+// the live tail (liveTailEntryID) a queued row is NOT a committed entry; using a distinct
+// sentinel — the max displayID the incrementing allocator (starting at 1) never reaches —
+// keeps queued rows from colliding with the live tail's (entry, sub) selection identity OR a
+// committed entry's collapse-click, so a stray click on a queued row toggles an id no entry
+// owns (a harmless no-op) and a selection spanning queued rows resolves unambiguously.
+const queuedTailEntryID displayID = ^displayID(0)
+
+// queuedTailLines renders the FOCUSED loop's pending queued-input affordances — the user
+// messages fired while a turn is still running — to viewport lines appended below the live
+// tail. It scopes the queue to the focused loop (QueuedInputsFor) so a subagent's queued
+// message never leaks under the primary view, and reuses the dim, "queued"-tagged
+// renderQueuedModern (the same styles.QueuedStyle faintness the scrollback affordance uses).
+// Once a queued message's turn starts it commits as a real user row and drops from the queue
+// (startTurnUser → dropQueued), so it never renders both queued and committed. An empty queue
+// yields no lines.
+func (m ModernScreen) queuedTailLines() []renderedLine {
+	styled := renderQueuedModern(m.transcript.QueuedInputsFor(m.focusedLoopID), m.contentWidth())
+	if styled == "" {
+		return nil
+	}
+	lines := strings.Split(styled, "\n")
+	out := make([]renderedLine, len(lines))
+	for i, ln := range lines {
+		out[i] = renderedLine{styled: ln, plain: plainFromStyled(ln), entry: queuedTailEntryID, sub: i}
 	}
 	return out
 }

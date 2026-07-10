@@ -310,14 +310,20 @@ func (s liveSeg) empty() bool {
 }
 
 // queuedInput is a transient affordance for one submitted-but-not-yet-committed
-// user message: its submit correlation id, the blocks the TUI remembers from the
-// submit (InputQueued carries no Message, so the affordance text comes from here),
-// and a shown flag the loop's InputQueued event flips on. It is NOT a committed
-// transcript entry — it is a pending hint rendered below the live tail until the
-// authoritative TurnStarted/TurnFoldedInto commits the real user row (or
-// InputCancelled/TurnRejected drops it).
+// user message: its submit correlation id, the loop it was queued for (stamped from
+// the InputQueued event so the modern per-loop view never shows a subagent's queue
+// under another loop), the blocks the TUI remembers from the submit (InputQueued
+// carries no Message, so the affordance text comes from here), and a shown flag the
+// loop's InputQueued event flips on. It is NOT a committed transcript entry — it is a
+// pending hint rendered below the live tail until the authoritative
+// TurnStarted/TurnFoldedInto commits the real user row (or InputCancelled/TurnRejected
+// drops it). loopID is authoritative only once shown is set (markQueued stamps both
+// from the same InputQueued event); a submit-first placeholder carries a zero loopID
+// until its InputQueued arrives, and QueuedInputs/QueuedInputsFor skip a still-unshown
+// entry, so a rendered affordance always has its loop.
 type queuedInput struct {
 	inputID uuid.UUID
+	loopID  uuid.UUID
 	blocks  []content.Block
 	shown   bool
 }
@@ -513,7 +519,7 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.TurnFoldedInto:
 		m.startTurnUser(ev.LoopID, ev.Cause.LoopID, ev.Cause.CommandID, ev.Message)
 	case event.InputQueued:
-		m.markQueued(ev.Cause.CommandID)
+		m.markQueued(ev.Cause.CommandID, ev.LoopID)
 	case event.InputCancelled:
 		m.dropQueued(ev.Cause.CommandID)
 	case event.TurnRejected:
@@ -735,6 +741,38 @@ func (m transcriptModel) QueuedInputs() [][]content.Block {
 	return out
 }
 
+// QueuedInputsFor is QueuedInputs scoped to a single loop: it returns, in submit order,
+// the blocks of every ready queued affordance (shown AND carrying remembered blocks)
+// whose target loop is loopID. It is the modern viewport's per-loop queue read — a
+// submit while focused on a subagent queues onto THAT loop (Stage 2), so its affordance
+// must show under the subagent's view and NOT leak under the primary. The loop match
+// folds projectionFor's primary alias (the zero id and the primary loop id name the same
+// loop), so a primary-focused view shows both a single-loop-default zero-stamped
+// affordance and a primary-id-stamped one. The returned slice is a fresh copy, so a
+// caller cannot reach the model's internal queue.
+func (m transcriptModel) QueuedInputsFor(loopID uuid.UUID) [][]content.Block {
+	var out [][]content.Block
+	for _, q := range m.queued {
+		if q.shown && q.blocks != nil && m.canonLoop(q.loopID) == m.canonLoop(loopID) {
+			out = append(out, q.blocks)
+		}
+	}
+	return out
+}
+
+// canonLoop folds the zero loop id onto the primary loop id so the two representations
+// of "the primary loop" compare equal — the same primary-alias rule projectionFor
+// applies (loopID == primaryLoopID || loopID.IsZero()). A non-zero, non-primary id is
+// returned unchanged. It is the loop-identity equality used to scope a per-loop queue
+// (QueuedInputsFor): a queued affordance the primary loop stamped (or a single-loop
+// default zero stamp) matches a primary-focused view and no other.
+func (m transcriptModel) canonLoop(id uuid.UUID) uuid.UUID {
+	if id.IsZero() {
+		return m.primaryLoopID
+	}
+	return id
+}
+
 // startTurnUser commits the authoritative user row for a turn-start event
 // (TurnStarted/TurnFoldedInto) and drops the matching queued affordance. It
 // commits a kindUser row ONLY for a GENUINE PRIMARY-loop user turn — ALL THREE must
@@ -755,22 +793,24 @@ func (m *transcriptModel) startTurnUser(loopID, triggeredBy, inputID uuid.UUID, 
 	m.dropQueued(inputID)
 }
 
-// markQueued reveals the queued affordance for inputID (InputQueued boundary). If
-// no entry exists yet (InputQueued raced ahead of RecordSubmit) it creates a
-// shown-but-blockless placeholder so the affordance appears the instant the
-// remembered blocks land via RecordSubmit; until then QueuedInputs skips it. It
-// rebuilds the slice rather than mutating a shared backing array (value-copy
-// contract).
-func (m *transcriptModel) markQueued(inputID uuid.UUID) {
+// markQueued reveals the queued affordance for inputID (InputQueued boundary) and
+// stamps the loop it was queued for (loopID, the InputQueued event's producing loop)
+// so the per-loop modern view can scope its queue. If no entry exists yet (InputQueued
+// raced ahead of RecordSubmit) it creates a shown-but-blockless placeholder — already
+// carrying its loopID — so the affordance appears the instant the remembered blocks
+// land via RecordSubmit; until then QueuedInputs/QueuedInputsFor skip it. It rebuilds
+// the slice rather than mutating a shared backing array (value-copy contract).
+func (m *transcriptModel) markQueued(inputID, loopID uuid.UUID) {
 	next := append([]queuedInput(nil), m.queued...)
 	for i := range next {
 		if next[i].inputID == inputID {
 			next[i].shown = true
+			next[i].loopID = loopID
 			m.queued = next
 			return
 		}
 	}
-	m.queued = append(next, queuedInput{inputID: inputID, shown: true})
+	m.queued = append(next, queuedInput{inputID: inputID, loopID: loopID, shown: true})
 }
 
 // dropQueued removes the queued affordance for inputID, if present. It rebuilds the

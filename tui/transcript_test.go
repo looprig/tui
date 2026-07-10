@@ -1451,6 +1451,83 @@ func TestTranscriptQueuedAffordance(t *testing.T) {
 	})
 }
 
+// queuedFor builds an InputQueued event correlating submit id, produced by loopID —
+// the per-loop stamp markQueued records so QueuedInputsFor can scope a loop's queue.
+func queuedFor(id, loopID uuid.UUID) event.Event {
+	return event.InputQueued{Header: event.Header{
+		Coordinates: identity.Coordinates{LoopID: loopID},
+		Cause:       identity.Cause{CommandID: id},
+	}}
+}
+
+// blockTextsOf returns the first-text-block text of each queued message, in order.
+func blockTextsOf(msgs [][]content.Block) []string {
+	var out []string
+	for _, b := range msgs {
+		out = append(out, blockText(b[0]))
+	}
+	return out
+}
+
+// TestTranscriptQueuedInputsForLoop locks the per-loop scoping of the queued affordance:
+// QueuedInputsFor returns only the inputs queued on the given loop (in submit order), so a
+// subagent's queued message never leaks under the primary view and vice versa; the unscoped
+// QueuedInputs still returns every queued input (scrollback); and when a queued input's turn
+// starts it drops from its loop's queue without disturbing another loop's queue.
+func TestTranscriptQueuedInputsForLoop(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	idA := callID(0x11)
+	idB := callID(0x12)
+	idC := callID(0x13)
+
+	m := transcriptModel{primaryLoopID: primary}
+	// Two inputs queued on the primary loop; one on a subagent loop.
+	m = m.RecordSubmit(idA, userBlocks("primary one"))
+	m = m.ApplyEvent(queuedFor(idA, primary))
+	m = m.RecordSubmit(idB, userBlocks("primary two"))
+	m = m.ApplyEvent(queuedFor(idB, primary))
+	m = m.RecordSubmit(idC, userBlocks("sub one"))
+	m = m.ApplyEvent(queuedFor(idC, sub))
+
+	joined := func(s []string) string { return strings.Join(s, "|") }
+
+	// The primary view shows only its own two, in submit order — no subagent leak.
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(primary))), "primary one|primary two"; got != want {
+		t.Errorf("QueuedInputsFor(primary) = %q, want %q", got, want)
+	}
+	// The subagent view shows only the subagent's one — no primary leak.
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(sub))), "sub one"; got != want {
+		t.Errorf("QueuedInputsFor(sub) = %q, want %q", got, want)
+	}
+	// The primary alias: focusing the zero id (single-loop default) resolves to the primary.
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(uuid.UUID{}))), "primary one|primary two"; got != want {
+		t.Errorf("QueuedInputsFor(zero) = %q, want the primary's queue %q", got, want)
+	}
+	// The unscoped read (scrollback) still returns all three.
+	if got := len(m.QueuedInputs()); got != 3 {
+		t.Errorf("QueuedInputs() = %d, want 3 (unscoped)", got)
+	}
+
+	// The primary's first queued input's turn starts: it drops from the primary queue (and
+	// commits its real user row once) — no duplicate — and the subagent queue is untouched.
+	m = m.ApplyEvent(event.TurnStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: idA}},
+		Message: userMsg("primary one"),
+	})
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(primary))), "primary two"; got != want {
+		t.Errorf("QueuedInputsFor(primary) after dequeue = %q, want %q", got, want)
+	}
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(sub))), "sub one"; got != want {
+		t.Errorf("QueuedInputsFor(sub) after primary dequeue = %q, want %q (untouched)", got, want)
+	}
+	if got := kindUserCount(m); got != 1 {
+		t.Errorf("kindUser rows = %d, want exactly 1 (promoted once, no duplicate)", got)
+	}
+}
+
 // TestTranscriptInputCancelled locks that InputCancelled drops the queued affordance
 // and commits NO row — a retracted/returned input simply disappears from the pending
 // area.

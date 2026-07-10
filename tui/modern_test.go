@@ -66,6 +66,18 @@ func containsPlain(lines []renderedLine, sub string) bool {
 	return strings.Contains(plainAll(lines), sub)
 }
 
+// queuedLines returns the viewport lines carrying the queued-affordance provenance
+// (queuedTailEntryID) — the modern per-loop queued rows rendered below the live tail.
+func queuedLines(lines []renderedLine) []renderedLine {
+	var out []renderedLine
+	for _, l := range lines {
+		if l.entry == queuedTailEntryID {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // TestModernUpdateRoutesEventToTranscriptAndViewport pins the shell's core wiring: an event
 // routed through Update reaches the embedded sessionCore's transcript AND re-renders the
 // focused projection into the viewport's lines.
@@ -2170,5 +2182,78 @@ func TestModernSelectionSpansBlankSeparator(t *testing.T) {
 
 	if got, want := vp.SelectedText(), "A\n\nB"; got != want {
 		t.Errorf("SelectedText across the gap = %q, want %q (the blank contributes the gap newline)", got, want)
+	}
+}
+
+// TestModernRendersQueuedInputs is the user-facing assertion: while a turn runs, the messages a
+// user fires stack up as visible, faint, "queued"-marked rows in the modern viewport (they were
+// invisible before). It also locks the no-duplicate rule — once a queued message's turn starts it
+// commits as a real user row and stops showing as queued.
+func TestModernRendersQueuedInputs(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	// A turn is running on the primary loop (no user row — just an active turn).
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+
+	// The user fires three messages mid-turn; each records its submit (submitResultMsg) then the
+	// loop's InputQueued reveals it — the real fire-and-forget order.
+	msgs := []struct {
+		id   uuid.UUID
+		text string
+	}{
+		{callID(0x21), "first queued"},
+		{callID(0x22), "second queued"},
+		{callID(0x23), "third queued"},
+	}
+	for _, q := range msgs {
+		m, _ = updateModern(t, m, submitResultMsg{inputID: q.id, blocks: userBlocks(q.text)})
+		m = feedModern(t, m, queuedFor(q.id, primary))
+	}
+
+	// All three render as queued rows, in submit order, each faint (QueuedStyle) and marked queued.
+	rows := queuedLines(m.viewport.lines)
+	if len(rows) != len(msgs) {
+		t.Fatalf("queued rows = %d, want %d\nviewport:\n%s", len(rows), len(msgs), plainAll(m.viewport.lines))
+	}
+	for i, q := range msgs {
+		if !strings.Contains(rows[i].plain, q.text) {
+			t.Errorf("queued row %d plain = %q, want to contain %q", i, rows[i].plain, q.text)
+		}
+		if !strings.Contains(rows[i].plain, modernQueuedTag) {
+			t.Errorf("queued row %d plain = %q, want the %q marker", i, rows[i].plain, modernQueuedTag)
+		}
+		if !strings.Contains(rows[i].styled, "\x1b[2m") { // SGR 2 = faint, styles.QueuedStyle
+			t.Errorf("queued row %d not faint (QueuedStyle); styled = %q", i, rows[i].styled)
+		}
+	}
+
+	// Dequeue the first: its turn starts, committing the authoritative user row. It must stop
+	// showing as queued (no duplicate) while the other two remain queued.
+	m = feedModern(t, m, event.TurnStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: msgs[0].id}},
+		Message: userMsg("first queued"),
+	})
+	rows = queuedLines(m.viewport.lines)
+	if len(rows) != 2 {
+		t.Fatalf("queued rows after dequeue = %d, want 2\nviewport:\n%s", len(rows), plainAll(m.viewport.lines))
+	}
+	for _, l := range rows {
+		if strings.Contains(l.plain, "first queued") {
+			t.Errorf("dequeued message still shown as queued (duplicate): %q", l.plain)
+		}
+	}
+	// It now appears as a committed (non-queued, non-live-tail) user row instead.
+	committed := false
+	for _, l := range m.viewport.lines {
+		if l.entry != queuedTailEntryID && l.entry != liveTailEntryID && strings.Contains(l.plain, "first queued") {
+			committed = true
+		}
+	}
+	if !committed {
+		t.Errorf("dequeued message not committed as a user row; viewport:\n%s", plainAll(m.viewport.lines))
 	}
 }
