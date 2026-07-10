@@ -241,6 +241,11 @@ func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 // re-renders; the live Subscribe path attaches separately (handleSubscribed) and, since cold
 // restore comes up idle, live events only follow a user Submit — no backlog/live overlap, no
 // dedup. The startup flags are reset so a deferred banner does not later overwrite the counter.
+//
+// KEEP IN SYNC WITH Screen.handleRestored (tui/restore.go) — the restore install
+// (transcript+interaction+startup-flag reset, empty→no-op, err→notice) must stay identical;
+// only the presentation differs (rerender here vs flush there). An eventual shared
+// sessionCore.applyRestored is a deferred follow-up; until then, a fix here must land in both.
 func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
 	if msg.err != nil {
 		m.transcript = m.transcript.CommitError(msg.err)

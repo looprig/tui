@@ -197,6 +197,12 @@ func restoreBacklogCmd(ctx context.Context, agent Agent, primaryLoopID uuid.UUID
 // ONCE via the print-once engine. The live Subscribe path is attached separately
 // (handleSubscribed) and, since cold restore comes up idle, live events only follow a
 // user Submit — so there is no backlog/live overlap and no dedup is needed.
+//
+// KEEP IN SYNC WITH ModernScreen.handleRestored (tui/modern.go) — the restore install
+// (transcript+interaction+startup-flag reset, empty→no-op, err→notice) must stay identical;
+// only the presentation differs (flush here vs rerender there, plus this shell's scrollback-
+// only startupEntryIDs reset). An eventual shared sessionCore.applyRestored is a deferred
+// follow-up; until then, a fix to the install logic here must land in both.
 func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	if msg.err != nil {
 		m.transcript = m.transcript.CommitError(msg.err)

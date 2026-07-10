@@ -860,15 +860,6 @@ func TestModernHandleRestored(t *testing.T) {
 			},
 		},
 		{
-			name:    "new session (empty backlog) is a no-op",
-			backlog: nil,
-			check: func(t *testing.T, m ModernScreen) {
-				if len(m.transcript.committed) != 0 {
-					t.Errorf("empty backlog committed %d entries, want 0 (no repaint for a new session)", len(m.transcript.committed))
-				}
-			},
-		},
-		{
 			name:   "read failure surfaces a faint error notice",
 			replay: errors.New("replay read"),
 			check: func(t *testing.T, m ModernScreen) {
@@ -901,6 +892,53 @@ func feedRestored(t *testing.T, m ModernScreen, msg restoredMsg) ModernScreen {
 	t.Helper()
 	m, _ = updateModern(t, m, msg)
 	return m
+}
+
+// TestModernRestoreEmptyBacklogPreservesBanner proves the real contract of the empty-backlog
+// guard (the load-bearing `if len(msg.transcript.committed) == 0 { return nil }` early-return):
+// a NEW session that has ALREADY committed its opening banner must NOT have that banner
+// discarded — nor the displayID counter reset — when the empty restoredMsg arrives. Installing
+// the empty fold wholesale (without the guard) would clobber the banner; asserting the banner
+// entry survives UNCHANGED (same id + text + count) makes the guard load-bearing under test.
+func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xAA)
+	agent := &fakeAgent{primaryLoopID: primary, backlog: nil}
+	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateModern(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
+
+	if len(m.transcript.committed) == 0 {
+		t.Fatal("precondition: opening banner not committed before the empty-backlog restore")
+	}
+	bannerLen := len(m.transcript.committed)
+	bannerID := m.transcript.committed[0].ID
+	bannerText := committedText(m.transcript.committed[0])
+	if !strings.Contains(bannerText, "swe") {
+		t.Fatalf("precondition: banner entry = %q, want the agent banner text", bannerText)
+	}
+
+	// The empty (new-session) fold must commit nothing itself...
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
+	if msg.err != nil {
+		t.Fatalf("empty-backlog restoredMsg err = %v, want nil", msg.err)
+	}
+	if len(msg.transcript.committed) != 0 {
+		t.Fatalf("empty-backlog fold committed = %d, want 0", len(msg.transcript.committed))
+	}
+
+	// ...and applying it must leave the already-committed banner untouched (the guard).
+	m = feedRestored(t, m, msg)
+	if len(m.transcript.committed) != bannerLen {
+		t.Errorf("committed = %d after empty restore, want %d (banner must survive)", len(m.transcript.committed), bannerLen)
+	}
+	if m.transcript.committed[0].ID != bannerID {
+		t.Errorf("banner entry id = %v after empty restore, want %v unchanged (displayID counter must not reset)", m.transcript.committed[0].ID, bannerID)
+	}
+	if got := committedText(m.transcript.committed[0]); got != bannerText {
+		t.Errorf("banner entry text = %q after empty restore, want %q unchanged", got, bannerText)
+	}
 }
 
 // TestModernBarGateMarker pins the "!" gate marker without focus steal: a pending prompt on a
