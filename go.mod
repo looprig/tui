@@ -99,10 +99,6 @@ require (
 // (published tags lag). At release: drop this replace and pin a real looprig tag.
 replace github.com/looprig/harness => ../harness
 
-// The TUI requires the ciram-co bubbletea fork for the Kitty keyboard protocol
-// (true Shift+Enter). Copied verbatim from looprig/go.mod — MUST stay in sync.
-replace charm.land/bubbletea/v2 => ../bubbletea-fork
-
 replace github.com/looprig/core => ../core
 
 replace github.com/looprig/inference => ../inference

@@ -6,7 +6,7 @@ charm.land/bubbles/v2/internal/runeutil
 charm.land/bubbles/v2/key
 charm.land/bubbles/v2/textarea
 charm.land/bubbles/v2/viewport
-# charm.land/bubbletea/v2 v2.0.7 => ../bubbletea-fork
+# charm.land/bubbletea/v2 v2.0.7
 ## explicit; go 1.25.0
 charm.land/bubbletea/v2
 # charm.land/glamour/v2 v2.0.1
@@ -216,7 +216,6 @@ github.com/looprig/core/uuid
 ## explicit; go 1.26.4
 github.com/looprig/harness/pkg/event
 github.com/looprig/harness/pkg/gate
-github.com/looprig/harness/pkg/hub
 github.com/looprig/harness/pkg/identity
 github.com/looprig/harness/pkg/tool
 # github.com/lucasb-eyer/go-colorful v1.4.0
@@ -797,6 +796,5 @@ honnef.co/go/tools/stylecheck/st1022
 honnef.co/go/tools/stylecheck/st1023
 honnef.co/go/tools/unused
 # github.com/looprig/harness => ../harness
-# charm.land/bubbletea/v2 => ../bubbletea-fork
 # github.com/looprig/core => ../core
 # github.com/looprig/inference => ../inference
