@@ -123,33 +123,37 @@ var permissionScopeHints = []scopeHint{
 	{tool.ScopeWorkspace, "[w] workspace"},
 }
 
-// renderPermissionBox renders the compact permission control: an emphasised box
-// headed "Approve <ToolName>?" whose body lists ONLY the offered scope keys (y/s/w)
-// plus the always-present [n] deny. When pending > 1 a faint "(+N more pending)"
-// note trails the box. It consumes the view-model only — no agent, no mutation.
+// renderPermissionBox renders the permission gate as a card: a bordered, padded box
+// with a bold "Approve <ToolName>?" title, the request description as its body, and a
+// footer row of key hints listing ONLY the offered scope keys (y/s/w) plus the
+// always-present [n] deny. When pending > 1 a faint "(+N more pending)" note trails the
+// card. It consumes the view-model only — no agent, no mutation. The interaction
+// contract is unchanged (same keys, same offered-scope derivation, same pending note);
+// only the visual framing is the new card.
 func renderPermissionBox(p prompt, width, pending int) string {
-	keys := make([]string, 0, len(permissionScopeHints)+1)
+	textW := cardTextWidth(width)
+	title := styles.CardTitleStyle.Render("Approve " + p.ToolName + "?")
+	body := ""
+	if p.Description != "" {
+		body = strings.Join(wrapToWidth(p.Description, textW), "\n")
+	}
+	hints := make([]string, 0, len(permissionScopeHints)+1)
 	for _, h := range permissionScopeHints {
 		if p.offersScope(h.scope) {
-			keys = append(keys, h.label)
+			hints = append(hints, styleKeyHint(h.label))
 		}
 	}
-	keys = append(keys, "[n] deny") // deny is always offered (fail-secure)
-	header := styles.PromptHeaderStyle.Render("Approve " + p.ToolName + "?")
-	rows := make([]string, 0, 2)
-	if p.Description != "" {
-		rows = append(rows, strings.Join(wrapToWidth(p.Description, promptInnerWidth(width)), "\n"))
-	}
-	rows = append(rows, strings.Join(keys, "   "))
-	body := strings.Join(rows, "\n")
-	return promptBox(header, body, width, pending)
+	hints = append(hints, styleKeyHint("[n] deny")) // deny is always offered (fail-secure)
+	footer := strings.Join(hints, "  ")
+	return cardFrame(cardSections(title, body, footer), width, pending)
 }
 
-// renderAskUserBox renders an AskUser prompt control. With choices it shows the
+// renderAskUserBox renders an AskUser prompt as a card. With choices it shows the
 // numbered list (a window scrolling with selected so a high row stays visible), the
-// ▸ cursor, an [o] other escape hatch and a key legend; with no choices it renders
-// the free-text variant (the question above the reused answer field, no list/[o]).
-// height bounds the choice window; width wraps the body. Pure: view-model only.
+// ▸ cursor with the selected row highlighted, an [o] other escape hatch and a key
+// legend; with no choices it renders the free-text variant (the question above the
+// reused answer field, no list/[o]). height bounds the choice window; width sizes the
+// card. Pure: view-model only.
 func renderAskUserBox(p prompt, width, height, pending int) string {
 	if p.freeText {
 		return renderFreeTextBox(p, width, pending)
@@ -157,44 +161,56 @@ func renderAskUserBox(p prompt, width, height, pending int) string {
 	return renderChoiceBox(p, width, height, pending)
 }
 
-// renderFreeTextBox renders the free-text answer control: a box headed "answer"
-// whose body is the (width-wrapped) question. The actual editor is the reused
-// composer placed by the surface in modeAnswerPrompt — this control is the framing.
+// renderFreeTextBox renders the free-text answer card: a bold "answer" title, the
+// (width-wrapped) question as its body, and a faint submit hint footer. The actual
+// editor is the reused composer placed by the surface below this card in
+// modeAnswerPrompt — the card is the framing.
 func renderFreeTextBox(p prompt, width, pending int) string {
-	header := styles.PromptHeaderStyle.Render("answer")
-	body := strings.Join(wrapToWidth(p.Question, promptInnerWidth(width)), "\n")
-	return promptBox(header, body, width, pending)
+	textW := cardTextWidth(width)
+	title := styles.CardTitleStyle.Render("answer")
+	body := strings.Join(wrapToWidth(p.Question, textW), "\n")
+	footer := styles.CardHintStyle.Render(freeTextLegend)
+	return cardFrame(cardSections(title, body, footer), width, pending)
 }
 
-// choiceLegend is the key hint shown beneath a choice list.
-const choiceLegend = "↑/↓ select · enter answer · 1–9 quick · o other · esc"
+// choiceLegend is the muted key legend shown at the foot of a choice card. It keeps
+// the "↑/↓ select" lead so the up/down affordance reads first; enter answers, 1–9 are
+// quick accelerators, esc interrupts.
+const choiceLegend = "↑/↓ select · enter · 1–9 · esc"
+
+// freeTextLegend is the muted key legend shown at the foot of a free-text card.
+const freeTextLegend = "enter submit · esc"
 
 // choicePrefixWidth is the 2-cell cursor/indent prefix on every choice row
 // ("▸ " when selected, "  " otherwise); the choice text wraps in the remaining
 // columns.
 const choicePrefixWidth = 2
 
-// choiceChromeRows is the number of non-choice rows the box always reserves
-// inside its height budget: the "[o] other" hint and the key legend.
+// choiceChromeRows is the number of footer rows the choice card reserves inside its
+// height budget: the "[o] other" hint and the key legend. Only these two rows count
+// against the choice-window capacity — the title, blank separators and border are
+// extra card chrome the auto-measured bottom box absorbs.
 const choiceChromeRows = 2
 
-// renderChoiceBox renders the numbered-choice control: the visible window of
-// choices (scrolled to keep selected in view), the ▸ cursor on the selected row,
-// the [o] other hint and the key legend, headed "<Question> · choice n/total".
+// renderChoiceBox renders the numbered-choice card: a bold "<Question> · choice
+// n/total" title, the visible window of choices (scrolled to keep selected in view)
+// with the ▸ cursor and a highlighted selected row, then a footer of the [o] other
+// hint and the key legend.
 func renderChoiceBox(p prompt, width, height, pending int) string {
+	textW := cardTextWidth(width)
 	capacity := choiceWindowCap(height)
 	start, end := choiceWindow(len(p.Choices), p.selected, capacity)
-	rows := make([]string, 0, end-start+2)
+	rows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		rows = append(rows, choiceRow(i, p.Choices[i], i == p.selected, promptInnerWidth(width)))
+		rows = append(rows, choiceRow(i, p.Choices[i], i == p.selected, textW))
 	}
-	rows = append(rows, styles.PromptHintStyle.Render("[o] other"))
-	rows = append(rows, styles.PromptHintStyle.Render(choiceLegend))
-	header := styles.PromptHeaderStyle.Render(choiceHeader(p, len(p.Choices)))
-	return promptBox(header, strings.Join(rows, "\n"), width, pending)
+	title := styles.CardTitleStyle.Render(choiceHeader(p, len(p.Choices)))
+	body := strings.Join(rows, "\n")
+	footer := styleKeyHint("[o] other") + "\n" + styles.CardHintStyle.Render(choiceLegend)
+	return cardFrame(cardSections(title, body, footer), width, pending)
 }
 
-// choiceHeader is the "<Question> · choice n/total" box title, omitting the choice
+// choiceHeader is the "<Question> · choice n/total" card title, omitting the choice
 // counter when there are no choices (defensive; choice mode always has some).
 func choiceHeader(p prompt, total int) string {
 	if total == 0 {
@@ -203,42 +219,76 @@ func choiceHeader(p prompt, total int) string {
 	return p.Question + " · choice " + strconv.Itoa(p.selected+1) + "/" + strconv.Itoa(total)
 }
 
-// choiceRow renders one numbered choice line: "▸ N. text" for the selected row
-// (the cursor + 1-based index), "  N. text" otherwise, width-wrapped under the box.
+// choiceRow renders one numbered choice line. The selected row is "▸ N. text"
+// highlighted as a filled bar spanning the card body (CardSelectedStyle sized to
+// width); every other row is "  N. text" plain. The 1-based index means numbers past 9
+// render normally (10., 11., …) — the 1–9 keys are only quick accelerators; ↑/↓ + enter
+// reach any choice.
 func choiceRow(index int, text string, selected bool, width int) string {
 	label := strconv.Itoa(index+1) + ". " + text
 	if selected {
-		return styles.PromptCursorStyle.Render("▸ " + truncate(label, width-choicePrefixWidth))
+		row := "▸ " + truncate(label, width-choicePrefixWidth)
+		return styles.CardSelectedStyle.Width(width).Render(row)
 	}
 	return "  " + truncate(label, width-choicePrefixWidth)
 }
 
-// promptBox frames header+body in the emphasised PromptBoxStyle and trails the
-// faint "(+N more pending)" note when the queue is deeper than one (pending > 1).
+// styleKeyHint styles one "[key] label" footer fragment: the bracketed accelerator in
+// the bold brand accent (CardKeyStyle) and the trailing label muted (CardHintStyle), so
+// a hint reads as a pressable key beside its meaning. A fragment with no space
+// (defensive) is rendered whole as a key. Stripped of ANSI the result is the original
+// fragment ("[y] once"), so the plain-text interaction contract is preserved.
+func styleKeyHint(hint string) string {
+	key, label, ok := strings.Cut(hint, " ")
+	if !ok {
+		return styles.CardKeyStyle.Render(hint)
+	}
+	return styles.CardKeyStyle.Render(key) + " " + styles.CardHintStyle.Render(label)
+}
+
+// cardSections joins the non-empty card sections (title, body, footer) with a blank
+// line between them, giving the card its airy padded body. An empty section (e.g. a
+// permission gate with no description) is skipped so no double blank line appears.
+func cardSections(sections ...string) string {
+	parts := make([]string, 0, len(sections))
+	for _, s := range sections {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// cardFrame frames the assembled card content in CardStyle (rounded border + padding)
+// and trails the faint "(+N more pending)" note when the queue is deeper than one
+// (pending > 1). The box is sized so its text content area equals cardTextWidth(width),
+// which the sections were wrapped/sized to, so a full-width row (the selected-choice
+// highlight) fills the body without CardStyle re-wrapping it.
 //
-// The design mockups draw the header embedded in the top border (┌─ Approve
-// Bash? ─┐), but Lipgloss v2 exposes no border-title API, so the prompt header is
-// rendered as a bold first content row inside the box rather than embedded in the
-// top border. The visual contract is otherwise unchanged.
-func promptBox(header, body string, width, pending int) string {
-	inner := promptInnerWidth(width)
-	content := header + "\n" + body
-	box := styles.PromptBoxStyle.Width(inner).Render(content)
+// The June mockups drew the title embedded in the top border (┌─ Approve Bash? ─┐), but
+// Lipgloss v2 exposes no border-title API, so the title is a bold first content row
+// inside the card instead. The visual contract is otherwise the intended card.
+func cardFrame(content string, width, pending int) string {
+	textW := cardTextWidth(width)
+	boxW := textW + styles.CardStyle.GetHorizontalFrameSize()
+	box := styles.CardStyle.Width(boxW).Render(content)
 	if pending > 1 {
-		note := styles.PromptHintStyle.Render("(+" + strconv.Itoa(pending-1) + " more pending)")
+		note := styles.CardHintStyle.Render("(+" + strconv.Itoa(pending-1) + " more pending)")
 		return box + "\n" + note
 	}
 	return box
 }
 
-// promptInnerWidth is the content width inside a prompt box: the box width less the
-// border's horizontal frame, floored at 1.
-func promptInnerWidth(width int) int {
-	inner := width - styles.PromptBoxStyle.GetHorizontalFrameSize()
-	if inner < 1 {
-		inner = 1
+// cardTextWidth is the usable text width inside the card body: the box width less the
+// card's full horizontal frame (border + padding), floored at 1. Descriptions,
+// questions, choice rows and the key legend are wrapped/sized to this width, and the
+// selected-choice highlight spans it.
+func cardTextWidth(width int) int {
+	w := width - styles.CardStyle.GetHorizontalFrameSize()
+	if w < 1 {
+		w = 1
 	}
-	return inner
+	return w
 }
 
 // truncate clips s to at most width display runes, appending "…" when it overflows.

@@ -1,17 +1,46 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/looprig/harness/pkg/tool"
 )
 
-// TestRenderPermissionBox covers the permission-control rendering: a bordered box
-// with an "Approve <ToolName>?" header that shows ONLY the scope keys the request
-// offers — [y] once iff ScopeOnce, [s] session iff ScopeSession, [w] workspace iff
-// ScopeWorkspace — and [n] deny ALWAYS. (+N more pending) appears when the queue is
-// deeper than one.
+// styledCursor matches the ▸ selection cursor immediately preceded by an SGR escape —
+// the evidence that the selected choice row is HIGHLIGHTED (CardSelectedStyle wraps the
+// row, which begins with "▸ "), not rendered plain like the unselected rows. Bold alone
+// emits an SGR even with color off, so this holds across color profiles.
+var styledCursor = regexp.MustCompile("\x1b\\[[0-9;]*m▸")
+
+// cardBorderGlyphs are the rounded-border corner glyphs CardStyle draws around a gate
+// card. A rendered card MUST contain them (they survive stripANSI — only SGR color
+// codes are stripped), proving the permission/AskUser control is framed as a bordered
+// card rather than the prior compact control.
+var cardBorderGlyphs = []string{"╭", "╮", "╰", "╯"}
+
+// assertCardFramed fails t unless got carries the rounded-border corners AND spans
+// more than one line — the minimum evidence that the render is the bordered card.
+func assertCardFramed(t *testing.T, got string) {
+	t.Helper()
+	for _, g := range cardBorderGlyphs {
+		if !strings.Contains(got, g) {
+			t.Errorf("card render missing border glyph %q in:\n%s", g, got)
+		}
+	}
+	if lines := strings.Count(got, "\n"); lines < 3 {
+		t.Errorf("card render too short to be a framed card (%d newlines):\n%s", lines, got)
+	}
+}
+
+// TestRenderPermissionBox covers the permission card: a bordered, padded box with a
+// bold "Approve <ToolName>?" title, the request description as its body, and a footer
+// row of key hints that shows ONLY the scope keys the request offers — [y] once iff
+// ScopeOnce, [s] session iff ScopeSession, [w] workspace iff ScopeWorkspace — plus
+// [n] deny ALWAYS. (+N more pending) appears when the queue is deeper than one. The
+// scope-hint plain text is preserved so key-routing tests that read the control still
+// match — only the framing changed.
 func TestRenderPermissionBox(t *testing.T) {
 	t.Parallel()
 
@@ -64,8 +93,10 @@ func TestRenderPermissionBox(t *testing.T) {
 			t.Parallel()
 
 			p := promptFromPermission(callID(1), tt.req)
-			got := stripANSI(renderPermissionBox(p, 80, tt.pending))
+			rendered := renderPermissionBox(p, 80, tt.pending)
+			got := stripANSI(rendered)
 
+			assertCardFramed(t, rendered)
 			for _, sub := range tt.wantContain {
 				if !strings.Contains(got, sub) {
 					t.Errorf("renderPermissionBox missing %q in:\n%s", sub, got)
@@ -80,10 +111,10 @@ func TestRenderPermissionBox(t *testing.T) {
 	}
 }
 
-// TestRenderAskUserBoxChoices covers the choice-list AskUser box: numbered choices
-// [1].., an [o] other escape hatch, the ▸ cursor on prompt.selected, and a window
-// that scrolls with selected so a highlighted row past the height budget stays
-// visible.
+// TestRenderAskUserBoxChoices covers the choice-list AskUser card: a bordered box with
+// numbered choices [1].., the ▸ cursor on prompt.selected with that row HIGHLIGHTED, an
+// [o] other escape hatch, the key legend, and a window that scrolls with selected so a
+// high row (including double-digit choices past the 1–9 accelerators) stays visible.
 func TestRenderAskUserBoxChoices(t *testing.T) {
 	t.Parallel()
 
@@ -110,7 +141,7 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			selected:    0,
 			height:      10,
 			pending:     1,
-			wantContain: []string{"1.", "alpha", "2.", "beta", "3.", "gamma", "[o] other", "▸"},
+			wantContain: []string{"1.", "alpha", "2.", "beta", "3.", "gamma", "[o] other", "▸", "↑/↓ select"},
 		},
 		{
 			name:        "cursor marks the selected row",
@@ -133,6 +164,15 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			wantAbsent:  []string{"1. internal/version.Version()"}, // scrolled out of the window
 		},
 		{
+			name:        "double-digit choice past the 1-9 keys renders and is reachable",
+			question:    "Which source?",
+			choices:     twelve,
+			selected:    11, // the 12th choice — beyond the 1–9 accelerators
+			height:      5,
+			pending:     1,
+			wantContain: []string{"▸ 12. ask each build"},
+		},
+		{
 			name:        "more pending hint with many choices",
 			question:    "Which source?",
 			choices:     twelve,
@@ -149,8 +189,13 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 
 			p := promptFromUserInput(callID(2), tt.question, tt.choices)
 			p.selected = tt.selected
-			got := stripANSI(renderAskUserBox(p, 80, tt.height, tt.pending))
+			rendered := renderAskUserBox(p, 80, tt.height, tt.pending)
+			got := stripANSI(rendered)
 
+			assertCardFramed(t, rendered)
+			if !styledCursor.MatchString(rendered) {
+				t.Errorf("choice card selected row not highlighted (no styled ▸) in:\n%s", rendered)
+			}
 			for _, sub := range tt.wantContain {
 				if !strings.Contains(got, sub) {
 					t.Errorf("renderAskUserBox missing %q in:\n%s", sub, got)
@@ -165,14 +210,17 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 	}
 }
 
-// TestRenderAskUserBoxFreeText covers the free-text variant: the question renders
-// above the reused input box, with NO choice list and NO [o] other hint.
+// TestRenderAskUserBoxFreeText covers the free-text card: a bordered box with the
+// "answer" title and the question as its body, NO choice list and NO [o] other hint.
+// The actual answer field is the reused composer the surface stacks below this card.
 func TestRenderAskUserBoxFreeText(t *testing.T) {
 	t.Parallel()
 
 	p := promptFromUserInput(callID(3), "What should the version look like?", nil)
-	got := stripANSI(renderAskUserBox(p, 80, 6, 1))
+	rendered := renderAskUserBox(p, 80, 6, 1)
+	got := stripANSI(rendered)
 
+	assertCardFramed(t, rendered)
 	for _, sub := range []string{"answer", "What should the version look like?"} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("free-text box missing %q in:\n%s", sub, got)
