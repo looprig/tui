@@ -270,3 +270,17 @@ Select `screen := tui.NewModern(...)` when modern else `tui.New(...)`. Replace `
 7. Commit `chore: modern viewport Stage 1 verification`.
 
 **Stage 2 (separate plan, needs harness change):** expose `Session.Submit(ctx, loopID, blocks)` + re-vendor; add to `tui.Agent`; route composer to `focusedLoopID`.
+
+---
+
+## Tracked follow-ups (deferred within Stage 1 — accumulated from reviews)
+
+Added as work progressed; fold into the tasks noted or a polish pass. Not silently dropped.
+
+- **Task 7.5 — thinking-duration affordance (NEXT):** capture thinking duration from streaming `TokenDelta` `CreatedAt` timestamps in `applyChunk` + `projectionChunk` (KEEP-IN-SYNC); render collapsed thinking as `│ Thought for Ns` (no arrow, no `✻`, on the `│` rail); while STREAMING the header reads `│ thinking`, flipping to `│ Thought for Ns` once committed; expanded committed shows `│ Thought for Ns` header + `│`-railed reasoning. Restore/backlog fallback (no streaming timing): `│ Thought`. Format `<1s` / `Ns` / `Nm Ss`.
+- **Task 8 — wire the reserved seams:** `ctrl+n`/`ctrl+p` focus cycle + bar-click focus (currently no-op stubs / `TODO(Task 8)`); confirm the harness emits `LoopIdle` on subagent completion (else the bar can show a stuck-`•`-live finished loop — bi-state has no loop-exited event).
+- **Task 9 — parity + wiring:** full permission/AskUser prompt handling; submit auto-refocus to primary (Stage 1); the loop bar's `!` gate marker (plumbed, unset); clear/interrupt/queued/restore(`ReplayBacklog`)/images; live tool-spinner parity inside focused subagent projections (currently thinking/text stream live, tool cards appear at StepDone); projection terminal tombstone for an interrupted/failed subagent in its focused view.
+- **Modern UI polish pass (after Task 10, once `--modern` launches — verify live):** turn-elapsed timer in the status line `thinking… (2m 34s)` via a 1s `tea.Tick` + stored turn-start time; user-message gray background; composer gray background + default 2-line height (auto-grows beyond). Scoped to modern mode unless lifted to shared styles.
+- **Perf (before daily-driver):** cache `[]renderedLine` per `(entryID, width, effectiveCollapse)` (committed entries are immutable) and memoize the glamour `TermRenderer` per width in `styles` (currently constructed per markdown block). The Task-7 resize/rerender split already removed per-keystroke re-render.
+- **Tool-result expansion (renderer):** an additive `expandTools` renderer path so modern expanded entries show fuller tool output while scrollback stays capped (design §Collapse Stage-1 note).
+- **Minor hygiene:** `firstDisplayID` const to self-document the `liveTailEntryID=0` sentinel invariant; consider splitting `modern.go` layout/render into sibling files; retire or document the now-test-only `subscribeCmd`.
