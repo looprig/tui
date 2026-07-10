@@ -1547,3 +1547,30 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 		}
 	}
 }
+
+// TestModernComposerDefaultsToTwoLines pins the modern composer's 2-line default: the
+// composer built by the MODERN path (NewModern → modernizeComposer → SetMinLines(2))
+// reports a minimum visible height of modernComposerMinLines when empty, and the modern
+// bottom box is at least that tall, while Screen's plain composer (newInteractionModel,
+// unmodernized) stays at 1. It fails if the modern 2-line default regresses.
+func TestModernComposerDefaultsToTwoLines(t *testing.T) {
+	t.Parallel()
+
+	agent := &fakeAgent{primaryLoopID: callID(1)}
+	m := newModernSized(t, agent, 80, 24)
+
+	if got := m.interaction.input.Height(); got != modernComposerMinLines {
+		t.Errorf("modern composer empty height = %d, want %d", got, modernComposerMinLines)
+	}
+	// The rendered bottom box reflects the 2-line default too.
+	if got := lipgloss.Height(m.bottomBoxView()); got < modernComposerMinLines {
+		t.Errorf("modern bottom-box height = %d, want >= %d", got, modernComposerMinLines)
+	}
+	// Screen's plain (unmodernized) composer, sized the same way, stays at the historical
+	// single line.
+	plain := newInteractionModel()
+	plain.input.Resize(80)
+	if got := plain.input.Height(); got != 1 {
+		t.Errorf("plain composer empty height = %d, want 1 (Screen unchanged)", got)
+	}
+}

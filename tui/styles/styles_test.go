@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 // TestToolStyles verifies the tool-call and tool-result styles render their input
@@ -418,4 +420,105 @@ func TestNewMarkdownRendererCodeBlockNoRedBackground(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFillLineBackgroundWith pins the load-bearing re-open contract of the modern gray
+// fill: the background must be RE-OPENED immediately after EVERY inner SGR reset (both the
+// long "\x1b[0m" glamour emits and the short "\x1b[m" lipgloss emits), the visible content
+// must be padded out to the requested width, the line must end with a single terminating
+// reset (no stranded background), and an empty open must return the line unchanged
+// (fail-safe). A plain lipgloss Background() wrap would tint only up to the first inner
+// reset — this test distinguishes that broken behavior from the correct fill.
+func TestFillLineBackgroundWith(t *testing.T) {
+	t.Parallel()
+
+	const open = "\x1b[48;5;236m" // a synthetic background-open SGR
+	const reset = "\x1b[m"
+	// A line carrying BOTH inner reset forms; visible text "abcdef" is 6 columns.
+	const line = "ab" + "\x1b[0m" + "cd" + "\x1b[m" + "ef"
+
+	tests := []struct {
+		name          string
+		line          string
+		width         int
+		open          string
+		reset         string
+		wantUnchanged bool
+		wantWidth     int // expected display width of the result (when not unchanged)
+	}{
+		{name: "both reset forms, padded to width", line: line, width: 12, open: open, reset: reset, wantWidth: 12},
+		{name: "width at content adds no pad", line: line, width: 6, open: open, reset: reset, wantWidth: 6},
+		{name: "width below content adds no pad", line: line, width: 3, open: open, reset: reset, wantWidth: 6},
+		{name: "empty open returns unchanged (fail-safe)", line: line, width: 12, open: "", reset: reset, wantUnchanged: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FillLineBackgroundWith(tt.line, tt.width, tt.open, tt.reset)
+
+			if tt.wantUnchanged {
+				if got != tt.line {
+					t.Fatalf("empty-open fill = %q, want the line unchanged %q", got, tt.line)
+				}
+				return
+			}
+
+			// (a) the open is re-opened immediately after EACH inner reset form.
+			if !strings.Contains(got, "\x1b[0m"+tt.open) {
+				t.Errorf("fill did not re-open the background after the long reset \\x1b[0m; got %q", got)
+			}
+			if !strings.Contains(got, "\x1b[m"+tt.open) {
+				t.Errorf("fill did not re-open the background after the short reset \\x1b[m; got %q", got)
+			}
+			// The fill opens at the very start too.
+			if !strings.HasPrefix(got, tt.open) {
+				t.Errorf("fill does not open with the background SGR; got %q", got)
+			}
+			// (b) visible content is padded out to the requested width.
+			if w := lipgloss.Width(got); w != tt.wantWidth {
+				t.Errorf("fill display width = %d, want %d; got %q", w, tt.wantWidth, got)
+			}
+			// (c) ends with a single terminating reset — no stranded background trailing it.
+			if !strings.HasSuffix(got, tt.reset) {
+				t.Errorf("fill does not end with the terminating reset %q; got %q", tt.reset, got)
+			}
+			if strings.HasSuffix(got, tt.open) {
+				t.Errorf("fill ends with a dangling open (stranded background); got %q", got)
+			}
+			// The plain visible text survives intact behind the fill.
+			if plain := stripANSI(got); !strings.Contains(plain, "abcdef") {
+				t.Errorf("fill lost the visible text; plain=%q", plain)
+			}
+		})
+	}
+}
+
+// TestFillLineBackgroundModernPanel pins the ModernPanelBg convenience: FillLineBackground
+// derives its open from ModernPanelBg (DeriveBackgroundSGR) and re-opens it after an inner
+// reset, exactly like FillLineBackgroundWith. It guards that the shared gray user rows and
+// composer are filled with the same, correctly-re-opened background.
+func TestFillLineBackgroundModernPanel(t *testing.T) {
+	t.Parallel()
+
+	open, _ := DeriveBackgroundSGR(ModernPanelBg)
+	if open == "" {
+		t.Fatal("DeriveBackgroundSGR(ModernPanelBg) returned an empty open")
+	}
+	line := "x" + "\x1b[0m" + "y"
+	got := FillLineBackground(line, 10)
+	if !strings.HasPrefix(got, open) {
+		t.Errorf("FillLineBackground does not open with the ModernPanelBg SGR; got %q", got)
+	}
+	if !strings.Contains(got, "\x1b[0m"+open) {
+		t.Errorf("FillLineBackground did not re-open the ModernPanelBg fill after the inner reset; got %q", got)
+	}
+	if w := lipgloss.Width(got); w != 10 {
+		t.Errorf("FillLineBackground display width = %d, want 10; got %q", w, got)
+	}
+}
+
+// stripANSI removes SGR escape sequences so a test can assert on visible glyphs.
+func stripANSI(s string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(s, "")
 }
