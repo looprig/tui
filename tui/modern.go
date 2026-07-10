@@ -770,6 +770,13 @@ func (m *ModernScreen) rerender() {
 // carrying lines: each committed entry through renderEntryLines under its EFFECTIVE collapse
 // state (per-entry override else the global default), then the in-progress live segment
 // appended after. It is the flat []renderedLine the viewport windows and selects over.
+//
+// MODERN-ONLY SPACING: one blank breathing-space row follows every committed entry (see
+// blankSeparator) — the opening banner/greeting included, so the first real message is not
+// glued to the header. Because every committed entry carries its OWN trailing blank, the
+// streaming live tail already sits exactly one blank below the last committed entry (one gap,
+// never two), so no special-casing is needed at the tail seam. Scrollback's renderEntry owns
+// its own spacing and is untouched.
 func (m ModernScreen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
@@ -781,9 +788,26 @@ func (m ModernScreen) renderFocused() []renderedLine {
 			lines = paintUserBackground(lines, width)
 		}
 		out = append(out, lines...)
+		// A zero-line entry (an unknown/empty kind) has no last sub and nothing to set off, so it
+		// gets no blank — which also keeps the blank's sub non-header (>= 1) for every real entry.
+		if n := len(lines); n > 0 {
+			out = append(out, blankSeparator(committed[i].ID, n))
+		}
 	}
 	out = append(out, m.liveTailLines(live)...)
 	return out
+}
+
+// blankSeparator is the MODERN-ONLY breathing-space row appended after a committed entry: an
+// empty renderedLine (no styled, no plain, no background) that provides one blank line of
+// visual separation between transcript entries. It is tagged with the PRECEDING entry's
+// displayID and sub (the entry's last sub + 1, i.e. lineCount), so the gap "belongs" to the
+// entry above it: a selection spanning entries naturally includes the newline (plain is empty),
+// and a collapse-click that lands on it resolves to a non-header sub (>= 1) and never toggles.
+// It carries NO styled bytes, so it never picks up the user gray fill (paintUserBackground has
+// already run on the entry's own lines before this blank is appended).
+func blankSeparator(id displayID, lineCount int) renderedLine {
+	return renderedLine{styled: "", plain: "", entry: id, sub: lineCount}
 }
 
 // liveTailLines renders the focused loop's in-progress live segment to viewport lines,

@@ -1804,3 +1804,127 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 		t.Errorf("bar = %q, want the focused subagent to carry the ● mark (%q)", plain, want)
 	}
 }
+
+// runsByEntry groups rendered lines into contiguous runs sharing an entry id. Adjacent
+// committed entries carry distinct monotonic displayIDs, so each run is exactly one entry's
+// block — its own rendered lines plus its single trailing blank separator (modern spacing).
+func runsByEntry(lines []renderedLine) [][]renderedLine {
+	var runs [][]renderedLine
+	for _, ln := range lines {
+		if n := len(runs); n > 0 && runs[n-1][0].entry == ln.entry {
+			runs[n-1] = append(runs[n-1], ln)
+			continue
+		}
+		runs = append(runs, []renderedLine{ln})
+	}
+	return runs
+}
+
+// runHasPlain reports whether any line in run carries sub in its plain text.
+func runHasPlain(run []renderedLine, sub string) bool {
+	for _, ln := range run {
+		if strings.Contains(ln.plain, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestModernBlankSeparatorBetweenEntries pins the modern viewport's breathing space: renderFocused
+// appends exactly ONE blank renderedLine after every committed entry — the opening banner included —
+// so banner→user→assistant are each set off by one empty row. The blank is provenance-tagged to the
+// entry ABOVE it (its id, a non-header sub == last-sub+1) so a collapse-click on it never toggles and
+// a selection spanning the gap includes the newline; and it carries NO styled bytes, so it never picks
+// up the modern user gray fill. Scrollback's renderEntry spacing is a separate path and is untouched.
+func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m, _ = updateModern(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateModern(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
+
+	// A user turn then its assistant reply: three committed entries (banner, user, assistant), no
+	// live tail, so the only empty rows in the render are the trailing blank separators.
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hello there")})
+	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("", "hi back")))
+
+	committed, _ := m.transcript.projectionFor(primary)
+	if len(committed) < 3 {
+		t.Fatalf("precondition: want >= 3 committed entries (banner, user, assistant), got %d", len(committed))
+	}
+
+	lines := m.renderFocused()
+	runs := runsByEntry(lines)
+	if len(runs) != len(committed) {
+		t.Fatalf("got %d entry runs, want %d (one per committed entry); lines=%q", len(runs), len(committed), plainAll(lines))
+	}
+
+	for k, run := range runs {
+		wantID := committed[k].ID
+		if len(run) < 2 {
+			t.Fatalf("entry %d run has %d line(s), want >= 2 (>= 1 real line + 1 trailing blank)", k, len(run))
+		}
+		blank := run[len(run)-1]
+		// The run's LAST line is the trailing blank separator: empty plain (selection sees the gap
+		// as a newline), empty styled (never carries the user gray fill), tagged to the entry above.
+		if blank.entry != wantID {
+			t.Errorf("entry %d blank.entry = %d, want %d (owned by the entry above)", k, blank.entry, wantID)
+		}
+		if blank.plain != "" {
+			t.Errorf("entry %d trailing line plain = %q, want empty (a blank separator)", k, blank.plain)
+		}
+		if blank.styled != "" {
+			t.Errorf("entry %d trailing blank styled = %q, want empty (no user gray fill)", k, blank.styled)
+		}
+		// A non-header sub (last-sub+1 == number of real lines >= 1) so a collapse-click resolves to
+		// a body row and is a no-op.
+		if want := len(run) - 1; blank.sub != want {
+			t.Errorf("entry %d blank sub = %d, want %d (last real sub + 1, non-header)", k, blank.sub, want)
+		}
+		if blank.sub == 0 {
+			t.Errorf("entry %d blank sub = 0 (header) — a click would toggle; want a non-header sub", k)
+		}
+		// The run's non-trailing lines are all real content, so there is exactly ONE blank per
+		// entry (no double gap).
+		for i := 0; i < len(run)-1; i++ {
+			if run[i].plain == "" && run[i].styled == "" {
+				t.Errorf("entry %d run line %d is an unexpected extra blank (double gap)", k, i)
+			}
+		}
+	}
+
+	// The banner (head entry) is set off from the first user message by exactly its trailing blank:
+	// run[0] is the banner and ends in a blank; run[1] begins the first user row.
+	if !runHasPlain(runs[0], "swe") {
+		t.Errorf("first run is not the banner; got %q", plainAll(runs[0]))
+	}
+	if !runHasPlain(runs[1], "hello there") {
+		t.Errorf("run after the banner's blank is not the first user message; got %q", plainAll(runs[1]))
+	}
+}
+
+// TestModernSelectionSpansBlankSeparator proves a drag selection that spans the blank separator
+// between two entries INCLUDES the gap's newline: the blank contributes its empty plain as a middle
+// row, so the extracted text carries the "\n\n" break between the entries rather than swallowing the
+// gap. The fixture is exactly the shape renderFocused emits — entry 1's line, its blankSeparator(1,1),
+// then entry 2's line.
+func TestModernSelectionSpansBlankSeparator(t *testing.T) {
+	t.Parallel()
+
+	lines := []renderedLine{
+		{styled: "A", plain: "A", entry: 1, sub: 0},
+		blankSeparator(1, 1), // entry 1's trailing blank separator
+		{styled: "B", plain: "B", entry: 2, sub: 0},
+	}
+	vp := viewportModel{lines: lines, height: len(lines), atTail: true}
+	vp.reclamp()
+
+	vp.beginSelect(0, 0) // anchor at the start of "A"
+	vp.moveCursor(1, 2)  // drag to just past "B"
+
+	if got, want := vp.SelectedText(), "A\n\nB"; got != want {
+		t.Errorf("SelectedText across the gap = %q, want %q (the blank contributes the gap newline)", got, want)
+	}
+}
