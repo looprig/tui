@@ -190,12 +190,14 @@ type entry struct {
 	// Verb is the activity word of a kindSubagent line ("done" for a committed StepDone).
 	// Meaningful ONLY for kindSubagent; empty for every other kind.
 	Verb string
-	// thinkDur is the measured wall-clock span of a kindAssistant entry's thinking block,
-	// captured from streaming TokenDelta timestamps at commit (liveSeg.thinkDuration) and
-	// rendered as the "│ Thought for Ns" header (formatThought). It is LIVE-ONLY: a cold
-	// restore replays only persisted Enduring StepDone events, which carry NO streaming
-	// timestamps, so a restored thinking entry legitimately has thinkDur == 0 and renders
-	// the bare "│ Thought" — the accepted restore behavior, NOT a bug. Because that makes a
+	// thinkDur is the measured span of a kindAssistant entry's thinking block, captured from
+	// the TokenDelta timestamps at commit (liveSeg.thinkDuration) and rendered as the
+	// "│ thought for Nsec" header (formatThought). The harness never stamps Ephemeral
+	// TokenDeltas, so the modern shell stamps each with its model clock (m.now) before the
+	// reducer folds it — the timing source in live modern mode (see ModernScreen.stampEphemeralClock).
+	// It is LIVE-ONLY: a cold restore replays only persisted Enduring StepDone events, which
+	// carry NO chunk timing, so a restored thinking entry legitimately has thinkDur == 0 and
+	// renders the bare "│ thought" — the accepted restore behavior, NOT a bug. Because that makes a
 	// live fold and a restore fold of the same session diverge on this field, it is
 	// normalized OUT of the restore-equivalence comparison (EqualTranscript). Zero for every
 	// non-assistant entry and for an assistant entry with no thinking block.
@@ -223,9 +225,10 @@ type liveSeg struct {
 	// (PermissionRequest.Description), so the committed card can show exactly what
 	// was approved/denied rather than only the redacted audit summary.
 	gateDescriptions map[uuid.UUID]string
-	// thinkStart/thinkLast/thinkEnd measure the wall-clock span of THIS segment's thinking
-	// from streaming TokenDelta timestamps (ev.CreatedAt), so a committed thinking entry can
-	// show "Thought for Ns" (thinkDuration). The rule is DETERMINISTIC: thinkStart is the
+	// thinkStart/thinkLast/thinkEnd measure the span of THIS segment's thinking from the
+	// TokenDelta timestamps (ev.CreatedAt — which the modern shell stamps from its model clock,
+	// since the harness leaves Ephemeral deltas unstamped), so a committed thinking entry can
+	// show "thought for Nsec" (thinkDuration). The rule is DETERMINISTIC: thinkStart is the
 	// FIRST ThinkingChunk's timestamp; thinkLast tracks the LAST ThinkingChunk's timestamp
 	// (the fallback end when thinking is the last thing before StepDone); thinkEnd is SEALED
 	// once — the FIRST non-thinking (Text) chunk that arrives after thinking began — marking
@@ -972,7 +975,7 @@ func (m *transcriptModel) commitProse() {
 	if m.live.Thinking != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: m.live.Thinking})
 		// The live timing is still populated on this provisional path (an interrupt/failure
-		// before StepDone), so an interrupted turn shows the real "Thought for Ns" it spent —
+		// before StepDone), so an interrupted turn shows the real "thought for Nsec" it spent —
 		// matching a completed step. Restore-equivalence is unaffected (EqualTranscript
 		// normalizes thinkDur out either way).
 		thinkDur = m.live.thinkDuration()
@@ -1372,8 +1375,8 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCar
 	if th := thinkingText(ai.Blocks); th != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: th})
 		// Attach the step's measured thinking span from the (not-yet-reset) live segment,
-		// so the committed rail reads "Thought for Ns"; a stream with no streaming timestamps
-		// (e.g. a cold restore) yields 0 → the bare "Thought" fallback.
+		// so the committed rail reads "thought for Nsec"; a stream with no chunk timing
+		// (e.g. a cold restore) yields 0 → the bare "thought" fallback.
 		thinkDur = m.live.thinkDuration()
 	}
 	text := textOnly(ai.Blocks)
@@ -1638,7 +1641,7 @@ func (m *transcriptModel) projectionStepAssistant(p *loopProjection, ai *content
 	if th := thinkingText(ai.Blocks); th != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: th})
 		// Mirror commitStepAssistant: attach the projection's measured thinking span from its
-		// (not-yet-reset) live segment so a focused subagent view shows "Thought for Ns" too.
+		// (not-yet-reset) live segment so a focused subagent view shows "thought for Nsec" too.
 		thinkDur = p.live.thinkDuration()
 	}
 	text := textOnly(ai.Blocks)

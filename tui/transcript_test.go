@@ -3119,7 +3119,7 @@ func firstThinkingAssistant(m transcriptModel) (time.Duration, bool) {
 // thinking-then-text seals the end at the FIRST text chunk after thinking; thinking-then-
 // tool (no narration streamed) falls back to the LAST thinking chunk; a step with no
 // thinking carries no duration; and a stream with no timestamps (a cold restore / backlog)
-// yields a zero duration (the bare "Thought" fallback).
+// yields a zero duration (the bare "thought" fallback).
 func TestThinkingDurationCapture(t *testing.T) {
 	t.Parallel()
 
@@ -3195,7 +3195,7 @@ func TestThinkingDurationCapture(t *testing.T) {
 		},
 		{
 			// Timestamp-less thinking chunks (the restore/backlog shape) never seed a start,
-			// so the committed entry has a zero duration → the bare "Thought" fallback.
+			// so the committed entry has a zero duration → the bare "thought" fallback.
 			name: "timestampless thinking yields zero duration",
 			events: []event.Event{
 				event.TurnStarted{Header: hdr(primary)},
@@ -3228,9 +3228,9 @@ func TestThinkingDurationCapture(t *testing.T) {
 
 // TestInterruptedProseCarriesThinkDuration covers the provisional-prose path
 // (commitProse): a turn INTERRUPTED mid-step — after thinking streamed but before its
-// StepDone — still commits the real "Thought for Ns" it spent, because the live timing is
+// StepDone — still commits the real "thought for Nsec" it spent, because the live timing is
 // intact when the interrupt flushes the provisional prose. It matches a completed step's
-// affordance rather than degrading to the bare "Thought".
+// affordance rather than degrading to the bare "thought".
 func TestInterruptedProseCarriesThinkDuration(t *testing.T) {
 	t.Parallel()
 
@@ -3269,7 +3269,7 @@ func TestInterruptedProseCarriesThinkDuration(t *testing.T) {
 // RESTORE fold of the SAME step WITHOUT those Ephemeral, never-journaled deltas captures
 // zero — yet the two displayed transcripts must still compare EQUAL, because the duration
 // is a live-display enhancement normalized out of EqualTranscript. The restored row
-// correctly shows "│ Thought" with no number; that is the accepted behavior, not a bug.
+// correctly shows "│ thought" with no number; that is the accepted behavior, not a bug.
 func TestEqualTranscriptIgnoresThinkDuration(t *testing.T) {
 	t.Parallel()
 

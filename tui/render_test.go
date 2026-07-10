@@ -11,9 +11,9 @@ import (
 )
 
 // TestFormatThought covers the committed thinking-header formatter: a zero span (a cold
-// restore / backlog with no streaming timestamps) is the bare "Thought"; a sub-second span
-// is "Thought for <1s"; under a minute is "Thought for Ns" (whole seconds, truncated); a
-// minute or more is "Thought for Nm Ss".
+// restore / backlog with no timing, or thinking under one clock tick) is the bare lowercase
+// "thought"; a sub-second span is "thought for <1sec"; under a minute is "thought for Nsec"
+// (whole seconds, truncated); a minute or more is "thought for Nm Nsec".
 func TestFormatThought(t *testing.T) {
 	t.Parallel()
 
@@ -22,17 +22,17 @@ func TestFormatThought(t *testing.T) {
 		d    time.Duration
 		want string
 	}{
-		{name: "zero is the bare fallback", d: 0, want: "Thought"},
-		{name: "negative degrades to the fallback", d: -5 * time.Second, want: "Thought"},
-		{name: "sub-second", d: 400 * time.Millisecond, want: "Thought for <1s"},
-		{name: "just under a second", d: 999 * time.Millisecond, want: "Thought for <1s"},
-		{name: "exactly one second", d: time.Second, want: "Thought for 1s"},
-		{name: "ten seconds", d: 10 * time.Second, want: "Thought for 10s"},
-		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "Thought for 10s"},
-		{name: "just under a minute", d: 59 * time.Second, want: "Thought for 59s"},
-		{name: "exactly one minute", d: 60 * time.Second, want: "Thought for 1m 0s"},
-		{name: "minutes and seconds", d: 90 * time.Second, want: "Thought for 1m 30s"},
-		{name: "several minutes", d: 5*time.Minute + 5*time.Second, want: "Thought for 5m 5s"},
+		{name: "zero is the bare fallback", d: 0, want: "thought"},
+		{name: "negative degrades to the fallback", d: -5 * time.Second, want: "thought"},
+		{name: "sub-second", d: 400 * time.Millisecond, want: "thought for <1sec"},
+		{name: "just under a second", d: 999 * time.Millisecond, want: "thought for <1sec"},
+		{name: "exactly one second", d: time.Second, want: "thought for 1sec"},
+		{name: "ten seconds", d: 10 * time.Second, want: "thought for 10sec"},
+		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "thought for 10sec"},
+		{name: "just under a minute", d: 59 * time.Second, want: "thought for 59sec"},
+		{name: "exactly one minute", d: 60 * time.Second, want: "thought for 1m 0sec"},
+		{name: "minutes and seconds", d: 90 * time.Second, want: "thought for 1m 30sec"},
+		{name: "several minutes", d: 5*time.Minute + 5*time.Second, want: "thought for 5m 5sec"},
 	}
 
 	for _, tt := range tests {
@@ -374,11 +374,11 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 			want:     []string{strings.TrimSpace(styles.Dot), multipleActionsHeadline},
 		},
 		{
-			// A committed thinking-only segment renders the rail'd header "│ Thought"
+			// A committed thinking-only segment renders the rail'd header "│ thought"
 			// (formatThought(0), no captured duration) with no assistant bullet.
 			name:     "thinking only renders the rail with no bullet",
 			thinking: "mulling it over",
-			want:     []string{"│ Thought"},
+			want:     []string{"│ thought"},
 			absent:   []string{strings.TrimSpace(styles.Dot)},
 		},
 		{
@@ -641,7 +641,7 @@ func TestRenderLiveRunningCardIsHeaderOnly(t *testing.T) {
 // its caller-supplied header. COLLAPSED: a SINGLE rail'd line "│ <header>" — no reasoning
 // body, no "· N lines · ctrl+t" summary. EXPANDED: that same "│ <header>" line followed by
 // the "│ "-railed reasoning — an unbroken left rail. The header is the LIVE tail's
-// present-tense "thinking" or a COMMITTED entry's "Thought for Ns" / "Thought". Empty or
+// present-tense "thinking" or a COMMITTED entry's "thought for Nsec" / "thought". Empty or
 // whitespace-only input renders nothing in either mode.
 func TestRenderThinking(t *testing.T) {
 	t.Parallel()
@@ -655,18 +655,18 @@ func TestRenderThinking(t *testing.T) {
 		wantAbsent   []string
 		wantEmpty    bool
 	}{
-		{name: "empty renders nothing collapsed", in: "", header: "Thought", expand: false, wantEmpty: true},
-		{name: "empty renders nothing expanded", in: "", header: "Thought", expand: true, wantEmpty: true},
-		{name: "whitespace renders nothing collapsed", in: "   \n  ", header: "Thought", expand: false, wantEmpty: true},
-		{name: "whitespace renders nothing expanded", in: "   \n  ", header: "Thought", expand: true, wantEmpty: true},
+		{name: "empty renders nothing collapsed", in: "", header: "thought", expand: false, wantEmpty: true},
+		{name: "empty renders nothing expanded", in: "", header: "thought", expand: true, wantEmpty: true},
+		{name: "whitespace renders nothing collapsed", in: "   \n  ", header: "thought", expand: false, wantEmpty: true},
+		{name: "whitespace renders nothing expanded", in: "   \n  ", header: "thought", expand: true, wantEmpty: true},
 		{
-			// COLLAPSED committed: a single rail'd line "│ Thought for 10s" — no body, no
+			// COLLAPSED committed: a single rail'd line "│ thought for 10sec" — no body, no
 			// "· N lines · ctrl+t" summary, no bare (rail-less) header.
-			name:         "collapsed committed is a single rail'd Thought line",
+			name:         "collapsed committed is a single rail'd thought line",
 			in:           "line one\nline two",
-			header:       "Thought for 10s",
+			header:       "thought for 10sec",
 			expand:       false,
-			wantContains: []string{"│ Thought for 10s"},
+			wantContains: []string{"│ thought for 10sec"},
 			wantAbsent:   []string{"│ line one", "│ line two", "ctrl+t", "lines"},
 		},
 		{
@@ -679,14 +679,14 @@ func TestRenderThinking(t *testing.T) {
 			wantAbsent:   []string{"│ line one", "· ", "ctrl+t"},
 		},
 		{
-			// EXPANDED: the header carries the rail ("│ Thought for 10s", not bare) and
+			// EXPANDED: the header carries the rail ("│ thought for 10sec", not bare) and
 			// every body line carries the rail too — an unbroken left rail.
 			name:         "expanded rails every line including the header",
 			in:           "line one\nline two",
-			header:       "Thought for 10s",
+			header:       "thought for 10sec",
 			expand:       true,
-			wantContains: []string{"│ Thought for 10s", "│ line one", "│ line two"},
-			wantAbsent:   []string{"\nThought", "more lines"},
+			wantContains: []string{"│ thought for 10sec", "│ line one", "│ line two"},
+			wantAbsent:   []string{"\nthought", "more lines"},
 		},
 	}
 
@@ -740,7 +740,7 @@ func TestRenderThinkingExpandedRailOnEveryLine(t *testing.T) {
 
 // TestRenderAssistantUnifiedExpand covers Task 12: ONE flag drives BOTH the
 // thinking block and the tool-result folding. Collapsed (expand=false): thinking
-// renders as a single rail'd header line "│ Thought" (no "│ " body) AND the long tool
+// renders as a single rail'd header line "│ thought" (no "│ " body) AND the long tool
 // result is folded (first K lines + "more lines" marker). Expanded (expand=true): the
 // full "│ "-railed thinking body renders AND the tool result shows every line. The
 // SAME flag flips both — there is no separate thinking key.
@@ -758,15 +758,15 @@ func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 	toolCollapsed := stripANSI(renderToolCalls(calls, false, 80))
 	toolExpanded := stripANSI(renderToolCalls(calls, true, 80))
 
-	// Thinking DOES flip: collapsed is the single rail'd header "│ Thought" (no body);
+	// Thinking DOES flip: collapsed is the single rail'd header "│ thought" (no body);
 	// expanded is that header PLUS the full "│ "-railed body.
-	if !strings.Contains(thinkCollapsed, "│ Thought") {
+	if !strings.Contains(thinkCollapsed, "│ thought") {
 		t.Errorf("collapsed thinking missing the rail'd header in %q", thinkCollapsed)
 	}
 	if strings.Contains(thinkCollapsed, "│ reason one") {
 		t.Errorf("collapsed thinking must NOT show the body in %q", thinkCollapsed)
 	}
-	for _, w := range []string{"│ Thought", "│ reason one", "│ reason three"} {
+	for _, w := range []string{"│ thought", "│ reason one", "│ reason three"} {
 		if !strings.Contains(thinkExpanded, w) {
 			t.Errorf("expanded thinking missing %q in %q", w, thinkExpanded)
 		}
@@ -800,7 +800,7 @@ func TestRenderAssistantThinkingBlock(t *testing.T) {
 
 	got := stripANSI(renderAssistant("my reasoning", "the final answer", "", true, 80, formatThought(0))) // expanded
 
-	for _, w := range []string{"│ Thought", "│ my reasoning", "the final answer"} {
+	for _, w := range []string{"│ thought", "│ my reasoning", "the final answer"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("renderAssistant() = %q, want to contain %q", got, w)
 		}

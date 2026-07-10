@@ -75,7 +75,7 @@ func TestRenderEntryUserMarkdown(t *testing.T) {
 
 // TestRenderEntryAssistant locks the assistant-kind render: it carries the "●"
 // narration bullet, and its thinking block honors the expand flag (collapsed →
-// the single rail'd header "│ Thought" — the committed entry carries no captured
+// the single rail'd header "│ thought" — the committed entry carries no captured
 // duration here; expanded → that header plus the full reasoning body).
 func TestRenderEntryAssistant(t *testing.T) {
 	t.Parallel()
@@ -97,7 +97,7 @@ func TestRenderEntryAssistant(t *testing.T) {
 		t.Errorf("assistant render = %q, want the narration", collapsed)
 	}
 	// collapsed: the single rail'd header line, NOT the reasoning body.
-	if !strings.Contains(collapsed, "│ Thought") {
+	if !strings.Contains(collapsed, "│ thought") {
 		t.Errorf("collapsed render = %q, want the rail'd thinking header", collapsed)
 	}
 	if strings.Contains(collapsed, "carefully") {
@@ -110,7 +110,7 @@ func TestRenderEntryAssistant(t *testing.T) {
 }
 
 // TestRenderEntryAssistantThinkDuration locks the committed duration affordance end-to-end:
-// a kindAssistant entry carrying a captured thinkDur renders the "│ Thought for Ns" header
+// a kindAssistant entry carrying a captured thinkDur renders the "│ thought for Nsec" header
 // on the rail — collapsed as the single header line, expanded as the header above the
 // railed reasoning. It is the committed counterpart of the live tail's "│ thinking".
 func TestRenderEntryAssistantThinkDuration(t *testing.T) {
@@ -127,14 +127,14 @@ func TestRenderEntryAssistantThinkDuration(t *testing.T) {
 	collapsed := stripANSI(strings.Join(renderEntry(e, false, 80), "\n"))
 	expanded := stripANSI(strings.Join(renderEntry(e, true, 80), "\n"))
 
-	if !strings.Contains(collapsed, "│ Thought for 10s") {
-		t.Errorf("collapsed render = %q, want the rail'd '│ Thought for 10s' header", collapsed)
+	if !strings.Contains(collapsed, "│ thought for 10sec") {
+		t.Errorf("collapsed render = %q, want the rail'd '│ thought for 10sec' header", collapsed)
 	}
 	if strings.Contains(collapsed, "options") {
 		t.Errorf("collapsed render = %q, must NOT show the reasoning body", collapsed)
 	}
-	if !strings.Contains(expanded, "│ Thought for 10s") || !strings.Contains(expanded, "options") {
-		t.Errorf("expanded render = %q, want the '│ Thought for 10s' header above the body", expanded)
+	if !strings.Contains(expanded, "│ thought for 10sec") || !strings.Contains(expanded, "options") {
+		t.Errorf("expanded render = %q, want the '│ thought for 10sec' header above the body", expanded)
 	}
 }
 

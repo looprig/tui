@@ -1572,6 +1572,143 @@ func TestModernTickLifecycle(t *testing.T) {
 	}
 }
 
+// realThinkDelta / realTextDelta build streaming TokenDeltas in the REAL harness shape: an
+// Ephemeral delta on loopID carrying NO CreatedAt (the harness never stamps Ephemeral events
+// — only Enduring events get a Factory CreatedAt). The modern shell must stamp them with its
+// model clock (m.now) before the reducer folds them, or the committed thinking span reads 0.
+func realThinkDelta(loopID uuid.UUID, s string) event.Event {
+	return event.TokenDelta{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}},
+		Chunk:  &content.ThinkingChunk{Thinking: s},
+	}
+}
+
+func realTextDelta(loopID uuid.UUID, s string) event.Event {
+	return event.TokenDelta{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}},
+		Chunk:  &content.TextChunk{Text: s},
+	}
+}
+
+// firstThinkDurIn returns the thinkDur of the first committed kindAssistant entry carrying a
+// ThinkingBlock in entries, and whether one exists — the seam the modern thinking-duration
+// test asserts a projection's (or the root fold's) captured span through.
+func firstThinkDurIn(entries []entry) (time.Duration, bool) {
+	for _, e := range entries {
+		if e.Kind != kindAssistant {
+			continue
+		}
+		for _, b := range e.Blocks {
+			if _, ok := b.(*content.ThinkingBlock); ok {
+				return e.thinkDur, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// TestModernRealThinkingDurationFromModelClock is the duration=0 bug's regression test. It
+// drives streaming thinking in the REAL harness shape (TokenDeltas with NO CreatedAt) through
+// the modern shell, advancing the model clock via a tickMsg — the SAME clock the turn timer
+// uses — and asserts the committed thinking entry carries the measured, NON-ZERO span rendered
+// as the lowercase "thought for Nsec". Because the deltas are unstamped, the PRE-FIX reducer
+// (timing from ev.CreatedAt) captures 0 → the bare "thought"; the fix stamps them from m.now.
+// Both a PRIMARY loop (root fold) and a SUBAGENT loop (its own projection) are timed — the
+// subagent's Ephemeral stream flows through handleEventModern too.
+func TestModernRealThinkingDurationFromModelClock(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		loop    uuid.UUID     // the loop whose thinking is timed (primary → root, sub → projection)
+		elapsed time.Duration // the model-clock span between the first thinking chunk and the text chunk
+		wantHdr string        // the committed, collapsed header the viewport must show
+	}{
+		{name: "primary loop thinking timed from the model clock", loop: primary, elapsed: 8 * time.Second, wantHdr: "thought for 8sec"},
+		{name: "subagent loop thinking timed too", loop: sub, elapsed: 25 * time.Second, wantHdr: "thought for 25sec"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+
+			// TurnStarted seeds the model clock (m.now = base). The thinking chunks stream with
+			// no CreatedAt; the shell stamps them with m.now. A tick advances m.now by elapsed,
+			// so the first text chunk (which seals the thinking end) is stamped elapsed later.
+			m = feedModern(t, m, event.TurnStarted{Header: hdrAt(tt.loop, base)})
+			m = feedModern(t, m, realThinkDelta(tt.loop, "weigh "))
+			m = feedModern(t, m, realThinkDelta(tt.loop, "the options"))
+			m, _ = updateModern(t, m, tickMsg{at: base.Add(tt.elapsed)})
+			m = feedModern(t, m, realTextDelta(tt.loop, "here is the plan"))
+			m = feedModern(t, m, stepDoneFrom(tt.loop, aiMessage("weigh the options", "here is the plan")))
+
+			committed, _ := m.transcript.projectionFor(tt.loop)
+			gotDur, ok := firstThinkDurIn(committed)
+			if !ok {
+				t.Fatalf("no committed thinking entry for loop %v; committed=%+v", tt.loop, committed)
+			}
+			if gotDur != tt.elapsed {
+				t.Errorf("committed thinkDur = %v, want %v (measured from the model clock, not the zero TokenDelta CreatedAt)", gotDur, tt.elapsed)
+			}
+
+			// Focus the loop and confirm the collapsed committed header reads the lowercase span.
+			(&m).focusLoop(tt.loop)
+			if !containsPlain(m.viewport.lines, tt.wantHdr) {
+				t.Errorf("viewport = %q, want the committed header %q", plainAll(m.viewport.lines), tt.wantHdr)
+			}
+		})
+	}
+}
+
+// TestModernLiveThinkingAlwaysExpanded pins the live-vs-committed collapse rule: while thinking
+// STREAMS, the live segment renders fully EXPANDED (the "│ thinking" header PLUS every reasoning
+// line) even though the global collapse default is COLLAPSED — the live tail is excluded from
+// the fold. Once the step COMMITS, that same reasoning follows the collapse state: the default
+// collapses it to the one-line "│ thought" summary with the body hidden.
+func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	if !m.collapse.globalCollapsed {
+		t.Fatal("modern collapse should start collapsed (dense)")
+	}
+
+	// LIVE: thinking streams (no StepDone yet). Despite the collapsed default, the live tail
+	// shows the present-tense "│ thinking" header AND the full multi-line reasoning body.
+	m = feedModern(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+	m = feedModern(t, m, realThinkDelta(primary, "reason line one\nreason line two"))
+
+	if !containsPlain(m.viewport.lines, "│ thinking") {
+		t.Errorf("live tail = %q, want the present-tense '│ thinking' header", plainAll(m.viewport.lines))
+	}
+	for _, body := range []string{"reason line one", "reason line two"} {
+		if !containsPlain(m.viewport.lines, body) {
+			t.Errorf("live tail = %q, want the expanded reasoning line %q (live is excluded from the collapse fold)", plainAll(m.viewport.lines), body)
+		}
+	}
+
+	// COMMIT: the step's StepDone commits the thinking entry, which now follows the collapse
+	// default — a single "│ thought" header, the reasoning body hidden.
+	m = feedModern(t, m, stepDoneFrom(primary, aiMessage("reason line one\nreason line two", "the answer")))
+
+	if !containsPlain(m.viewport.lines, "│ thought") {
+		t.Errorf("committed = %q, want the collapsed '│ thought' header", plainAll(m.viewport.lines))
+	}
+	if containsPlain(m.viewport.lines, "reason line one") {
+		t.Errorf("committed = %q, want the reasoning body HIDDEN once collapsed", plainAll(m.viewport.lines))
+	}
+}
+
 // TestModernUserRowGrayBackground pins the MODERN user-message gray panel: the focused
 // projection's user-row lines carry the gray background fill and are padded to the full
 // content width, while the SAME entry rendered through the scrollback renderEntry carries no

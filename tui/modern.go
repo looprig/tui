@@ -288,7 +288,18 @@ func (m *ModernScreen) commitStartup() {
 // through BOTH reducers, derives the primary turn status, and re-arms the reader) and then
 // re-renders the FOCUSED projection into the viewport, keeping the auto-follow tail pinned.
 // The turn-phase cue is unused in Stage 1 (a static status line; Task 9 threads the blink).
+//
+// Before the core folds the event it stamps the model clock (m.now) onto an unstamped
+// Ephemeral TokenDelta (stampEphemeralClock): the harness publishes TokenDeltas UNSTAMPED
+// (only Enduring events get a Factory CreatedAt — see pkg/loop publish; per-token crypto/rand
+// is deliberately avoided), so a thinking delta reaches the transcript reducer with a ZERO
+// CreatedAt and its "thought for Nsec" span would always be 0. Stamping it with the SAME
+// clock the turn timer uses (m.now, seeded from TurnStarted.CreatedAt and advanced by the 1s
+// tick) gives the reducer a real, second-granularity timestamp — so both the primary live
+// segment AND every subagent projection measure a genuine thinking span, deterministically
+// driven by injected event/tick times (no render-time wall clock).
 func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
+	ev = stampEphemeralClock(ev, m.now)
 	rearm, _ := m.sessionCore.handleEvent(ev)
 	m.trackTurnClock(ev)
 	m.rerender()
@@ -296,6 +307,28 @@ func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 	// tick self-terminates once every turn has ended (handleTick), so it never leaks past
 	// an idle session.
 	return tea.Batch(rearm, m.maybeStartTick())
+}
+
+// stampEphemeralClock returns ev with the model clock stamped onto its Header.CreatedAt when
+// ev is an UNSTAMPED Ephemeral TokenDelta — the timing source for a committed thinking
+// entry's "thought for Nsec" span. The harness never stamps Ephemeral events (they are never
+// journaled and per-token crypto/rand is avoided), so a TokenDelta arrives with a zero
+// CreatedAt; the reducer's recordThinking/recordNonThinking would then never seed a start and
+// the span would collapse to 0. Stamping the delta with clock (m.now) — the same clock the
+// turn timer advances on the 1s tick — feeds the reducer a real timestamp through its
+// EXISTING per-loop timing machinery (root live segment + every projection), so subagent
+// thinking is timed for free. It touches ONLY a zero-CreatedAt TokenDelta: any other event
+// (including an already-stamped delta, e.g. a test that stamps its own) is returned unchanged,
+// so trackTurnClock still reads the authoritative TurnStarted.CreatedAt. A zero clock (no turn
+// has seeded m.now yet) is a no-op — the delta stays unstamped and reads a 0 span, the safe
+// bare-"thought" fallback.
+func stampEphemeralClock(ev event.Event, clock time.Time) event.Event {
+	td, ok := ev.(event.TokenDelta)
+	if !ok || clock.IsZero() || !td.CreatedAt.IsZero() {
+		return ev
+	}
+	td.Header.CreatedAt = clock
+	return td
 }
 
 // trackTurnClock maintains turnStartedAt from a loop's turn-lifecycle events: a TurnStarted
@@ -817,9 +850,12 @@ func blankSeparator(id displayID, lineCount int) renderedLine {
 // and appends the in-flight pending subagent cards. A focused NON-primary projection carries
 // no live.Calls and no pending cards of its own, so its live tail is just its streamed
 // thinking/text (live tool-spinner parity for projections is deferred — see routeProjection).
-// The thinking fold follows the GLOBAL collapse default (the live tail has no committed
-// displayID to key a per-entry override on), and a zero animState renders a static tail
-// (Task 9 threads the blink/spinner phase).
+// The live segment is EXCLUDED from the collapse fold: streaming thinking always renders
+// fully EXPANDED ("│ thinking" + all reasoning) regardless of the global collapse default, so
+// the user watches the model reason in real time; only COMMITTED thinking follows the collapse
+// state (default collapsed → the one-line "│ thought for Nsec" summary), keyed on its committed
+// displayID (the live tail has none). A zero animState renders a static tail (Task 9 threads
+// the blink/spinner phase).
 func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
 	width := m.contentWidth()
 	calls := live.Calls
@@ -831,7 +867,10 @@ func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
 	if live.empty() && len(pending) == 0 {
 		return nil
 	}
-	styled := renderLiveAssistant(live.Thinking, live.Text, calls, pending, !m.collapse.globalCollapsed, width, animState{})
+	// expand=true unconditionally: the LIVE segment is not part of the retroactive collapse
+	// fold — streaming reasoning is always shown in full, and collapses to the one-liner only
+	// once the step COMMITS as an entry (which then follows collapse.Effective).
+	styled := renderLiveAssistant(live.Thinking, live.Text, calls, pending, true, width, animState{})
 	if styled == "" {
 		return nil
 	}

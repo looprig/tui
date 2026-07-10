@@ -55,7 +55,7 @@ func FoldDisplay(events []event.Event, primaryLoopID uuid.UUID) DisplayProjectio
 // EXCLUDED from the comparison: it is measured from streaming TokenDelta timestamps, which
 // are Ephemeral and NEVER journaled, so a cold-restore fold replays only the persisted
 // StepDone events and legitimately produces dur == 0 (the restored row correctly shows
-// "│ Thought" with no number) while the same row folded live shows "│ Thought for 10s".
+// "│ thought" with no number) while the same row folded live shows "│ thought for 10sec".
 // That divergence is the ACCEPTED display behavior, not a repaint bug, so it is normalized
 // out (normalizeThinkTiming) before DeepEqual; every OTHER field (the committed rows,
 // ordering, blocks, tool cards, gate state) is compared exactly.

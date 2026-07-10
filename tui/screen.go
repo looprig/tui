@@ -717,7 +717,7 @@ func (m Screen) spillableAssistantLines() []string {
 	}
 	// The spill renders the STILL-STREAMING live segment, so its reasoning header is the
 	// present-tense "thinking" (styles.ThinkingHeader) — the same header renderLiveAssistant
-	// uses — so the spilled prefix matches the live tail. It flips to "Thought for Ns" only
+	// uses — so the spilled prefix matches the live tail. It flips to "thought for Nsec" only
 	// when StepDone commits the step and renderEntry repaints it.
 	return splitNonEmpty(renderAssistant(live.Thinking, live.Text, "", m.expand, m.width, styles.ThinkingHeader))
 }
