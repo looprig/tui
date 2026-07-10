@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // compile-time assertion that ModernScreen satisfies tea.Model (a value receiver, so the
@@ -771,5 +773,535 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	}
 	if got := statusLabel(m.focusedStatus(), m.statusInputs()); got != labelStreaming {
 		t.Errorf("subagent focus label = %q, want %q (live subagent narration)", got, labelStreaming)
+	}
+}
+
+// runningModern returns a ModernScreen wired for a live turn: sized (ready), a non-nil
+// session subscription (subNext targets must be non-nil), and StatusRunning. It mirrors
+// runningScreen so the prompt/interrupt/queued-input parity tests exercise a mid-turn model.
+func runningModern(t *testing.T, agent Agent) ModernScreen {
+	t.Helper()
+	m := newModernSized(t, agent, 80, 24)
+	m.sub = newFakeSubscription()
+	m.status = StatusRunning
+	return m
+}
+
+// barEntryFor returns loop id's assembled bar entry (and whether one exists), so a gate-marker
+// test can assert the "!" flag on exactly the gated loop's segment.
+func barEntryFor(b loopBar, id uuid.UUID) (loopBarEntry, bool) {
+	for _, e := range b.entries {
+		if e.id == id {
+			return e, true
+		}
+	}
+	return loopBarEntry{}, false
+}
+
+// TestModernInitTriggersRestore pins that Init schedules the cold-restore repaint alongside the
+// live subscription — the viewport must repaint a RESTORED session's history before live events
+// take over, exactly as Screen does (the parity gate for a restored swe session showing blank).
+func TestModernInitTriggersRestore(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xAA)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := NewModern(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init() = nil, want non-nil (restore + subscribe batched)")
+	}
+	drainCmd(t, cmd)
+	if !agent.replayCalled {
+		t.Error("Init did not schedule the restore-repaint (ReplayBacklog not called)")
+	}
+}
+
+// TestModernHandleRestored pins the cold-restore repaint into the viewport: a RESTORED backlog
+// folds into the transcript (committed + per-loop projections + loop table) and re-renders so the
+// history shows; a NEW session (empty backlog) is a strict no-op that leaves the banner untouched;
+// a read failure surfaces a faint, non-fatal error notice the viewport re-renders.
+func TestModernHandleRestored(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xAA)
+	sub := callID(0xBB)
+	restored := []event.Event{
+		event.TurnStarted{Header: hdr(primary), Message: userMsg("restored question")},
+		stepDoneFrom(primary, aiMessage("", "restored primary answer")),
+		loopStarted(sub, "reviewer"),
+		event.TurnStarted{Header: hdr(sub), Message: userMsg("sub task")},
+		stepDoneFrom(sub, aiMessage("", "restored sub answer")),
+	}
+
+	tests := []struct {
+		name    string
+		backlog []event.Event
+		replay  error
+		check   func(t *testing.T, m ModernScreen)
+	}{
+		{
+			name:    "restored backlog repaints history + projections + loop table",
+			backlog: restored,
+			check: func(t *testing.T, m ModernScreen) {
+				if len(m.transcript.committed) == 0 {
+					t.Fatal("restore did not populate committed transcript")
+				}
+				if !containsPlain(m.viewport.lines, "restored primary answer") {
+					t.Errorf("viewport missing repainted primary history; got %q", plainAll(m.viewport.lines))
+				}
+				if got := len(m.transcript.loops()); got != 2 {
+					t.Errorf("loops() = %d, want 2 (primary + sub) — loop table must repaint", got)
+				}
+				if pc, _ := m.transcript.projectionFor(sub); len(pc) == 0 {
+					t.Error("subagent projection empty after restore — projections must repaint from history")
+				}
+			},
+		},
+		{
+			name:    "new session (empty backlog) is a no-op",
+			backlog: nil,
+			check: func(t *testing.T, m ModernScreen) {
+				if len(m.transcript.committed) != 0 {
+					t.Errorf("empty backlog committed %d entries, want 0 (no repaint for a new session)", len(m.transcript.committed))
+				}
+			},
+		},
+		{
+			name:   "read failure surfaces a faint error notice",
+			replay: errors.New("replay read"),
+			check: func(t *testing.T, m ModernScreen) {
+				if len(m.transcript.committed) == 0 {
+					t.Fatal("restore error did not commit a notice")
+				}
+				rec := m.transcript.committed[len(m.transcript.committed)-1]
+				if rec.Kind != kindNotice || rec.Level != noticeError {
+					t.Errorf("restore-error entry = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary, backlog: tt.backlog, replayErr: tt.replay}
+			m := newModernSized(t, agent, 80, 24)
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
+			m = feedRestored(t, m, msg)
+			tt.check(t, m)
+		})
+	}
+}
+
+// feedRestored drives one restoredMsg through Update and returns the new model.
+func feedRestored(t *testing.T, m ModernScreen, msg restoredMsg) ModernScreen {
+	t.Helper()
+	m, _ = updateModern(t, m, msg)
+	return m
+}
+
+// TestModernBarGateMarker pins the "!" gate marker without focus steal: a pending prompt on a
+// NON-focused loop marks THAT loop's bar segment (gate=true) while other loops stay unmarked, and
+// prompt-open does NOT change focusedLoopID — the marker is how a non-focused loop signals it
+// needs attention, and focus stays the user's to change (design §Prompts).
+func TestModernBarGateMarker(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := runningModern(t, agent)
+
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, loopStarted(subA, "reviewer"))
+	if e, ok := barEntryFor(m.bar(), subA); ok && e.gate {
+		t.Fatal("precondition: bar already marked a gate before any prompt")
+	}
+	focusBefore := m.focusedLoopID
+
+	m = feedModern(t, m, event.PermissionRequested{Header: hdr(subA), ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}})
+
+	if m.focusedLoopID != focusBefore {
+		t.Errorf("prompt-open stole focus: %v -> %v (must not steal)", focusBefore, m.focusedLoopID)
+	}
+	bar := m.bar()
+	subEntry, ok := barEntryFor(bar, subA)
+	if !ok {
+		t.Fatalf("bar has no segment for the gated subagent; entries=%+v", bar.entries)
+	}
+	if !subEntry.gate {
+		t.Error("gated subagent bar segment not marked (gate=false), want gate=true")
+	}
+	primEntry, ok := barEntryFor(bar, primary)
+	if !ok {
+		t.Fatal("bar has no segment for the primary")
+	}
+	if primEntry.gate {
+		t.Error("non-gated primary bar segment marked gate=true, want false")
+	}
+	// The rendered bar carries the "!" glyph so the user sees the attention marker.
+	if !strings.Contains(bar.Render(m.width), barGateMark) {
+		t.Errorf("rendered bar missing %q gate glyph; got %q", barGateMark, bar.Render(m.width))
+	}
+}
+
+// TestModernSubmitAutoRefocusesPrimary pins the Stage-1 submit auto-refocus: a composer submit
+// while focused on a SUBAGENT snaps focus back to the primary (the composer always submits to
+// primary, so the message must land in the view the user now watches), while a plain composer
+// EDIT never moves focus — the refocus is the submit path only.
+func TestModernSubmitAutoRefocusesPrimary(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+
+	tests := []struct {
+		name        string
+		act         func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd)
+		wantFocus   uuid.UUID
+		wantSubmit  bool
+		wantRefocus bool
+	}{
+		{
+			name: "submit from a subagent view refocuses primary and sends",
+			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+				m.interaction.input.SetValue("hello primary")
+				return updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			},
+			wantFocus:  primary,
+			wantSubmit: true,
+		},
+		{
+			name: "a plain edit does NOT move focus",
+			act: func(t *testing.T, m ModernScreen) (ModernScreen, tea.Cmd) {
+				return updateModern(t, m, keyPress("x"))
+			},
+			wantFocus:  subA,
+			wantSubmit: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newModernSized(t, agent, 80, 24)
+			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feedModern(t, m, loopStarted(subA, "reviewer"))
+			m.focusLoop(subA)
+			if m.focusedLoopID != subA {
+				t.Fatalf("precondition: focus = %v, want subA %v", m.focusedLoopID, subA)
+			}
+
+			m, cmd := tt.act(t, m)
+			if m.focusedLoopID != tt.wantFocus {
+				t.Errorf("focusedLoopID = %v, want %v", m.focusedLoopID, tt.wantFocus)
+			}
+			drainCmd(t, cmd)
+			if agent.submitCalled != tt.wantSubmit {
+				t.Errorf("agent.submitCalled = %v, want %v", agent.submitCalled, tt.wantSubmit)
+			}
+		})
+	}
+}
+
+// TestModernPermissionPromptDispatches pins permission-gate parity: a PermissionRequested renders
+// in the bottom box and marks the bar; a key (y/s/n/esc) dispatches Approve/Deny to the gate's
+// producing loop and pops the prompt (which clears the bar marker).
+func TestModernPermissionPromptDispatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		key         tea.KeyPressMsg
+		wantApprove bool
+		wantDeny    bool
+		wantScope   tool.ApprovalScope
+	}{
+		{name: "y approves once", key: runeKey('y'), wantApprove: true, wantScope: tool.ScopeOnce},
+		{name: "s approves session", key: runeKey('s'), wantApprove: true, wantScope: tool.ScopeSession},
+		{name: "n denies", key: runeKey('n'), wantDeny: true},
+		{name: "esc denies", key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantDeny: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			primary := callID(1)
+			gateLoop := callID(9)
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := runningModern(t, agent)
+			m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feedModern(t, m, loopStarted(gateLoop, "reviewer"))
+			m = feedModern(t, m, event.PermissionRequested{
+				Header:          hdr(gateLoop),
+				ToolExecutionID: callID(7),
+				Request:         tool.BashRequest{Command: "ls"},
+			})
+
+			// The bottom box renders the permission control, and the gated loop is marked.
+			if !strings.Contains(m.bottomBoxView(), "Approve") {
+				t.Errorf("bottom box missing the permission control; got %q", m.bottomBoxView())
+			}
+			if e, ok := barEntryFor(m.bar(), gateLoop); !ok || !e.gate {
+				t.Error("gated loop not marked in the bar before resolving")
+			}
+
+			m, cmd := updateModern(t, m, tt.key)
+			if cmd == nil {
+				t.Fatal("permission key cmd = nil, want a bounded dispatch cmd")
+			}
+			if m.interaction.PendingCount() != 0 {
+				t.Errorf("PendingCount = %d, want 0 (prompt popped)", m.interaction.PendingCount())
+			}
+			if e, ok := barEntryFor(m.bar(), gateLoop); ok && e.gate {
+				t.Error("gate marker still set after resolving the prompt")
+			}
+
+			drainCmd(t, cmd)
+			if tt.wantApprove {
+				if !agent.approveCalled {
+					t.Error("Approve not called")
+				}
+				if agent.lastScope != tt.wantScope {
+					t.Errorf("Approve scope = %v, want %v", agent.lastScope, tt.wantScope)
+				}
+			}
+			if tt.wantDeny && !agent.denyCalled {
+				t.Error("Deny not called")
+			}
+			if agent.lastLoopID != gateLoop {
+				t.Errorf("dispatched LoopID = %v, want the gate's producing loop %v", agent.lastLoopID, gateLoop)
+			}
+			if agent.lastCallID != callID(7) {
+				t.Errorf("dispatched ToolExecutionID = %v, want %v", agent.lastCallID, callID(7))
+			}
+		})
+	}
+}
+
+// TestModernAskUserDispatches pins AskUser parity: a free-text UserInputRequested renders its
+// answer field and a typed answer dispatches ProvideAnswer to the producing loop; a choice
+// request renders its choices and Enter answers the selected choice.
+func TestModernAskUserDispatches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("free-text answer dispatches ProvideAnswer", func(t *testing.T) {
+		t.Parallel()
+		primary := callID(1)
+		gateLoop := callID(9)
+		agent := &fakeAgent{primaryLoopID: primary}
+		m := runningModern(t, agent)
+		m = feedModern(t, m, event.UserInputRequested{
+			Header:          hdr(gateLoop),
+			ToolExecutionID: callID(3),
+			Question:        "name?",
+		})
+		if m.interaction.mode != modeAnswerPrompt {
+			t.Fatalf("mode = %d, want modeAnswerPrompt", m.interaction.mode)
+		}
+		if !strings.Contains(m.bottomBoxView(), "name?") {
+			t.Errorf("bottom box missing the AskUser question; got %q", m.bottomBoxView())
+		}
+
+		for _, r := range "neo" {
+			m, _ = updateModern(t, m, runeKey(r))
+		}
+		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("answer submit cmd = nil, want provideAnswerCmd")
+		}
+		if m.interaction.PendingCount() != 0 {
+			t.Errorf("PendingCount = %d, want 0 (answer popped)", m.interaction.PendingCount())
+		}
+		drainCmd(t, cmd)
+		if !agent.answerCalled || agent.lastAnswer != "neo" || agent.lastCallID != callID(3) || agent.lastLoopID != gateLoop {
+			t.Errorf("ProvideAnswer = (called %v, answer %q, id %v, loop %v), want (true, %q, %v, %v)",
+				agent.answerCalled, agent.lastAnswer, agent.lastCallID, agent.lastLoopID, "neo", callID(3), gateLoop)
+		}
+	})
+
+	t.Run("choice selection dispatches ProvideAnswer", func(t *testing.T) {
+		t.Parallel()
+		primary := callID(1)
+		gateLoop := callID(9)
+		agent := &fakeAgent{primaryLoopID: primary}
+		m := runningModern(t, agent)
+		m = feedModern(t, m, event.UserInputRequested{
+			Header:          hdr(gateLoop),
+			ToolExecutionID: callID(4),
+			Question:        "pick one",
+			Choices:         []string{"alpha", "beta"},
+		})
+		if m.interaction.mode != modeChoicePrompt {
+			t.Fatalf("mode = %d, want modeChoicePrompt", m.interaction.mode)
+		}
+		if !strings.Contains(m.bottomBoxView(), "alpha") {
+			t.Errorf("bottom box missing the choice list; got %q", m.bottomBoxView())
+		}
+
+		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("choice enter cmd = nil, want provideAnswerCmd")
+		}
+		drainCmd(t, cmd)
+		if !agent.answerCalled || agent.lastAnswer != "alpha" || agent.lastLoopID != gateLoop {
+			t.Errorf("ProvideAnswer = (called %v, answer %q, loop %v), want (true, %q, %v)",
+				agent.answerCalled, agent.lastAnswer, agent.lastLoopID, "alpha", gateLoop)
+		}
+	})
+}
+
+// TestModernClearReopensAndResubscribes pins /clear parity: the slash command flips to Resetting
+// and reopens the agent (via the core); the reopen result swaps in the fresh agent, RESETS the
+// modern view (focus back to the fresh primary, viewport cleared), and re-subscribes with the
+// ALL-LOOPS filter — a /clear must not silently narrow the modern scope to primary-only.
+func TestModernClearReopensAndResubscribes(t *testing.T) {
+	t.Parallel()
+
+	old := &fakeAgent{primaryLoopID: callID(1)}
+	fresh := &fakeAgent{primaryLoopID: callID(2)}
+	m := newModernSized(t, old, 80, 24)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
+	m = feedModern(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
+	m = feedModern(t, m, event.TurnDone{Header: hdr(callID(1))}) // return to idle so /clear is allowed
+
+	// /clear while idle flips to Resetting and returns the reopen cmd.
+	m.interaction.input.SetValue("/clear")
+	m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.status != StatusResetting {
+		t.Fatalf("status = %d, want StatusResetting after /clear", m.status)
+	}
+	if cmd == nil {
+		t.Fatal("/clear cmd = nil, want the reopen cmd")
+	}
+
+	// The reopen result swaps the agent and resets the modern presentation.
+	m, cmd = updateModern(t, m, reopenResultMsg{agent: fresh})
+	if m.Agent() != fresh {
+		t.Errorf("agent = %p, want fresh %p", m.Agent(), fresh)
+	}
+	if m.focusedLoopID != fresh.PrimaryLoopID() {
+		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.PrimaryLoopID())
+	}
+	if len(m.transcript.committed) != 0 {
+		t.Errorf("committed = %d, want 0 (transcript reset)", len(m.transcript.committed))
+	}
+	if len(m.viewport.lines) != 0 {
+		t.Errorf("viewport lines = %d, want 0 (viewport reset)", len(m.viewport.lines))
+	}
+	if cmd == nil {
+		t.Fatal("reopen cmd = nil, want closeAgent + re-subscribe")
+	}
+	drainCmd(t, cmd)
+	if fresh.subscribeCount != 1 {
+		t.Errorf("fresh Subscribe count = %d, want 1 (/clear re-subscribes the new agent)", fresh.subscribeCount)
+	}
+	if !fresh.subFilter.Ephemeral.All || !fresh.subFilter.Enduring.All {
+		t.Errorf("re-subscribe filter = %+v, want all-loops (modern must not narrow to primary-only)", fresh.subFilter)
+	}
+	if !old.closeCalled {
+		t.Error("old agent not closed on /clear swap")
+	}
+}
+
+// TestModernInterruptAndQuit pins the two globals: esc with NO prompt interrupts a running turn
+// (flips to Interrupting + dispatches the bounded Interrupt), and ctrl+c closes the subscription
+// and quits.
+func TestModernInterruptAndQuit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("esc interrupts a running turn", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{primaryLoopID: callID(1), interruptCancelled: true}
+		m := runningModern(t, agent)
+		m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+		if cmd == nil {
+			t.Error("esc cmd = nil, want the bounded Interrupt")
+		}
+		if m.status != StatusInterrupting {
+			t.Errorf("status = %d, want StatusInterrupting", m.status)
+		}
+	})
+
+	t.Run("ctrl+c closes the subscription and quits", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{primaryLoopID: callID(1)}
+		m := runningModern(t, agent)
+		sub := m.sub
+		m, cmd := updateModern(t, m, ctrlKey('c'))
+		if cmd == nil {
+			t.Fatal("ctrl+c cmd = nil, want closeAgent + quit")
+		}
+		if m.sub != nil {
+			t.Error("ctrl+c did not drop the subscription reference")
+		}
+		if fs, ok := sub.(*fakeSubscription); ok && !fs.closed {
+			t.Error("ctrl+c did not close the subscription")
+		}
+	})
+}
+
+// TestModernQueuedInputWhileRunning pins queued-input parity: submitting while a turn RUNS does
+// not error (it fires the fire-and-forget Submit the loop queues) and the auto-refocus-to-primary
+// still holds — a submit from a subagent view lands the user back on the primary.
+func TestModernQueuedInputWhileRunning(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	subA := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := runningModern(t, agent)
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, loopStarted(subA, "reviewer"))
+	m.focusLoop(subA)
+
+	committedBefore := len(m.transcript.committed)
+	m.interaction.input.SetValue("queued while running")
+	m, cmd := updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.status != StatusRunning {
+		t.Errorf("status = %d, want StatusRunning (submit does not change the running turn)", m.status)
+	}
+	if m.focusedLoopID != primary {
+		t.Errorf("focusedLoopID = %v, want primary %v (auto-refocus holds while running)", m.focusedLoopID, primary)
+	}
+	if len(m.transcript.committed) != committedBefore {
+		t.Errorf("committed grew by %d, want 0 (a queued submit commits no error)", len(m.transcript.committed)-committedBefore)
+	}
+	drainCmd(t, cmd)
+	if !agent.submitCalled {
+		t.Error("Submit not called for a queued-while-running message")
+	}
+}
+
+// TestModernImageRejectedAtBoundary pins image parity: an image @path on a text-only model
+// (!AcceptsImages) is rejected at the SAME submit build boundary the core owns — the message
+// commits as a plain user row plus a faint error notice the viewport surfaces, and the agent is
+// never sent the message (no mid-turn failure).
+func TestModernImageRejectedAtBoundary(t *testing.T) {
+	t.Parallel()
+
+	agent := &fakeAgent{primaryLoopID: callID(1), acceptsImage: false}
+	m := newModernSized(t, agent, 80, 24)
+	m.interaction.input.SetValue("@photo.png") // an image on a text-only model → ImageUnsupportedError
+
+	m, _ = updateModern(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if agent.submitCalled {
+		t.Error("agent.Submit called on a rejected image, want no send")
+	}
+	rec := m.transcript.committed[len(m.transcript.committed)-1]
+	if rec.Kind != kindNotice || rec.Level != noticeError {
+		t.Errorf("last committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
+	}
+	// The rejection is surfaced in the viewport (repainted), not lost mid-turn.
+	if len(m.viewport.lines) == 0 {
+		t.Error("viewport did not repaint the rejection")
 	}
 }

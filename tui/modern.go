@@ -30,9 +30,17 @@ import (
 //
 // Focus switching (Task 8): ctrl+n / ctrl+p cycle focus over the bar's loops and a bar-region
 // click focuses the clicked loop, both repointing focusedLoopID and re-rendering that loop's
-// projection (focusLoop). Focus is VIEW-ONLY — it never submits/interrupts a loop. Full prompt
-// handling, submit auto-refocus, the bar's gate marker, and the parity items (clear/interrupt/
-// queued/restore/images) are deferred to Task 9.
+// projection (focusLoop). Focus is VIEW-ONLY — it never submits/interrupts a loop.
+//
+// Prompts + feature parity (Task 9): prompt keys route to the reused interaction model
+// (handleKey precedence (2)) and the bottom box renders the head gate via the shared surface;
+// a pending gate marks its loop with "!" in the bar WITHOUT stealing focus (bar() reads
+// pendingGateLoops). A composer submit auto-refocuses the primary loop (routeToInteraction —
+// Stage 1 always submits to primary, so the user's message must land in the view they watch).
+// A cold-restore session repaints its history: Init batches restoreBacklogCmd and handleRestored
+// folds the backlog into the transcript + projections + loop table and re-renders. The remaining
+// parity items (/clear reopen, esc/ctrl+c interrupt, queued input, image @path rejection) all
+// flow through the shared sessionCore, so they are shared with Screen rather than re-implemented.
 type ModernScreen struct {
 	sessionCore
 
@@ -89,14 +97,18 @@ func NewModern(ctx context.Context, agent Agent, open OpenAgent, banner AgentBan
 }
 
 // Init focuses the composer (starting the cursor blink), schedules the opening banner
-// (systemReadyMsg), and attaches the session-lifetime ALL-LOOPS subscription (m.subscribe
-// resolves the injected allLoopsFilter). Cold-restore backlog repaint (ReplayBacklog) is a
-// parity item deferred to Task 9 — a NEW session comes up idle, so the viewport is driven
-// entirely by live events after the first Submit.
+// (systemReadyMsg), schedules the cold-restore repaint, and attaches the session-lifetime
+// ALL-LOOPS subscription (m.subscribe resolves the injected allLoopsFilter). restoreBacklogCmd
+// folds a RESTORED session's historical Enduring backlog OFF the update loop and repaints it
+// once (restoredMsg) before any live event drives the transcript — reusing the SAME shell-
+// agnostic command Screen batches, so both modes fold restore identically. A NEW session's
+// empty backlog makes it a no-op (the viewport comes up idle, driven by live events after the
+// first Submit); a restored session comes up idle too, so there is no backlog/live overlap.
 func (m ModernScreen) Init() tea.Cmd {
 	return tea.Batch(
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
+		restoreBacklogCmd(m.appCtx, m.agent, m.agent.PrimaryLoopID()),
 		m.subscribe(),
 	)
 }
@@ -117,6 +129,9 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case eventMsg:
 		cmd := m.handleEventModern(msg.ev)
+		return m, cmd
+	case restoredMsg:
+		cmd := m.handleRestored(msg)
 		return m, cmd
 	case subscribedMsg:
 		cmd := m.handleSubscribed(msg)
@@ -208,6 +223,39 @@ func (m *ModernScreen) handleEventModern(ev event.Event) tea.Cmd {
 	rearm, _ := m.sessionCore.handleEvent(ev)
 	m.rerender()
 	return rearm
+}
+
+// handleRestored applies the cold-restore backlog fold's result ONCE, MIRRORING Screen's
+// handleRestored but repainting the VIEWPORT (rerender) instead of flushing scrollback. The
+// backlog was folded OFF the update loop inside restoreBacklogCmd (FoldDisplay →
+// transcript.ApplyEvent + interaction.ApplyEvent), so the arriving state already carries the
+// rebuilt committed entries, per-loop projections, loop table, and pending gates — installing
+// it and re-rendering repaints the whole history and populates loops()/collapse from it.
+//
+// On a non-nil err it commits a faint, NON-FATAL restore-error notice the viewport re-renders
+// (the live stream is unaffected; history simply did not repaint). A NEW session folds to an
+// EMPTY backlog and is a strict no-op: installing it would DISCARD commitStartup's banner (and
+// optional greeting) and reset the transcript's displayID counter, so the live transcript is
+// left untouched and a fresh session comes up idle exactly as today. For a RESTORED session it
+// installs the rebuilt transcript + interaction wholesale (no per-event work here) and
+// re-renders; the live Subscribe path attaches separately (handleSubscribed) and, since cold
+// restore comes up idle, live events only follow a user Submit — no backlog/live overlap, no
+// dedup. The startup flags are reset so a deferred banner does not later overwrite the counter.
+func (m *ModernScreen) handleRestored(msg restoredMsg) tea.Cmd {
+	if msg.err != nil {
+		m.transcript = m.transcript.CommitError(msg.err)
+		m.rerender()
+		return nil
+	}
+	if len(msg.transcript.committed) == 0 {
+		return nil
+	}
+	m.startupPending = false
+	m.startupCommitted = false
+	m.transcript = msg.transcript
+	m.interaction = msg.interaction
+	m.rerender()
+	return nil
 }
 
 // handleSubscribed installs the session-lifetime subscription via the core and starts the
@@ -345,11 +393,22 @@ func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // only the composer's auto-grow may have shrunk the content region — so it just syncs the
 // viewport SIZE (resize), never re-rendering the transcript per keystroke. The editor's blink
 // cmd is batched so the cursor keeps blinking in compose/answer modes.
+//
+// Submit auto-refocuses the primary (Stage 1): the composer always submits to the PRIMARY
+// loop, so on a uiSubmit the view refocuses primary (focusLoop) — a user who typed while
+// focused on a subagent is not left staring at a projection where nothing appeared; their
+// message (and, on a queued send, the queued affordance / eventual user row) lands in the
+// view they now watch. It fires on the SUBMIT path ONLY — approve/deny/answer/slash/edit
+// never move focus — and focusLoop no-ops when the primary is already focused, so a user
+// composing on the primary sees no change and queued-input-while-running is unaffected.
 func (m ModernScreen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
 	cmd, present := m.sessionCore.mapAction(action)
+	if action.Kind == uiSubmit {
+		m.focusLoop(m.transcript.primaryLoopID)
+	}
 	if present {
 		m.rerender()
 	} else {
@@ -606,13 +665,17 @@ func (m ModernScreen) liveTailLines(live liveSeg) []renderedLine {
 
 // bar builds the active-loops bar from the transcript's loop table (loops()) — the SINGLE
 // source of the session's loops + liveness, never a second registry. focused is the currently
-// focused loop (Stage 1: the primary). The gate marker is left off in Stage 1; Task 9 marks a
-// loop with a pending prompt without stealing focus.
+// focused loop. The gate marker ("!") is set for any loop with a PENDING prompt (permission or
+// AskUser) awaiting the user, read from the interaction model's pending FIFO
+// (pendingGateLoops): a gate on a non-focused loop signals it needs attention WITHOUT stealing
+// focus (design §Prompts), leaving the user to focus it. A gate on the focused loop still marks
+// (focus and gate are independent flags).
 func (m ModernScreen) bar() loopBar {
 	infos := m.transcript.loops()
+	gated := m.interaction.pendingGateLoops()
 	entries := make([]loopBarEntry, 0, len(infos))
 	for _, li := range infos {
-		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: false})
+		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]})
 	}
 	return loopBar{entries: entries, focused: m.focusedLoopID, max: modernLoopBarCap}
 }

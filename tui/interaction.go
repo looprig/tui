@@ -6,9 +6,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/cli/tui/components"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/tool"
-	"github.com/looprig/core/uuid"
 )
 
 // otherChoice is the literal escape-hatch answer the 'o' accelerator sends in
@@ -81,6 +81,24 @@ func (m *interactionModel) ActivePrompt() *prompt {
 
 // PendingCount is the number of queued prompts (active + waiting).
 func (m interactionModel) PendingCount() int { return len(m.pending) }
+
+// pendingGateLoops returns the distinct producing-loop ids of every currently pending
+// prompt (permission or AskUser), so the modern loop bar can mark a gated loop with its
+// "!" affordance WITHOUT stealing focus (design §Prompts: prompt-open must not interrupt
+// the user's reading; the bar marker is how a non-focused loop signals it needs attention,
+// and focus stays the user's to change). It is a READ over the existing pending FIFO — no
+// new state — and returns nil when nothing pends so the common (no-gate) path allocates
+// nothing. A loop with several pending prompts appears once (the marker is boolean per loop).
+func (m interactionModel) pendingGateLoops() map[uuid.UUID]bool {
+	if len(m.pending) == 0 {
+		return nil
+	}
+	loops := make(map[uuid.UUID]bool, len(m.pending))
+	for i := range m.pending {
+		loops[m.pending[i].LoopID] = true
+	}
+	return loops
+}
 
 // ApplyEvent folds one turn-stream event into the interaction surface. A
 // PermissionRequested/UserInputRequested enqueues a prompt (append-once by
