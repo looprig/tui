@@ -8,8 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/core/content"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 // blinkInterval is the cadence of the live-surface animation tick: the streaming
@@ -48,8 +49,19 @@ const promptDispatchTimeout = 2 * time.Second
 // reader, the returned stream spans every turn and loop; it closes only on Close,
 // hub-forced loss, or hub teardown, never per turn.
 func subscribeCmd(agent Agent) tea.Cmd {
+	return subscribeWith(agent, DefaultEventFilter(agent.PrimaryLoopID()))
+}
+
+// subscribeWith is subscribeCmd generalized over the filter: it attaches the
+// session-lifetime subscription with the GIVEN event filter and reports the outcome.
+// The filter is INJECTED by the embedding shell via sessionCore.subscribe — the
+// scrollback Screen supplies the primary-only DefaultEventFilter, the modern
+// ModernScreen the AllLoopsEventFilter — so each mode's subscription scope is chosen at
+// the composition seam, not hard-coded in the command. subscribeCmd is the
+// primary-only convenience retained for the tests that assert the single-loop default.
+func subscribeWith(agent Agent, filter event.EventFilter) tea.Cmd {
 	return func() tea.Msg {
-		sub, err := agent.Subscribe(DefaultEventFilter(agent.PrimaryLoopID()))
+		sub, err := agent.Subscribe(filter)
 		return subscribedMsg{sub: sub, err: err}
 	}
 }

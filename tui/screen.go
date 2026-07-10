@@ -135,7 +135,7 @@ func (b AgentBanner) bannerText() string {
 // hard-capped independently of this flag).
 func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
 	return Screen{
-		sessionCore: newSessionCore(ctx, agent, open, banner),
+		sessionCore: newSessionCore(ctx, agent, open, banner, defaultLoopFilter),
 		scrollback:  newScrollbackModel(0),
 		expand:      true,
 		tip:         nextTip(""),
@@ -157,7 +157,7 @@ func (m Screen) Init() tea.Cmd {
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
 		restoreBacklogCmd(m.appCtx, m.agent, m.agent.PrimaryLoopID()),
-		subscribeCmd(m.agent),
+		m.subscribe(),
 	)
 }
 

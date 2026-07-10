@@ -16,7 +16,7 @@ import (
 // same agent and a blank banner), the direct seam the sessionCore transport tests
 // drive without a Screen wrapper.
 func newTestCore(agent Agent) sessionCore {
-	return newSessionCore(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	return newSessionCore(context.Background(), agent, fakeOpen(agent), AgentBanner{}, defaultLoopFilter)
 }
 
 // TestSessionCoreHandleEventRoutesToBothReducers pins the shared transport's core

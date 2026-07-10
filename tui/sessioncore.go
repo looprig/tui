@@ -41,12 +41,45 @@ type sessionCore struct {
 
 	status Status      // Idle | Running | Interrupting | Resetting
 	sub    EventStream // the session-lifetime event subscription; nil until subscribed
+
+	// filterFor builds the event filter for the session subscription from the CURRENT
+	// agent. It is INJECTED at construction so each presentation shell scopes its
+	// subscription without the transport hard-coding a filter: the scrollback Screen
+	// passes defaultLoopFilter (primary-loop Ephemeral, all-loops Enduring — the single-
+	// loop default), the modern ModernScreen passes allLoopsFilter (all-loops Ephemeral,
+	// so every focused subagent projection receives its live token stream instead of
+	// starving at Enduring StepDone granularity). subscribe reads it at every subscribe
+	// point — startup AND the /clear re-subscribe — so a /clear in modern mode re-attaches
+	// the all-loops scope rather than silently narrowing to primary-only.
+	filterFor eventFilterFunc
 }
 
-// newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk
-// and banner the agent metadata. The transcript is scoped to the agent's primary loop
-// so only its GENUINE user turns commit human user rows.
-func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) sessionCore {
+// eventFilterFunc builds a session subscription's event filter from the current agent.
+// It is the injected seam (sessionCore.filterFor) that lets each presentation shell
+// choose its subscription scope at the composition root: defaultLoopFilter for the
+// primary-only scrollback default, allLoopsFilter for the modern all-loops scope. It
+// takes the agent because the default filter is keyed on the agent's PrimaryLoopID
+// (which changes on /clear), so the filter must be rebuilt against the live agent at
+// every subscribe point rather than captured once.
+type eventFilterFunc func(Agent) event.EventFilter
+
+// defaultLoopFilter is the scrollback Screen's injected filter: the single-loop
+// DefaultEventFilter scoped to the agent's primary loop. It preserves Screen's exact
+// pre-refactor subscription behavior (the primary-only Ephemeral scope its tests gate).
+func defaultLoopFilter(a Agent) event.EventFilter { return DefaultEventFilter(a.PrimaryLoopID()) }
+
+// allLoopsFilter is the modern ModernScreen's injected filter: the all-loops
+// AllLoopsEventFilter, so every loop's live Ephemeral stream is delivered and a focused
+// subagent projection is never starved. It ignores the agent (neither scope discriminates
+// by loop).
+func allLoopsFilter(_ Agent) event.EventFilter { return AllLoopsEventFilter() }
+
+// newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk,
+// banner the agent metadata, and filterFor the injected subscription-scope builder (the
+// scrollback New passes defaultLoopFilter; the modern NewModern passes allLoopsFilter).
+// The transcript is scoped to the agent's primary loop so only its GENUINE user turns
+// commit human user rows.
+func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, filterFor eventFilterFunc) sessionCore {
 	return sessionCore{
 		agent:       agent,
 		openAgent:   open,
@@ -55,7 +88,16 @@ func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner Age
 		status:      StatusIdle,
 		transcript:  transcriptModel{primaryLoopID: agent.PrimaryLoopID()},
 		interaction: newInteractionModel(),
+		filterFor:   filterFor,
 	}
+}
+
+// subscribe builds the session-lifetime subscription command using the INJECTED filter
+// evaluated against the CURRENT agent. It is the single subscribe point both shells and
+// the /clear re-subscribe route through, so the chosen scope (primary-only vs all-loops)
+// is honored uniformly — at startup and after a /clear agent swap.
+func (c sessionCore) subscribe() tea.Cmd {
+	return subscribeWith(c.agent, c.filterFor(c.agent))
 }
 
 // Agent returns the live agent. cmd/swe uses this for a bounded backstop Close of
@@ -215,7 +257,12 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	c.transcript = transcriptModel{primaryLoopID: c.agent.PrimaryLoopID()}
 	c.interaction = c.interaction.ClearPrompts()
 	c.status = StatusIdle
-	return tea.Batch(closeAgent(old), subscribeCmd(c.agent)), false
+	// Re-subscribe via the INJECTED filter (c.subscribe) against the freshly swapped
+	// agent, NOT the primary-only subscribeCmd: a /clear in modern mode must re-attach the
+	// all-loops scope, or the post-clear session would silently narrow to primary-only and
+	// starve every subagent projection. For scrollback mode filterFor is defaultLoopFilter,
+	// so this is byte-identical to the old subscribeCmd(c.agent).
+	return tea.Batch(closeAgent(old), c.subscribe()), false
 }
 
 // applyPromptResult surfaces a bounded prompt-dispatch (approve/deny/answer) outcome. A
