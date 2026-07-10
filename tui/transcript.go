@@ -280,6 +280,24 @@ func (s liveSeg) thinkDuration() time.Duration {
 	return 0
 }
 
+// applyChunk routes one streamed chunk into this segment: text accumulates into Text,
+// thinking into Thinking, and the event's CreatedAt (at) folds into the thinking span
+// (recordThinking / recordNonThinking) so a committed thinking entry can show its "Thought
+// for Ns" duration. Any other chunk variant (e.g. a tool-use chunk) is skipped — tool-call
+// reconstruction is a later task. It is the SINGLE chunk-fold implementation shared by the
+// root fold (m.live.applyChunk) and every per-loop projection (p.live.applyChunk), so a
+// focused subagent view can never drift from the root.
+func (s *liveSeg) applyChunk(c content.Chunk, at time.Time) {
+	switch chunk := c.(type) {
+	case *content.TextChunk:
+		s.Text += chunk.Text
+		s.recordNonThinking(at)
+	case *content.ThinkingChunk:
+		s.Thinking += chunk.Thinking
+		s.recordThinking(at)
+	}
+}
+
 // empty reports whether the live segment carries no committable content — no
 // streamed reasoning, no streamed narration, and no reconstructed tool call.
 // active is intentionally not consulted: an active-but-content-less segment is
@@ -492,7 +510,7 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.TurnRejected:
 		m.rejectInput(ev.Cause.CommandID, ev.Reason)
 	case event.TokenDelta:
-		m.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
+		m.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
 	case event.ToolCallStarted:
 		m.toolStarted(ev)
 	case event.ToolCallCompleted:
@@ -870,25 +888,6 @@ func (m *transcriptModel) commitPrompt(ctx promptContext) {
 	m.committed = append(m.committed, entry{ID: m.nextID, Kind: kindPromptRecord, Prompt: &ctx})
 }
 
-// applyChunk routes one streamed chunk into the live segment: text accumulates
-// into live.Text, thinking into live.Thinking. Any other chunk variant (e.g. a
-// tool-use chunk) is skipped — tool-call reconstruction is a later task. at is the
-// event's CreatedAt, folded into the segment's thinking span (recordThinking /
-// recordNonThinking) so a committed thinking entry can show its "Thought for Ns" duration.
-// KEEP IN SYNC WITH projectionChunk (the per-loop mirror): a change to how chunks route
-// into the live segment — timing included — must be mirrored there, or a focused subagent
-// view will drift.
-func (m *transcriptModel) applyChunk(c content.Chunk, at time.Time) {
-	switch chunk := c.(type) {
-	case *content.TextChunk:
-		m.live.Text += chunk.Text
-		m.live.recordNonThinking(at)
-	case *content.ThinkingChunk:
-		m.live.Thinking += chunk.Thinking
-		m.live.recordThinking(at)
-	}
-}
-
 // commitLive is the TurnDone lifecycle path. In a well-formed stream every step
 // already committed via its StepDone (which resets the live segment), so live is
 // empty here and this is a pure reset. It is DEFENSIVE: should a turn somehow end with
@@ -928,14 +927,20 @@ func (m *transcriptModel) commitProse() {
 		return
 	}
 	var blocks []content.Block
+	var thinkDur time.Duration
 	if m.live.Thinking != "" {
 		blocks = append(blocks, &content.ThinkingBlock{Thinking: m.live.Thinking})
+		// The live timing is still populated on this provisional path (an interrupt/failure
+		// before StepDone), so an interrupted turn shows the real "Thought for Ns" it spent —
+		// matching a completed step. Restore-equivalence is unaffected (EqualTranscript
+		// normalizes thinkDur out either way).
+		thinkDur = m.live.thinkDuration()
 	}
 	if m.live.Text != "" {
 		blocks = append(blocks, &content.TextBlock{Text: m.live.Text})
 	}
 	m.nextID++
-	m.committed = append(m.committed, entry{ID: m.nextID, Kind: kindAssistant, Blocks: blocks})
+	m.committed = append(m.committed, entry{ID: m.nextID, Kind: kindAssistant, Blocks: blocks, thinkDur: thinkDur})
 	m.live.Thinking, m.live.Text = "", ""
 }
 
@@ -1495,7 +1500,7 @@ func (m *transcriptModel) routeProjection(ev event.Event) {
 		m.projectionUser(p, ev.Cause.LoopID, ev.Message)
 	case event.TokenDelta:
 		p := m.ensureProjection(loopID)
-		projectionChunk(p, ev.Chunk, ev.EventHeader().CreatedAt)
+		p.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
 	case event.StepDone:
 		p := m.ensureProjection(loopID)
 		m.projectionStep(p, ev)
@@ -1546,22 +1551,6 @@ func (m *transcriptModel) projectionUser(p *loopProjection, triggeredBy uuid.UUI
 	}
 	m.nextID++
 	p.committed = append(p.committed, entry{ID: m.nextID, Kind: kindUser, Blocks: msg.Blocks})
-}
-
-// projectionChunk routes one streamed chunk into a projection's live segment (text →
-// live.Text, thinking → live.Thinking), and folds the event's CreatedAt (at) into the
-// segment's thinking span — mirroring applyChunk for the root fold. Any other chunk
-// variant is skipped. It is a free function — chunks allocate no id, so it touches only the
-// projection, never the model.
-func projectionChunk(p *loopProjection, c content.Chunk, at time.Time) {
-	switch chunk := c.(type) {
-	case *content.TextChunk:
-		p.live.Text += chunk.Text
-		p.live.recordNonThinking(at)
-	case *content.ThinkingChunk:
-		p.live.Thinking += chunk.Thinking
-		p.live.recordThinking(at)
-	}
 }
 
 // projectionStep commits one StepDone into a projection, mirroring the primary stepDone

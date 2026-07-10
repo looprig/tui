@@ -3226,6 +3226,44 @@ func TestThinkingDurationCapture(t *testing.T) {
 	}
 }
 
+// TestInterruptedProseCarriesThinkDuration covers the provisional-prose path
+// (commitProse): a turn INTERRUPTED mid-step — after thinking streamed but before its
+// StepDone — still commits the real "Thought for Ns" it spent, because the live timing is
+// intact when the interrupt flushes the provisional prose. It matches a completed step's
+// affordance rather than degrading to the bare "Thought".
+func TestInterruptedProseCarriesThinkDuration(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0x61)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	thinkAt := func(s string, off time.Duration) event.Event {
+		return event.TokenDelta{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, CreatedAt: base.Add(off)},
+			Chunk:  &content.ThinkingChunk{Thinking: s},
+		}
+	}
+
+	m := transcriptModel{primaryLoopID: primary}
+	// Thinking streams from +0 to +10s, then the turn is interrupted BEFORE any StepDone:
+	// turnInterrupted → commitProse flushes the provisional thinking with its measured span.
+	for _, ev := range []event.Event{
+		event.TurnStarted{Header: hdr(primary)},
+		thinkAt("half a ", 0),
+		thinkAt("thought", 10*time.Second),
+		event.TurnInterrupted{Header: hdr(primary)},
+	} {
+		m = m.ApplyEvent(ev)
+	}
+
+	gotDur, gotThinking := firstThinkingAssistant(m)
+	if !gotThinking {
+		t.Fatalf("interrupt path committed no thinking entry; committed=%+v", m.committed)
+	}
+	if gotDur != 10*time.Second {
+		t.Errorf("interrupted prose thinkDur = %v, want 10s (the real span it spent)", gotDur)
+	}
+}
+
 // TestEqualTranscriptIgnoresThinkDuration is the restore-equivalence guard: a LIVE fold
 // (with streaming TokenDelta timestamps) captures a non-zero thinking duration, while a
 // RESTORE fold of the SAME step WITHOUT those Ephemeral, never-journaled deltas captures

@@ -59,6 +59,11 @@ func FoldDisplay(events []event.Event, primaryLoopID uuid.UUID) DisplayProjectio
 // That divergence is the ACCEPTED display behavior, not a repaint bug, so it is normalized
 // out (normalizeThinkTiming) before DeepEqual; every OTHER field (the committed rows,
 // ordering, blocks, tool cards, gate state) is compared exactly.
+//
+// This is a TEST / RESTORE-VERIFICATION comparator, NOT a cheap runtime equality check:
+// normalizeThinkTiming allocates fresh copies of both models (committed slices + projection
+// map/pointers) on every call, and reflect.DeepEqual walks the whole reducer state. Do NOT
+// wire it into a render loop or a per-event hot path expecting it to be free.
 func (p DisplayProjection) EqualTranscript(other DisplayProjection) bool {
 	return reflect.DeepEqual(normalizeThinkTiming(p.transcript), normalizeThinkTiming(other.transcript))
 }
