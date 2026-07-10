@@ -1572,6 +1572,113 @@ func TestModernTickLifecycle(t *testing.T) {
 	}
 }
 
+// TestModernStatusGradientAnimates pins that the modern status label SHIMMERS: at two different
+// anim-state frames the same status label renders DIFFERENT styled bytes (the flowing gradient),
+// while the plain (ANSI-free) text — the findable "streaming…" substring — is unchanged. This is
+// the visible payoff of threading m.anim.frame into modernStatusLine's phase.
+func TestModernStatusGradientAnimates(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	// A live subagent streaming narration, focused, reads "streaming…" (mirrors
+	// TestModernStatusReflectsFocusedLoop) — a real animated label to sample across frames.
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feedModern(t, m, event.TurnDone{Header: hdr(primary)})
+	m = feedModern(t, m, loopStarted(sub, "reviewer"))
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
+	m.focusLoop(sub)
+
+	m.anim.frame = 0
+	styled0 := m.modernStatusLine()
+	m.anim.frame = 5
+	styled5 := m.modernStatusLine()
+
+	if styled0 == styled5 {
+		t.Errorf("status line identical across anim frames 0 and 5 = %q; want the gradient to animate", styled0)
+	}
+	plain0, plain5 := plainFromStyled(styled0), plainFromStyled(styled5)
+	if plain0 != plain5 {
+		t.Errorf("plain status text changed across frames: %q vs %q; only the styling may differ", plain0, plain5)
+	}
+	if !strings.Contains(plain0, labelStreaming) {
+		t.Errorf("status plain text = %q, want it to contain %q", plain0, labelStreaming)
+	}
+}
+
+// TestModernAnimTick pins the continuous status-shimmer tick: it advances the gradient frame and
+// re-arms EVERY tick (idle included — no per-turn gate), does NOT re-render the transcript buffer
+// (a pure status-line recompose), and self-terminates on quit so no tick leaks past tea.Quit.
+func TestModernAnimTick(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+
+	t.Run("advances the frame and re-arms while idle", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{primaryLoopID: callID(1)}
+		m := newModernSized(t, agent, 80, 24) // no turn active — idle still animates
+		if m.anim.frame != 0 {
+			t.Fatalf("fresh anim frame = %d, want 0", m.anim.frame)
+		}
+		m, cmd := updateModern(t, m, animMsg(base))
+		if m.anim.frame != 1 {
+			t.Errorf("anim frame after one tick = %d, want 1", m.anim.frame)
+		}
+		if cmd == nil {
+			t.Error("anim tick did not re-arm while idle; want a continuous reschedule")
+		}
+		m, cmd = updateModern(t, m, animMsg(base.Add(blinkInterval)))
+		if m.anim.frame != 2 || cmd == nil {
+			t.Errorf("second anim tick: frame=%d cmd=%v, want frame=2 and a reschedule", m.anim.frame, cmd)
+		}
+	})
+
+	t.Run("does not re-render the transcript", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{primaryLoopID: callID(1)}
+		m := newModernSized(t, agent, 80, 24)
+		// Commit an entry (the opening banner) so the viewport has a real buffer to guard.
+		m, _ = updateModern(t, m, systemReadyMsg{})
+		before := m.viewport.lines
+		if len(before) == 0 {
+			t.Fatal("expected committed viewport lines to test against")
+		}
+		m, cmd := updateModern(t, m, animMsg(base))
+		after := m.viewport.lines
+		// SetLines (the only re-render path) installs a FRESH slice; an anim tick must leave the
+		// SAME backing buffer untouched. Same length AND same first-element address proves it.
+		if len(after) != len(before) || &after[0] != &before[0] {
+			t.Errorf("anim tick re-rendered the transcript: lines changed (len %d→%d); want the buffer untouched", len(before), len(after))
+		}
+		if cmd == nil {
+			t.Error("anim tick did not re-arm; want a reschedule")
+		}
+	})
+
+	t.Run("stops on quit", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{primaryLoopID: callID(1)}
+		m := runningModern(t, agent)
+		m, _ = updateModern(t, m, ctrlKey('c'))
+		if !m.quitting {
+			t.Fatal("ctrl+c did not latch quitting")
+		}
+		frameBefore := m.anim.frame
+		m, cmd := updateModern(t, m, animMsg(base))
+		if cmd != nil {
+			t.Errorf("anim tick after quit returned cmd %v, want nil (chain stops, no leak)", cmd)
+		}
+		if m.anim.frame != frameBefore {
+			t.Errorf("anim tick after quit advanced the frame %d→%d, want it frozen", frameBefore, m.anim.frame)
+		}
+	})
+}
+
 // realThinkDelta / realTextDelta build streaming TokenDeltas in the REAL harness shape: an
 // Ephemeral delta on loopID carrying NO CreatedAt (the harness never stamps Ephemeral events
 // — only Enduring events get a Factory CreatedAt). The modern shell must stamp them with its

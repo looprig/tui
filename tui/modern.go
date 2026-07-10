@@ -91,6 +91,19 @@ type ModernScreen struct {
 	// starts it (maybeStartTick); each tick reschedules only while a turn is still active
 	// and otherwise stops, so the timer never ticks forever once the session goes idle.
 	ticking bool
+
+	// anim holds the status line's animation state: its frame counter flows the status-label
+	// + dot lime↔blue gradient (renderStatusLine's phase). Unlike Screen — which animates only
+	// while a turn Runs — the modern viewport shimmers CONTINUOUSLY (idle animates too), so a
+	// SINGLE anim tick chain, started at Init and re-armed every blinkInterval, advances it for
+	// the life of the program and stops only on quit (quitting). It is meaningful ONLY to
+	// View's status line; the committed transcript never consults it, and an anim tick
+	// recomposes ONLY the status line — never re-rendering the transcript buffer.
+	anim animState
+
+	// quitting latches on ctrl+c so the continuous anim tick chain self-terminates instead of
+	// leaking a reschedule past tea.Quit: handleAnim stops re-arming once it is set.
+	quitting bool
 }
 
 // modernTickInterval is the status-line timer's cadence: one tick per second while a turn
@@ -105,6 +118,20 @@ type tickMsg struct{ at time.Time }
 // turn is active, so the chain self-terminates when the session goes idle.
 func tickCmd() tea.Cmd {
 	return tea.Tick(modernTickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
+}
+
+// animMsg is one status-line animation tick carrying its own time (unused at the UI; it
+// satisfies tea.Tick's func(time.Time) tea.Msg shape). Handling it advances the status
+// gradient phase (m.anim) by one frame and re-arms the next tick, so the shimmer runs
+// continuously — idle included — for the life of the program. It never touches the transcript.
+type animMsg time.Time
+
+// animCmd schedules ONE status-line animation tick after blinkInterval — Screen's animation
+// cadence (commands.go) — delivering an animMsg. handleAnim re-arms it every tick until the
+// shell is quitting, so the modern status gradient animates continuously without a per-turn
+// gate. It never re-renders the transcript.
+func animCmd() tea.Cmd {
+	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return animMsg(t) })
 }
 
 // modernLoopBarCap is the visible-cap the modern active-loops bar renders under: at most
@@ -176,6 +203,10 @@ func (m ModernScreen) Init() tea.Cmd {
 		func() tea.Msg { return systemReadyMsg{} },
 		restoreBacklogCmd(m.appCtx, m.agent, m.agent.PrimaryLoopID()),
 		m.subscribe(),
+		// The status-line shimmer runs continuously (idle animates too), so start its single
+		// anim tick chain here for the life of the program; handleAnim re-arms it and stops
+		// only on quit.
+		animCmd(),
 	)
 }
 
@@ -222,6 +253,9 @@ func (m ModernScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tickMsg:
 		cmd := m.handleTick(msg)
+		return m, cmd
+	case animMsg:
+		cmd := m.handleAnim()
 		return m, cmd
 	}
 	return m, nil
@@ -376,6 +410,21 @@ func (m *ModernScreen) handleTick(msg tickMsg) tea.Cmd {
 	return m.maybeStartTick()
 }
 
+// handleAnim advances the status-line gradient one frame and re-arms the next anim tick,
+// UNLESS the shell is quitting (then the chain stops so no tick leaks past tea.Quit). It is a
+// PURE recompose: it advances ONLY m.anim (the gradient phase) and never re-renders the
+// transcript buffer (renderFocused/SetLines) — the transcript is unchanged on an anim tick,
+// and View recomposes the status line from the new frame every render, so advancing the frame
+// and returning the reschedule is the whole update. Unlike Screen's blink it runs at EVERY
+// status (idle included), so the shimmer never freezes; the turn timer keeps its own 1s tick.
+func (m *ModernScreen) handleAnim() tea.Cmd {
+	if m.quitting {
+		return nil
+	}
+	m.anim = m.anim.advance()
+	return animCmd()
+}
+
 // handleRestored applies the cold-restore backlog fold's result ONCE, MIRRORING Screen's
 // handleRestored but repainting the VIEWPORT (rerender) instead of flushing scrollback. The
 // backlog was folded OFF the update loop inside restoreBacklogCmd (FoldDisplay →
@@ -498,8 +547,11 @@ func (m *ModernScreen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 func (m ModernScreen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		// Close the subscription best-effort so it does not leak past quit (a synchronous,
-		// idempotent teardown), then close the agent (bounded async) and quit.
+		// Latch quitting so the continuous anim tick chain self-terminates (handleAnim stops
+		// re-arming) rather than leaking a reschedule past tea.Quit. Then close the subscription
+		// best-effort so it does not leak past quit (a synchronous, idempotent teardown), close
+		// the agent (bounded async), and quit.
+		m.quitting = true
 		if m.sub != nil {
 			_ = m.sub.Close()
 			m.sub = nil
@@ -988,13 +1040,15 @@ func (m ModernScreen) statusInputs() statusInputs {
 	return in
 }
 
-// modernStatusLine is the focused loop's status line for the frame: the shared gradient
-// status label PLUS, while the focused loop's turn is running, a faint live-elapsed suffix
-// " (Ns)" / " (Nm Ss)". Idle / no active turn → no suffix. The suffix is a single faint
-// Render call so its "(2m 34s)" text stays contiguous (substring-findable) rather than
-// split by per-glyph styling.
+// modernStatusLine is the focused loop's status line for the frame: the shared ANIMATED
+// gradient status label (label + dot flow with m.anim.frame — the same phase Screen threads,
+// advanced continuously by the anim tick so idle/waiting/thinking/streaming all shimmer) PLUS,
+// while the focused loop's turn is running, a faint live-elapsed suffix " (Ns)" / " (Nm Ss)".
+// Idle / no active turn → no suffix. The suffix is a single faint Render call so its "(2m 34s)"
+// text stays contiguous (substring-findable) rather than split by per-glyph styling, and it is
+// deliberately NOT part of the gradient so it reads as a quiet, static timer beside the shimmer.
 func (m ModernScreen) modernStatusLine() string {
-	line := renderStatusLine(m.focusedStatus(), m.statusInputs(), 0)
+	line := renderStatusLine(m.focusedStatus(), m.statusInputs(), m.anim.frame)
 	if d, ok := m.turnElapsed(); ok {
 		line += styles.StatusStyle.Render(" (" + formatElapsed(d) + ")")
 	}
