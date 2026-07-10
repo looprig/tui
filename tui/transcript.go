@@ -276,6 +276,21 @@ type transcriptModel struct {
 	// legacy/no-name loop) falls back to the loopID short form — see agentLabel. It is
 	// cloned on write so the by-value reducer never aliases a prior model's map.
 	loopAgents map[uuid.UUID]identity.AgentName
+	// loopLive maps a loop id to its liveness bit — true between the loop's LoopStarted /
+	// turn activity and its LoopIdle, false once it parks idle (design §Loop lifecycle &
+	// liveness). It is BI-STATE (live | idle): subagent loops are never deleted and there is
+	// NO loop-exited event, so a loop never leaves this map — it only toggles. It is the
+	// SINGLE source of loop liveness (no parallel registry that could drift); the modern
+	// active-loops bar reads it via loops(). It is cloned on write alongside loopOrder
+	// (value-copy contract), mirroring loopAgents / recordLoopAgent.
+	loopLive map[uuid.UUID]bool
+	// loopOrder is the stable creation order of the loop ids (appended on a loop's FIRST
+	// sight in recordLoopLive), so loops() enumerates the session's loops deterministically
+	// (map iteration order is unspecified). It is the companion of loopLive — a loop id is in
+	// loopOrder iff it is in loopLive (recordLoopLive is the sole writer of both). It is
+	// cloned on write — appended to a fresh slice, never mutated in a shared backing array —
+	// mirroring accumOrder.
+	loopOrder []uuid.UUID
 	// loopParent maps a SUBAGENT child loop id to its spawn key — the parent loop/turn/
 	// step coordinates plus the durable provider tool-use id of the Subagent call that
 	// spawned it — recorded from a child LoopStarted whose ParentToolUseID is non-empty
@@ -352,8 +367,10 @@ type subagentAccumulator struct {
 
 // ApplyEvent folds one turn-stream event into the model and returns the next
 // model. LoopStarted records the producing loop's agent name (LoopID→AgentName) for
-// later subagent attribution; it commits nothing. TurnStarted begins/keeps a live
-// assistant segment AND — for GENUINE user
+// later subagent attribution, marks the loop LIVE, and appends it to the ordered loop
+// table on first sight (recordLoopLive); it commits nothing. LoopIdle marks the loop
+// IDLE (bi-state — there is no loop-exited event). TurnStarted begins/keeps a live
+// assistant segment, marks the loop LIVE (activity implies live), AND — for GENUINE user
 // input only (Header.Cause.LoopID == 0; a subagent hand-back carries a
 // non-zero one and commits NO user row) — commits the authoritative user row from
 // its Message and drops the matching queued affordance. TurnFoldedInto does the
@@ -391,9 +408,13 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	switch ev := ev.(type) {
 	case event.LoopStarted:
 		m.recordLoopAgent(ev.LoopID, ev.AgentName)
+		m.recordLoopLive(ev.LoopID, true)
 		m.loopSpawned(ev)
+	case event.LoopIdle:
+		m.recordLoopLive(ev.LoopID, false)
 	case event.TurnStarted:
 		m.live.active = true
+		m.recordLoopLive(ev.LoopID, true)
 		m.subagentTask(ev.LoopID, ev.Message)
 		m.startTurnUser(ev.LoopID, ev.Cause.LoopID, ev.Cause.CommandID, ev.Message)
 	case event.TurnFoldedInto:
@@ -454,6 +475,26 @@ func (m *transcriptModel) recordLoopAgent(loopID uuid.UUID, name identity.AgentN
 	m.loopAgents = next
 }
 
+// recordLoopLive sets loopID's liveness bit (LoopStarted / turn activity → true, LoopIdle
+// → false) and appends loopID to loopOrder on its FIRST sight, so loops() enumerates the
+// session's loops in stable creation order. Liveness is BI-STATE (live | idle) — there is
+// no loop-exited event, so a loop is only ever toggled, never removed. Both loopLive (a
+// cloned map) and loopOrder (a cloned slice) are written value-copy so the by-value reducer
+// never aliases a prior model's state, mirroring recordLoopAgent and accumOrder. This is
+// the SOLE writer of both, so a loop is in loopOrder iff it is in loopLive.
+func (m *transcriptModel) recordLoopLive(loopID uuid.UUID, live bool) {
+	_, seen := m.loopLive[loopID]
+	next := make(map[uuid.UUID]bool, len(m.loopLive)+1)
+	for k, v := range m.loopLive {
+		next[k] = v
+	}
+	next[loopID] = live
+	m.loopLive = next
+	if !seen {
+		m.loopOrder = append(append([]uuid.UUID(nil), m.loopOrder...), loopID)
+	}
+}
+
 // agentLabel resolves the attribution label for loopID: the agent name learned from
 // its LoopStarted when known and non-empty, else the loopID short form (loopShortForm)
 // — never an empty string, so a label is always shown and a missing/legacy name never
@@ -476,6 +517,30 @@ func loopShortForm(loopID uuid.UUID) string {
 		return s[:i]
 	}
 	return s
+}
+
+// loopInfo is one loop's entry in the ordered loop table exposed by loops(): its id, its
+// resolved display name (agentLabel — the agent name, or the loopID short form when
+// unknown/empty), and its bi-state liveness. It is the shape Task 7 maps into the modern
+// active-loops bar's entries; the transcript's loop table is the SINGLE source of both.
+type loopInfo struct {
+	ID   uuid.UUID
+	Name string
+	Live bool
+}
+
+// loops returns the session's loops in stable creation order (loopOrder), each carrying its
+// resolved name (agentLabel) and liveness (loopLive). It is the ordered accessor the modern
+// active-loops bar renders from — a READ over the EXISTING loop table, never a second
+// registry. An unseen loop (no lifecycle event yet) does not appear; a loop with no known
+// agent name falls back to its loopID short form via agentLabel. The returned slice is
+// freshly built, so a caller cannot reach the model's internal order.
+func (m transcriptModel) loops() []loopInfo {
+	out := make([]loopInfo, 0, len(m.loopOrder))
+	for _, id := range m.loopOrder {
+		out = append(out, loopInfo{ID: id, Name: m.agentLabel(id), Live: m.loopLive[id]})
+	}
+	return out
 }
 
 // CommitUser appends the user's submitted message as one kindUser entry with a

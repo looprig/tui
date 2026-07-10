@@ -2902,3 +2902,196 @@ func TestProjectionStoredCardNoSteal(t *testing.T) {
 		t.Errorf("primary live Bash result = %q, want %q (untouched by the projection)", got, "PARENT bash output")
 	}
 }
+
+// loopHdr builds a loop-scoped Header stamped with loopID, for the loop-lifecycle events
+// (TurnStarted / LoopIdle) the liveness tests feed.
+func loopHdr(loopID uuid.UUID) event.Header {
+	return event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}
+}
+
+// findLoop returns the loopInfo for id in loops(), and whether it was present.
+func findLoop(loops []loopInfo, id uuid.UUID) (loopInfo, bool) {
+	for _, li := range loops {
+		if li.ID == id {
+			return li, true
+		}
+	}
+	return loopInfo{}, false
+}
+
+// TestTranscriptLoopLiveness covers the bi-state (live | idle) liveness the loop table
+// tracks: LoopStarted / TurnStarted mark a loop live, LoopIdle marks it idle, the state
+// toggles freely (no "done"/"exited"), and an unseen loop is absent from loops().
+func TestTranscriptLoopLiveness(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	a := callID(0xB1)
+	b := callID(0xB2)
+
+	tests := []struct {
+		name     string
+		events   []event.Event
+		loopID   uuid.UUID
+		wantSeen bool
+		wantLive bool
+	}{
+		{
+			name:     "LoopStarted marks the loop live",
+			events:   []event.Event{loopStarted(a, "explorer")},
+			loopID:   a,
+			wantSeen: true,
+			wantLive: true,
+		},
+		{
+			name:     "LoopIdle marks the loop idle",
+			events:   []event.Event{loopStarted(a, "explorer"), event.LoopIdle{Header: loopHdr(a)}},
+			loopID:   a,
+			wantSeen: true,
+			wantLive: false,
+		},
+		{
+			name:     "TurnStarted marks the loop live (activity implies live)",
+			events:   []event.Event{loopStarted(a, "explorer"), event.LoopIdle{Header: loopHdr(a)}, event.TurnStarted{Header: loopHdr(a)}},
+			loopID:   a,
+			wantSeen: true,
+			wantLive: true,
+		},
+		{
+			name: "bi-state: idle again after re-live (no done state)",
+			events: []event.Event{
+				loopStarted(a, "explorer"),
+				event.TurnStarted{Header: loopHdr(a)},
+				event.LoopIdle{Header: loopHdr(a)},
+			},
+			loopID:   a,
+			wantSeen: true,
+			wantLive: false,
+		},
+		{
+			name:     "TurnStarted alone (no LoopStarted) still seeds the loop live",
+			events:   []event.Event{event.TurnStarted{Header: loopHdr(b)}},
+			loopID:   b,
+			wantSeen: true,
+			wantLive: true,
+		},
+		{
+			name:     "unseen loop is absent",
+			events:   nil,
+			loopID:   a,
+			wantSeen: false,
+			wantLive: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{primaryLoopID: primary}
+			for _, ev := range tt.events {
+				m = m.ApplyEvent(ev)
+			}
+			li, ok := findLoop(m.loops(), tt.loopID)
+			if ok != tt.wantSeen {
+				t.Fatalf("loop %v seen = %v, want %v (loops=%+v)", tt.loopID, ok, tt.wantSeen, m.loops())
+			}
+			if tt.wantSeen && li.Live != tt.wantLive {
+				t.Errorf("loop %v Live = %v, want %v", tt.loopID, li.Live, tt.wantLive)
+			}
+		})
+	}
+}
+
+// TestTranscriptLoopsOrderAndNames covers the ordered accessor: loops() lists loops in stable
+// creation order (later activity never reorders), resolves each Name via agentLabel (agent
+// name, else loopID short form for an empty/unknown name), and reports each loop's liveness.
+func TestTranscriptLoopsOrderAndNames(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	l1 := callID(0x11)
+	l2 := callID(0x22)
+	l3 := callID(0x33)
+
+	m := transcriptModel{primaryLoopID: primary}
+	m = m.ApplyEvent(loopStarted(primary, identity.AgentName("orchestrator")))
+	m = m.ApplyEvent(loopStarted(l1, identity.AgentName("explorer")))
+	m = m.ApplyEvent(loopStarted(l2, identity.AgentName(""))) // empty name → short-form fallback
+	// Re-activity on already-seen loops must NOT reorder the table.
+	m = m.ApplyEvent(event.TurnStarted{Header: loopHdr(primary)})
+	m = m.ApplyEvent(event.LoopIdle{Header: loopHdr(l1)})
+	m = m.ApplyEvent(loopStarted(l3, identity.AgentName("tester")))
+
+	got := m.loops()
+	want := []loopInfo{
+		{ID: primary, Name: "orchestrator", Live: true}, // TurnStarted → live
+		{ID: l1, Name: "explorer", Live: false},         // LoopIdle → idle
+		{ID: l2, Name: loopShortForm(l2), Live: true},   // empty name → short form; LoopStarted → live
+		{ID: l3, Name: "tester", Live: true},            // LoopStarted → live
+	}
+	if len(got) != len(want) {
+		t.Fatalf("loops() len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("loops()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestTranscriptLoopLivenessCloneOnWrite proves the loop table honors the value-copy
+// contract: applying a lifecycle event to a model copy never mutates the prior model's
+// loopLive map or loopOrder slice.
+func TestTranscriptLoopLivenessCloneOnWrite(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	l1 := callID(0x11)
+	l2 := callID(0x22)
+
+	base := transcriptModel{primaryLoopID: primary}
+	base = base.ApplyEvent(loopStarted(l1, identity.AgentName("explorer")))
+
+	// A copy that appends a new loop must not grow the base's order.
+	grown := base.ApplyEvent(loopStarted(l2, identity.AgentName("builder")))
+	if got := len(base.loops()); got != 1 {
+		t.Errorf("base loops after applying to a copy = %d, want 1 (order slice aliased across copies)", got)
+	}
+	if got := len(grown.loops()); got != 2 {
+		t.Errorf("grown loops = %d, want 2", got)
+	}
+
+	// A copy that toggles l1 idle must not flip the base's live bit.
+	idled := base.ApplyEvent(event.LoopIdle{Header: loopHdr(l1)})
+	if li, _ := findLoop(base.loops(), l1); !li.Live {
+		t.Error("base l1 liveness flipped to idle by a copy (loopLive map aliased across copies)")
+	}
+	if li, _ := findLoop(idled.loops(), l1); li.Live {
+		t.Error("idled l1 Live = true, want false")
+	}
+}
+
+// TestTranscriptLoopLivenessFoldDeterministic guards the restore-equivalence path: because
+// LoopStarted / TurnStarted / LoopIdle are all Enduring, two folds of the same lifecycle
+// sequence produce byte-identical transcript state (the new loopLive map + loopOrder slice
+// fold identically), so a restored session still EqualTranscript the live one.
+func TestTranscriptLoopLivenessFoldDeterministic(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	l1 := callID(0x11)
+	l2 := callID(0x22)
+
+	events := []event.Event{
+		loopStarted(primary, identity.AgentName("orchestrator")),
+		loopStarted(l1, identity.AgentName("explorer")),
+		event.TurnStarted{Header: loopHdr(l1)},
+		event.LoopIdle{Header: loopHdr(l1)},
+		loopStarted(l2, identity.AgentName("builder")),
+	}
+	a := FoldDisplay(events, primary)
+	b := FoldDisplay(events, primary)
+	if !a.EqualTranscript(b) {
+		t.Error("EqualTranscript on two folds of the same lifecycle sequence = false, want true (liveness must fold deterministically)")
+	}
+}
