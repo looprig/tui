@@ -1574,3 +1574,51 @@ func TestModernComposerDefaultsToTwoLines(t *testing.T) {
 		t.Errorf("plain composer empty height = %d, want 1 (Screen unchanged)", got)
 	}
 }
+
+// TestModernRenderFocusedPrimaryExcludesSubagentLeak is the end-to-end regression guard:
+// with the primary loop focused (the default), renderFocused renders projectionFor(primary)
+// = the root fold, so a CONCURRENT subagent's live Ephemeral stream (delivered under the
+// modern AllLoopsEventFilter) must NOT appear in the primary-focused viewport. Before the
+// root-fold guard, the subagent's TokenDelta and ToolCallStarted leaked into m.live and
+// spliced into the orchestrator's live tail. Focusing the subagent still shows its OWN
+// stream (its projection is unchanged), proving the guard only blocks the ROOT leak.
+func TestModernRenderFocusedPrimaryExcludesSubagentLeak(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{primaryLoopID: primary}
+	m := newModernSized(t, agent, 80, 24)
+
+	// The PRIMARY orchestrator streams its own live narration.
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feedModern(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "PRIMARY narration here"}})
+
+	// A concurrent subagent's live stream arrives on the all-loops firehose.
+	m = feedModern(t, m, event.TurnStarted{Header: hdr(sub)})
+	m = feedModern(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "SUBAGENT leaked words"}})
+	m = feedModern(t, m, event.ToolCallStarted{Header: hdr(sub), ToolExecutionID: callID(0x33), ToolName: "Bash", Summary: "subagent danger"})
+
+	// (c) the PRIMARY-focused viewport shows only the primary's live content.
+	lines := m.renderFocused()
+	if !containsPlain(lines, "PRIMARY narration here") {
+		t.Errorf("primary renderFocused missing primary narration; got %q", plainAll(lines))
+	}
+	if containsPlain(lines, "SUBAGENT leaked words") {
+		t.Errorf("primary renderFocused LEAKED subagent narration; got %q", plainAll(lines))
+	}
+	if containsPlain(lines, "subagent danger") {
+		t.Errorf("primary renderFocused LEAKED subagent tool card; got %q", plainAll(lines))
+	}
+	// The root live segment itself must carry no subagent tool card.
+	if len(m.transcript.live.Calls) != 0 {
+		t.Errorf("root live.Calls = %d, want 0 (subagent ToolCallStarted must not add a root card)", len(m.transcript.live.Calls))
+	}
+
+	// Focusing the subagent shows ITS OWN stream — projections still work.
+	m.focusLoop(sub)
+	subLines := m.renderFocused()
+	if !containsPlain(subLines, "SUBAGENT leaked words") {
+		t.Errorf("subagent renderFocused missing its own narration; got %q", plainAll(subLines))
+	}
+}

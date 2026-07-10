@@ -464,7 +464,11 @@ type subagentAccumulator struct {
 // silently vanish). TokenDelta routes
 // *content.TextChunk → live.Text and *content.ThinkingChunk → live.Thinking as a
 // PROVISIONAL live render; ToolCallStarted/ToolCallCompleted drive the live tool
-// cards (in the live tail only — they are not committed to scrollback here).
+// cards (in the live tail only — they are not committed to scrollback here). These
+// Ephemeral root folds (TokenDelta/ToolCall*) are PRIMARY-ONLY (isPrimaryLoop): under the
+// modern AllLoopsEventFilter every loop's live Ephemeral is delivered, so a subagent's
+// stream must NOT pollute the root live segment — it reaches its own projection via
+// routeProjection. The guard is a no-op under scrollback's primary-only DefaultEventFilter.
 //
 // StepDone is the authoritative commit point and the self-heal anchor: it SNAPS the
 // transcript to the loop's finalized StepDone.Messages (the step's AIMessage + its
@@ -478,7 +482,9 @@ type subagentAccumulator struct {
 // StepDone, so it only flushes any leftover provisional live (defensive) and resets.
 // PermissionRequested only REMEMBERS the gate (by ToolExecutionID) so the call's committed card
 // can read "Approved …" / "Denied …" once Screen reports the keypress via ResolveGate;
-// it commits nothing (the permission shows on the tool card, not a separate record).
+// it commits nothing (the permission shows on the tool card, not a separate record). This
+// root-gate recording is PRIMARY-ONLY (isPrimaryLoop) — a subagent's gate must not bake into
+// the root live card; the interaction model still enqueues the prompt for every loop.
 // UserInputRequested (AskUser is not a tool) commits ONLY the prompt record. Neither
 // commits pending prose — the provisional live prose stays live and commits exactly
 // once via StepDone (no duplicate) — and neither resets the live segment, so the turn
@@ -510,15 +516,37 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.TurnRejected:
 		m.rejectInput(ev.Cause.CommandID, ev.Reason)
 	case event.TokenDelta:
-		m.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
+		// PRIMARY-ONLY root fold: a subagent's live TokenDelta (delivered only under the
+		// modern AllLoopsEventFilter) must NEVER touch the root live segment — it reaches
+		// its own projection via routeProjection. A no-op under scrollback's primary-only
+		// DefaultEventFilter (which delivers no subagent Ephemeral).
+		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+			m.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
+		}
 	case event.ToolCallStarted:
-		m.toolStarted(ev)
+		// PRIMARY-ONLY root fold (see TokenDelta): a subagent's live tool card must not
+		// enter the root live tail. Non-primary tool cards are a no-op at the root (live
+		// tool spinners inside projections are a deferred follow-up — see routeProjection).
+		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+			m.toolStarted(ev)
+		}
 	case event.ToolCallCompleted:
-		m.toolCompleted(ev)
+		// PRIMARY-ONLY root fold (see ToolCallStarted): a subagent's completion resolves
+		// no root card. A non-primary completion never matched a root card anyway (its
+		// start was skipped), so this is doubly a no-op for subagents.
+		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+			m.toolCompleted(ev)
+		}
 	case event.StepDone:
 		m.stepDone(ev)
 	case event.PermissionRequested:
-		m.permissionRequested(ev)
+		// PRIMARY-ONLY root-gate recording: only a primary gate bakes into the root live
+		// card's "Approved …"/"Denied …" verb. A subagent's gate must not touch m.live —
+		// the interaction model still enqueues the prompt for ALL loops separately
+		// (interaction.ApplyEvent, keyed by LoopID), which drives the bar "!" marker.
+		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+			m.permissionRequested(ev)
+		}
 	case event.UserInputRequested:
 		m.userInputRequested(ev)
 	case event.TurnDone:
@@ -543,6 +571,19 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	// It is a no-op for the primary loop and for session-scoped (zero-LoopID) events.
 	m.routeProjection(ev)
 	return m
+}
+
+// isPrimaryLoop reports whether loopID owns the ROOT live segment (m.live): the PRIMARY
+// loop, or the zero loop id treated as primary (the single-loop / session default). It is
+// the guard for the root-fold Ephemeral cases (TokenDelta / ToolCall* / permission gate) —
+// only the primary's live Ephemeral may fold into m.live, which projectionFor(primary)
+// aliases and the default primary-focused viewport renders. A NON-primary Ephemeral event
+// (a subagent's, delivered only under the modern AllLoopsEventFilter) reaches its own
+// projection via routeProjection and must never touch m.live. It intentionally mirrors
+// projectionFor's primary-alias rule (loopID == primaryLoopID || loopID.IsZero()), so the
+// root fold and the primary projection agree on the single owner of m.live.
+func (m transcriptModel) isPrimaryLoop(loopID uuid.UUID) bool {
+	return loopID == m.primaryLoopID || loopID.IsZero()
 }
 
 // recordLoopAgent records the agent name driving loopID (the LoopStarted boundary), so

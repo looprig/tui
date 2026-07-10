@@ -3317,3 +3317,159 @@ func TestEqualTranscriptIgnoresThinkDuration(t *testing.T) {
 		t.Fatal("durations did not diverge; exclusion is untested")
 	}
 }
+
+// subTokenText builds a subagent-scoped *content.TextChunk TokenDelta.
+func loopTextChunk(loopID uuid.UUID, s string) event.Event {
+	return event.TokenDelta{Header: hdr(loopID), Chunk: &content.TextChunk{Text: s}}
+}
+
+// loopThinkingChunk builds a loop-scoped *content.ThinkingChunk TokenDelta.
+func loopThinkingChunk(loopID uuid.UUID, s string) event.Event {
+	return event.TokenDelta{Header: hdr(loopID), Chunk: &content.ThinkingChunk{Thinking: s}}
+}
+
+// loopToolStarted builds a loop-scoped ToolCallStarted.
+func loopToolStarted(loopID, id uuid.UUID, name, summary string) event.Event {
+	return event.ToolCallStarted{Header: hdr(loopID), ToolExecutionID: id, ToolName: name, Summary: summary}
+}
+
+// TestTranscriptRootFoldGuardedToPrimary is the regression guard for the CRITICAL
+// subagent-Ephemeral leak: under the modern AllLoopsEventFilter, EVERY loop's live
+// Ephemeral stream (TokenDelta / ToolCall* / permission gate) is delivered, so a
+// CONCURRENT subagent loop's live tokens and tool cards must NOT fold into the PRIMARY
+// root live segment (m.live). That segment is aliased by projectionFor(primary) and
+// rendered by the default primary-focused viewport, so a leak splices the subagent's
+// narration/thinking/tool cards into the orchestrator's live output. The guard folds a
+// TokenDelta / ToolCall* into m.live ONLY when its producing loop is the primary (or the
+// zero loop id); a non-primary Ephemeral event reaches its OWN projection via
+// routeProjection and never touches m.live. Under scrollback's DefaultEventFilter no
+// subagent Ephemeral is delivered, so the guard is a strict no-op there.
+func TestTranscriptRootFoldGuardedToPrimary(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+
+	m := transcriptModel{primaryLoopID: primary}
+	// The PRIMARY orchestrator's own turn is streaming live thinking + narration.
+	m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
+	m = m.ApplyEvent(loopThinkingChunk(primary, "PRIMARY plan"))
+	m = m.ApplyEvent(loopTextChunk(primary, "PRIMARY narration"))
+
+	// A CONCURRENT subagent loop streams its OWN live thinking + text AND starts a tool —
+	// all Ephemeral, all stamped with the subagent's loop id (the modern all-loops firehose).
+	m = m.ApplyEvent(event.TurnStarted{Header: hdr(sub)})
+	m = m.ApplyEvent(loopThinkingChunk(sub, "SUBAGENT secret plan"))
+	m = m.ApplyEvent(loopTextChunk(sub, "SUBAGENT leaked text"))
+	m = m.ApplyEvent(loopToolStarted(sub, callID(0x11), "Bash", "subagent ls"))
+
+	// (a) the ROOT live prose carries ONLY the primary's content — no subagent leak.
+	if m.live.Text != "PRIMARY narration" {
+		t.Errorf("root live.Text = %q, want only the primary %q (subagent text leaked into m.live)", m.live.Text, "PRIMARY narration")
+	}
+	if m.live.Thinking != "PRIMARY plan" {
+		t.Errorf("root live.Thinking = %q, want only the primary %q (subagent thinking leaked into m.live)", m.live.Thinking, "PRIMARY plan")
+	}
+	// (b) the ROOT live tail has NO subagent tool card.
+	if len(m.live.Calls) != 0 {
+		t.Errorf("root live.Calls = %d, want 0 (a subagent ToolCallStarted must not add a root card): %+v", len(m.live.Calls), m.live.Calls)
+	}
+
+	// (d) the subagent's OWN projection DID receive its live stream (routeProjection is
+	// unchanged, so a focused subagent still streams live thinking/text).
+	_, pl := m.projectionFor(sub)
+	if pl.Text != "SUBAGENT leaked text" {
+		t.Errorf("projection(sub) live.Text = %q, want the subagent stream %q (routeProjection must still fold non-primary TokenDelta)", pl.Text, "SUBAGENT leaked text")
+	}
+	if pl.Thinking != "SUBAGENT secret plan" {
+		t.Errorf("projection(sub) live.Thinking = %q, want the subagent stream %q", pl.Thinking, "SUBAGENT secret plan")
+	}
+}
+
+// TestTranscriptRootFoldPrimaryUnchanged locks the no-op half of the guard: a PRIMARY
+// (and a zero-LoopID) Ephemeral stream still folds into m.live exactly as before — the
+// guard must not regress the single-loop scrollback path, which only ever delivers
+// primary/zero-loop Ephemeral under DefaultEventFilter.
+func TestTranscriptRootFoldPrimaryUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		primaryLoopID uuid.UUID
+		loopID        uuid.UUID
+	}{
+		{name: "primary loop folds into m.live", primaryLoopID: callID(0xA1), loopID: callID(0xA1)},
+		{name: "zero loop id (single-loop default) folds into m.live", primaryLoopID: uuid.UUID{}, loopID: uuid.UUID{}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{primaryLoopID: tt.primaryLoopID}
+			m = m.ApplyEvent(event.TurnStarted{Header: hdr(tt.loopID)})
+			m = m.ApplyEvent(loopThinkingChunk(tt.loopID, "reason"))
+			m = m.ApplyEvent(loopTextChunk(tt.loopID, "narration"))
+			m = m.ApplyEvent(loopToolStarted(tt.loopID, callID(0x21), "Bash", "cmd"))
+
+			if m.live.Text != "narration" {
+				t.Errorf("live.Text = %q, want %q (primary Ephemeral must still fold)", m.live.Text, "narration")
+			}
+			if m.live.Thinking != "reason" {
+				t.Errorf("live.Thinking = %q, want %q", m.live.Thinking, "reason")
+			}
+			if len(m.live.Calls) != 1 {
+				t.Fatalf("live.Calls = %d, want 1 (primary ToolCallStarted must still fold)", len(m.live.Calls))
+			}
+			if m.live.Calls[0].ToolName != "Bash" {
+				t.Errorf("live card ToolName = %q, want Bash", m.live.Calls[0].ToolName)
+			}
+		})
+	}
+}
+
+// TestTranscriptPermissionGateGuardedToPrimary locks that ONLY a PRIMARY-loop
+// PermissionRequested records a gate affordance into the root m.live segment; a subagent's
+// PermissionRequested (delivered under the modern all-loops filter) must NOT touch m.live's
+// gate decisions/descriptions (that would bake a subagent's permission into the primary's
+// next live tool card). The interaction model's enqueue-for-all-loops behavior is separate
+// (interaction.ApplyEvent) and is not exercised here.
+func TestTranscriptPermissionGateGuardedToPrimary(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+
+	t.Run("primary PermissionRequested records the gate in m.live", func(t *testing.T) {
+		t.Parallel()
+		m := transcriptModel{primaryLoopID: primary}
+		m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
+		m = m.ApplyEvent(event.PermissionRequested{
+			Header:          hdr(primary),
+			ToolExecutionID: callID(0x31),
+			Request:         tool.BashRequest{Command: "rm -rf build"},
+		})
+		if _, ok := m.live.gateDecisions[callID(0x31)]; !ok {
+			t.Errorf("primary gate not recorded in m.live.gateDecisions: %+v", m.live.gateDecisions)
+		}
+		if m.live.gateDescriptions[callID(0x31)] == "" {
+			t.Errorf("primary gate description not recorded in m.live.gateDescriptions")
+		}
+	})
+
+	t.Run("subagent PermissionRequested does NOT touch m.live gates", func(t *testing.T) {
+		t.Parallel()
+		m := transcriptModel{primaryLoopID: primary}
+		m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
+		m = m.ApplyEvent(event.PermissionRequested{
+			Header:          hdr(sub),
+			ToolExecutionID: callID(0x41),
+			Request:         tool.BashRequest{Command: "subagent secret"},
+		})
+		if _, ok := m.live.gateDecisions[callID(0x41)]; ok {
+			t.Errorf("subagent gate leaked into m.live.gateDecisions: %+v", m.live.gateDecisions)
+		}
+		if _, ok := m.live.gateDescriptions[callID(0x41)]; ok {
+			t.Errorf("subagent gate description leaked into m.live.gateDescriptions: %+v", m.live.gateDescriptions)
+		}
+	})
+}
