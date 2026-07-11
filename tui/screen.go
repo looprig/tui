@@ -169,14 +169,14 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) S
 // still auto-growing to maxInputLines.
 const composerMinLines = 2
 
-// composerPadV is the modern composer's inner vertical padding: one background-filled
-// row above AND below the text region, so the input reads as a padded box rather than a bare
-// line. Scrollback's composer keeps the default 0 (no padding).
-const composerPadV = 1
+// composerPadV is the modern composer's inner vertical padding. It is 0: the composer is a
+// bare two-line input (no padded row above/below the text) that still auto-grows to
+// maxInputLines as the user types. Scrollback's composer also keeps 0.
+const composerPadV = 0
 
 // styleComposer applies the MODERN composer treatment to in's input box — the 2-line
-// default height, the gray panel fill (styles.ModernPanelBg), and one row of inner vertical
-// padding above/below the text — and returns the updated model. It runs at every site that
+// default height and the gray panel fill (styles.PanelBg), with no inner vertical
+// padding — and returns the updated model. It runs at every site that
 // installs a FRESH (default 1-line, background-free, unpadded) interaction for a Screen:
 // initial construction (NewModern) and the cold-restore install (handleRestored replaces the
 // whole interaction with a freshly-built one). The /clear reopen keeps the same input
@@ -335,6 +335,8 @@ func (m *Screen) commitStartup() {
 func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	ev = stampEphemeralClock(ev, m.now)
 	rearm, _ := m.sessionCore.handleEvent(ev)
+	// Commit the "turn ran for Ns" line BEFORE trackTurnClock clears the start time it reads.
+	m.commitTurnRanNotice(ev)
 	m.trackTurnClock(ev)
 	m.rerender()
 	// A turn becoming active (re)starts the 1s status-line tick if none is in flight; the
@@ -384,6 +386,40 @@ func (m *Screen) trackTurnClock(ev event.Event) {
 	case event.TurnDone, event.TurnFailed, event.TurnInterrupted:
 		delete(m.turnStartedAt, h.LoopID)
 	}
+}
+
+// commitTurnRanNotice appends a faint "○ turn ran for Ns" harness line when the PRIMARY loop's
+// turn completes (event.TurnDone) — the frozen form of the live status-bar timer, so a finished
+// turn leaves a record of how long it took. It MUST run before trackTurnClock clears
+// turnStartedAt: the span is the TurnDone timestamp less turnStartedAt[primary] (both Enduring
+// CreatedAt values, so it is the TRUE turn duration, not the possibly-stale tick clock),
+// formatted via formatElapsed ("25s" / "2m 5s"); a zero terminal timestamp falls back to the
+// tick clock (m.now). It is a no-op for a subagent loop's terminal (its completion shows on its
+// own subagent card), for a failed/interrupted turn (those commit their own error/tombstone — a
+// "ran for" summary would double up), and when no turn start was recorded (a cold restore
+// carries no streaming timestamps).
+func (m *Screen) commitTurnRanNotice(ev event.Event) {
+	td, ok := ev.(event.TurnDone)
+	if !ok {
+		return
+	}
+	loopID := td.EventHeader().LoopID
+	if loopID != m.transcript.primaryLoopID {
+		return
+	}
+	start, ok := m.turnStartedAt[loopID]
+	if !ok || start.IsZero() {
+		return
+	}
+	end := td.EventHeader().CreatedAt
+	if end.IsZero() {
+		end = m.now // the terminal carried no timestamp — fall back to the tick clock
+	}
+	d := end.Sub(start)
+	if d < 0 {
+		d = 0
+	}
+	m.transcript = m.transcript.CommitHarness("turn ran for " + formatElapsed(d))
 }
 
 // maybeStartTick launches the 1s status-line tick chain, but only when a turn is active
@@ -732,10 +768,11 @@ func (m *Screen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 // screenLayout is the frame's top-to-bottom region geometry, the SINGLE source both View
 // (which draws the regions) and regionAt (which hit-tests a mouse row) compute from, so a
 // drawn row and a hit-tested row can never disagree. Top to bottom: the content region
-// occupies rows [0, contentH); then the status line, a blank gap row, the bottom box, a
-// second blank gap row, and finally the active-loops bar at the very bottom.
+// occupies rows [0, contentH); then an inert blank pad row, the status line, a blank gap row,
+// the bottom box, a second blank gap row, and finally the active-loops bar at the very bottom.
 type screenLayout struct {
 	contentH int // viewport content rows: region [0, contentH)
+	padTopY  int // the inert blank pad row between the content and the status line
 	statusY  int // the status line row
 	gapTopY  int // the inert blank gap row between the status line and the box
 	boxTop   int // the first row of the bottom box
@@ -745,35 +782,38 @@ type screenLayout struct {
 }
 
 // layout derives the region geometry from the current frame: the bottom box is measured
-// first (its height varies with the composer/prompt), then the status, the two blank gap
-// rows, and the bar reserve one row each, and the viewport content gets whatever remains
-// (floored at 0). Because it is deterministic in the model state, View and regionAt compute
-// the identical layout.
+// first (its height varies with the composer/prompt), then the status, the blank pad row above
+// it, the two blank gap rows, and the bar reserve one row each, and the viewport content gets
+// whatever remains (floored at 0). Because it is deterministic in the model state, View and
+// regionAt compute the identical layout.
 //
-// The row order is status → gap → box → gap → bar (the input box sits ABOVE the loop bar,
-// each set off by an inert blank row), matching composeBody's stacking exactly.
+// The row order is pad → status → gap → box → gap → bar (an inert blank pad row sets the
+// status line off the content above it; the input box sits ABOVE the loop bar, each set off by
+// an inert blank row), matching composeBody's stacking exactly.
 //
 // NOT side-effect-free: measuring the box (bottomBoxView → the bubbles textarea's View)
 // drives the textarea's internal render/measure cache, so layout must run only on Bubble
 // Tea's single model goroutine (never concurrently — see the serial subtest note in the
 // tests).
 func (m Screen) layout() screenLayout {
-	const statusH, barH, gapH = 1, 1, 1
+	const padH, statusH, barH, gapH = 1, 1, 1, 1
 	boxH := lipgloss.Height(m.bottomBoxView())
 	if boxH < 1 {
 		boxH = 1
 	}
-	contentH := m.height - statusH - gapH - boxH - gapH - barH
+	contentH := m.height - padH - statusH - gapH - boxH - gapH - barH
 	if contentH < 0 {
 		contentH = 0
 	}
-	statusY := contentH
+	padTopY := contentH
+	statusY := padTopY + padH
 	gapTopY := statusY + statusH
 	boxTop := gapTopY + gapH
 	gapBotY := boxTop + boxH
 	barY := gapBotY + gapH
 	return screenLayout{
 		contentH: contentH,
+		padTopY:  padTopY,
 		statusY:  statusY,
 		gapTopY:  gapTopY,
 		boxTop:   boxTop,
@@ -798,7 +838,8 @@ const (
 
 // regionAt maps a terminal row y to its frame region using the same layout View draws, so
 // mouse routing (content select/copy vs a bar focus click) matches what the user sees. The
-// two blank gap rows (and any row past the bar) are regionGap — inert, no mouse behavior.
+// inert blank pad row above the status line, the two blank gap rows (and any row past the bar)
+// are regionGap — inert, no mouse behavior.
 func (m Screen) regionAt(y int) screenRegion {
 	lay := m.layout()
 	switch {
@@ -858,10 +899,12 @@ func (m *Screen) rerender() {
 //
 // MODERN-ONLY SPACING: one blank breathing-space row follows every committed entry (see
 // blankSeparator) — the opening banner/greeting included, so the first real message is not
-// glued to the header. Because every committed entry carries its OWN trailing blank, the
-// streaming live tail already sits exactly one blank below the last committed entry (one gap,
-// never two), so no special-casing is needed at the tail seam. Scrollback's renderEntry owns
-// its own spacing and is untouched.
+// glued to the header — EXCEPT within a tool-call group (see suppressSeparator): an assistant
+// message and the (possibly parallel) tool calls it led render glued together with no blank,
+// so the group reads as one cohesive action rather than a ladder of separated rows. Because
+// every group's LAST entry still carries its trailing blank, the streaming live tail sits
+// exactly one blank below the last committed entry (one gap, never two), so no special-casing
+// is needed at the tail seam. Scrollback's renderEntry owns its own spacing and is untouched.
 func (m Screen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
@@ -875,7 +918,8 @@ func (m Screen) renderFocused() []renderedLine {
 		out = append(out, lines...)
 		// A zero-line entry (an unknown/empty kind) has no last sub and nothing to set off, so it
 		// gets no blank — which also keeps the blank's sub non-header (>= 1) for every real entry.
-		if n := len(lines); n > 0 {
+		// A tool call glued to its leading message/sibling (suppressSeparator) also gets no blank.
+		if n := len(lines); n > 0 && !suppressSeparator(committed, i) {
 			out = append(out, blankSeparator(committed[i].ID, n))
 		}
 	}
@@ -899,6 +943,20 @@ func (m Screen) renderFocused() []renderedLine {
 // already run on the entry's own lines before this blank is appended).
 func blankSeparator(id displayID, lineCount int) renderedLine {
 	return renderedLine{styled: "", plain: "", entry: id, sub: lineCount}
+}
+
+// suppressSeparator reports whether the breathing-space blank after committed entry i should
+// be OMITTED so the entry glues to the next one. It suppresses the blank when the NEXT entry is
+// a tool call led by this assistant message or a preceding tool call (kindAssistant→kindTool or
+// kindTool→kindTool) — so a step's narration and its (possibly parallel) tool calls read as one
+// cohesive group, the assistant message visibly leading its calls, rather than a ladder of
+// blank-separated rows. Every other adjacency keeps its blank, and the last entry (no next, so
+// i+1 is out of range) always keeps its blank — preserving the one-gap seam to the live tail.
+func suppressSeparator(committed []entry, i int) bool {
+	if i+1 >= len(committed) || committed[i+1].Kind != kindTool {
+		return false
+	}
+	return committed[i].Kind == kindAssistant || committed[i].Kind == kindTool
 }
 
 // liveTailLines renders the focused loop's in-progress live segment to viewport lines,
@@ -977,28 +1035,34 @@ func (m Screen) queuedTailLines() []renderedLine {
 // focus (design §Prompts), leaving the user to focus it. A gate on the focused loop still marks
 // (focus and gate are independent flags).
 //
-// The bar shows only the loops currently doing work: activeBarEntries keeps the LIVE loops plus
-// the FOCUSED loop (kept even when idle, so the current view is always labeled), dropping idle
-// non-focused loops. When that filter leaves nothing (nothing live and the focused loop absent
-// from the table), primaryBarEntry falls back to the primary so the bar still labels the
-// session; a brand-new session with no loops yet renders an empty bar (the pre-turn default).
+// The bar shows the loops currently doing work plus two always-kept exceptions:
+// activeBarEntries keeps the LIVE loops, the FOCUSED loop (so the current view is always
+// labeled), and the PRIMARY loop (so the user can always return to the root conversation) —
+// dropping only idle, non-focused, non-primary loops. Without the primary exception, focusing
+// a subagent and letting it go idle would hide the (idle, non-focused) primary, leaving no way
+// back to it. When the filter still leaves nothing (a brand-new session whose primary is not
+// yet in the table), primaryBarEntry is a no-op returning nil — an empty bar, the pre-turn
+// default.
 func (m Screen) bar() loopBar {
 	infos := m.transcript.loops()
 	gated := m.interaction.pendingGateLoops()
-	entries := activeBarEntries(infos, gated, m.focusedLoopID)
+	primary := m.transcript.primaryLoopID
+	entries := activeBarEntries(infos, gated, m.focusedLoopID, primary)
 	if len(entries) == 0 {
-		entries = primaryBarEntry(infos, gated, m.transcript.primaryLoopID)
+		entries = primaryBarEntry(infos, gated, primary)
 	}
-	return loopBar{entries: entries, focused: m.focusedLoopID, max: loopBarCap}
+	return loopBar{entries: entries, focused: m.focusedLoopID, primary: primary, max: loopBarCap}
 }
 
-// activeBarEntries maps the loop table into bar entries, keeping only LIVE loops plus the
-// FOCUSED loop (even when idle) — an idle, non-focused loop drops off the bar. The entry order
-// follows loops() (stable creation order), so the bar draws loops in the order they appeared.
-func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused uuid.UUID) []loopBarEntry {
+// activeBarEntries maps the loop table into bar entries, keeping LIVE loops plus the FOCUSED
+// loop and the PRIMARY loop (both kept even when idle) — only an idle loop that is neither
+// focused nor primary drops off the bar. Keeping the primary guarantees the root conversation
+// is always reachable, even while focus sits on a now-idle subagent. The entry order follows
+// loops() (stable creation order), so the bar draws loops in the order they appeared.
+func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, primary uuid.UUID) []loopBarEntry {
 	entries := make([]loopBarEntry, 0, len(infos))
 	for _, li := range infos {
-		if !li.Live && li.ID != focused {
+		if !li.Live && li.ID != focused && li.ID != primary {
 			continue
 		}
 		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]})
@@ -1149,10 +1213,11 @@ func (m Screen) View() tea.View {
 }
 
 // composeBody stacks the frame's rows for lay: the viewport content padded/clamped to
-// EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then the
-// status line, an inert blank gap row, the bottom box, a second inert blank gap row, and the
-// active-loops bar at the very bottom. The input box sits ABOVE the loop bar, each set off by
-// a blank row so the bottom chrome does not read as cramped. The viewport is sized to
+// EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then an inert
+// blank pad row, the status line, an inert blank gap row, the bottom box, a second inert blank
+// gap row, and the active-loops bar at the very bottom. The blank pad row sets the status line
+// off the content above it, and the input box sits ABOVE the loop bar, each set off by a blank
+// row so the chrome does not read as cramped. The viewport is sized to
 // lay.contentH on a LOCAL copy before rendering, so the drawn content region always matches
 // the current layout even if the bottom chrome changed since the last Update-side
 // resize/rerender. Every line is width-clamped (truncate, never wrap) so no row exceeds the
@@ -1171,6 +1236,7 @@ func (m Screen) composeBody(lay screenLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
+	rows = append(rows, "")                                        // inert pad: content → status
 	rows = append(rows, m.statusLine())                            // status line
 	rows = append(rows, "")                                        // inert gap: status → box
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)

@@ -12,8 +12,8 @@ import (
 
 // TestFormatThought covers the committed thinking-header formatter: a zero span (a cold
 // restore / backlog with no timing, or thinking under one clock tick) is the bare lowercase
-// "thought"; a sub-second span is "thought for <1sec"; under a minute is "thought for Nsec"
-// (whole seconds, truncated); a minute or more is "thought for Nm Nsec".
+// "thought"; a sub-second span is "thought for <1s"; under a minute is "thought for Ns"
+// (whole seconds, truncated); a minute or more is "thought for Nm Ns".
 func TestFormatThought(t *testing.T) {
 	t.Parallel()
 
@@ -24,15 +24,15 @@ func TestFormatThought(t *testing.T) {
 	}{
 		{name: "zero is the bare fallback", d: 0, want: "thought"},
 		{name: "negative degrades to the fallback", d: -5 * time.Second, want: "thought"},
-		{name: "sub-second", d: 400 * time.Millisecond, want: "thought for <1sec"},
-		{name: "just under a second", d: 999 * time.Millisecond, want: "thought for <1sec"},
-		{name: "exactly one second", d: time.Second, want: "thought for 1sec"},
-		{name: "ten seconds", d: 10 * time.Second, want: "thought for 10sec"},
-		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "thought for 10sec"},
-		{name: "just under a minute", d: 59 * time.Second, want: "thought for 59sec"},
-		{name: "exactly one minute", d: 60 * time.Second, want: "thought for 1m 0sec"},
-		{name: "minutes and seconds", d: 90 * time.Second, want: "thought for 1m 30sec"},
-		{name: "several minutes", d: 5*time.Minute + 5*time.Second, want: "thought for 5m 5sec"},
+		{name: "sub-second", d: 400 * time.Millisecond, want: "thought for <1s"},
+		{name: "just under a second", d: 999 * time.Millisecond, want: "thought for <1s"},
+		{name: "exactly one second", d: time.Second, want: "thought for 1s"},
+		{name: "ten seconds", d: 10 * time.Second, want: "thought for 10s"},
+		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "thought for 10s"},
+		{name: "just under a minute", d: 59 * time.Second, want: "thought for 59s"},
+		{name: "exactly one minute", d: 60 * time.Second, want: "thought for 1m 0s"},
+		{name: "minutes and seconds", d: 90 * time.Second, want: "thought for 1m 30s"},
+		{name: "several minutes", d: 5*time.Minute + 5*time.Second, want: "thought for 5m 5s"},
 	}
 
 	for _, tt := range tests {
@@ -641,7 +641,7 @@ func TestRenderLiveRunningCardIsHeaderOnly(t *testing.T) {
 // its caller-supplied header. COLLAPSED: a SINGLE rail'd line "│ <header>" — no reasoning
 // body, no "· N lines · ctrl+t" summary. EXPANDED: that same "│ <header>" line followed by
 // the "│ "-railed reasoning — an unbroken left rail. The header is the LIVE tail's
-// present-tense "thinking" or a COMMITTED entry's "thought for Nsec" / "thought". Empty or
+// present-tense "thinking" or a COMMITTED entry's "thought for Ns" / "thought". Empty or
 // whitespace-only input renders nothing in either mode.
 func TestRenderThinking(t *testing.T) {
 	t.Parallel()
@@ -660,13 +660,14 @@ func TestRenderThinking(t *testing.T) {
 		{name: "whitespace renders nothing collapsed", in: "   \n  ", header: "thought", expand: false, wantEmpty: true},
 		{name: "whitespace renders nothing expanded", in: "   \n  ", header: "thought", expand: true, wantEmpty: true},
 		{
-			// COLLAPSED committed: a single rail'd line "│ thought for 10sec" — no body, no
-			// "· N lines · ctrl+t" summary, no bare (rail-less) header.
-			name:         "collapsed committed is a single rail'd thought line",
+			// COLLAPSED committed: the rail'd header "│ thought for 10s" + the blank "│" rail
+			// gap beneath it — but NO reasoning body, no "· N lines · ctrl+t" summary, no bare
+			// (rail-less) header.
+			name:         "collapsed committed is the rail'd header plus its gap",
 			in:           "line one\nline two",
-			header:       "thought for 10sec",
+			header:       "thought for 10s",
 			expand:       false,
-			wantContains: []string{"│ thought for 10sec"},
+			wantContains: []string{"│ thought for 10s"},
 			wantAbsent:   []string{"│ line one", "│ line two", "ctrl+t", "lines"},
 		},
 		{
@@ -679,13 +680,14 @@ func TestRenderThinking(t *testing.T) {
 			wantAbsent:   []string{"│ line one", "· ", "ctrl+t"},
 		},
 		{
-			// EXPANDED: the header carries the rail ("│ thought for 10sec", not bare) and
-			// every body line carries the rail too — an unbroken left rail.
+			// EXPANDED: the header carries the rail ("│ thought for 10s", not bare) and
+			// every body line carries the rail too — an unbroken left rail, with a blank
+			// rail row padding the header off the body.
 			name:         "expanded rails every line including the header",
 			in:           "line one\nline two",
-			header:       "thought for 10sec",
+			header:       "thought for 10s",
 			expand:       true,
-			wantContains: []string{"│ thought for 10sec", "│ line one", "│ line two"},
+			wantContains: []string{"│ thought for 10s", "│ line one", "│ line two"},
 			wantAbsent:   []string{"\nthought", "more lines"},
 		},
 	}
@@ -715,21 +717,67 @@ func TestRenderThinking(t *testing.T) {
 	}
 }
 
+// TestRenderThinkingHeaderGapAlways pins that the blank "│" rail gap under the header is present
+// in BOTH the collapsed and expanded forms — the gap stays put when the block is expanded, it is
+// not an expand-only affordance. In each form the second rendered row is the bare rail gap
+// (rail, no content), directly beneath the "│ <header>" line.
+func TestRenderThinkingHeaderGapAlways(t *testing.T) {
+	t.Parallel()
+
+	const rail = "│ "
+	for _, expand := range []bool{false, true} {
+		expand := expand
+		name := "collapsed"
+		if expand {
+			name = "expanded"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lines := strings.Split(stripANSI(renderThinking("weighing\noptions", expand, 80, "thought for 3s")), "\n")
+			if len(lines) < 2 {
+				t.Fatalf("%s thinking = %q, want at least the header + gap rows", name, lines)
+			}
+			if got, want := lines[0], rail+"thought for 3s"; got != want {
+				t.Errorf("%s header row = %q, want %q", name, got, want)
+			}
+			// The row under the header is the bare rail gap: the rail with no content.
+			if strings.TrimRight(lines[1], " ") != strings.TrimRight(rail, " ") {
+				t.Errorf("%s gap row = %q, want the blank rail %q under the header", name, lines[1], rail)
+			}
+		})
+	}
+}
+
 // TestRenderThinkingExpandedRailOnEveryLine asserts the expanded thinking block is
-// an UNBROKEN left rail: every rendered line — the header AND each body line —
-// begins with the "│ " rail in the same column, so the block reads as a sub-block
-// attached to the assistant turn. No line (not even the header) is left bare.
+// an UNBROKEN left rail: every rendered line — the header, the blank pad row, each body line,
+// AND the trailing gap — begins with the "│ " rail in the same column, so the block reads as a
+// sub-block attached to the assistant turn. No line (not even the header) is left bare. The
+// header is padded off the body by a blank rail row, and a trailing blank rail row sets the
+// body off from the AI message below — the block is gapped top and bottom.
 func TestRenderThinkingExpandedRailOnEveryLine(t *testing.T) {
 	t.Parallel()
 
 	const rail = "│ "
 	got := stripANSI(renderThinking("line one\nline two\nline three", true, 80, styles.ThinkingHeader))
 	lines := strings.Split(got, "\n")
-	if len(lines) < 4 { // header + three body lines
-		t.Fatalf("expanded thinking = %q, want at least 4 lines (header + body)", got)
+	if len(lines) < 6 { // header + pad gap + three body lines + trailing gap
+		t.Fatalf("expanded thinking = %q, want at least 6 lines (header + pad + body + trailing gap)", got)
 	}
 	if got, want := lines[0], rail+styles.ThinkingHeader; got != want {
 		t.Errorf("header line = %q, want %q (rail on the header, not bare)", got, want)
+	}
+	// The row right below the header is the blank rail pad (rail, no content) — one line of
+	// breathing space between the header and the reasoning body.
+	if got, want := strings.TrimRight(lines[1], " "), strings.TrimRight(rail, " "); got != want {
+		t.Errorf("pad line = %q, want the blank rail %q below the header", lines[1], rail)
+	}
+	if got := lines[2]; !strings.HasPrefix(got, rail) || strings.TrimSpace(got) == strings.TrimSpace(rail) {
+		t.Errorf("first body line = %q, want the reasoning body (rail + content) after the pad", got)
+	}
+	// The LAST row is the trailing rail gap (rail, no content) — the gap between the reasoning
+	// body and the AI message that follows.
+	if last := lines[len(lines)-1]; strings.TrimRight(last, " ") != strings.TrimRight(rail, " ") {
+		t.Errorf("trailing line = %q, want the blank rail %q below the body", last, rail)
 	}
 	for i, ln := range lines {
 		if !strings.HasPrefix(ln, rail) {
@@ -926,6 +974,37 @@ func TestRenderEntrySubagentCard(t *testing.T) {
 	// Nested == 0 → no nested-steps line.
 	if strings.Contains(got, "nested subagent steps") {
 		t.Errorf("subagent card = %q, must NOT show the nested line when Nested==0", got)
+	}
+}
+
+// TestRenderSubagentCardHeaderWraps pins that a long subagent header WRAPS to the viewport width
+// instead of overflowing the right edge (the reported bug: `Subagent(operator)  "Perform a
+// focused security audit of sandbox confine…"` ran off screen): a narrow width wraps the header
+// into more rows than a wide one, the first row carries the ● bullet, and the full task text
+// survives (wrapped, not clipped).
+func TestRenderSubagentCardHeaderWraps(t *testing.T) {
+	t.Parallel()
+
+	task := "Perform a focused security audit of the sandbox confinement and report every escape path"
+	c := ToolCallView{ToolName: "Subagent", Agent: "operator", Task: task, Steps: 3, SubStatus: subDone, Result: []string{"ok"}}
+
+	narrow := stripANSI(renderSubagentCard(c, false, 40))
+	wide := stripANSI(renderSubagentCard(c, false, 200))
+
+	// It wraps: the narrow header spans more rows than the wide one (which fits on one line).
+	if narrowRows, wideRows := strings.Count(narrow, "\n"), strings.Count(wide, "\n"); narrowRows <= wideRows {
+		t.Errorf("narrow rows = %d, wide rows = %d; want the narrow header to wrap into more rows\nnarrow:\n%s", narrowRows, wideRows, narrow)
+	}
+	// The first row carries the ● bullet (the header, not a child/done line).
+	if first := strings.SplitN(narrow, "\n", 2)[0]; !strings.HasPrefix(first, strings.TrimSpace(styles.Dot)) {
+		t.Errorf("first header row = %q, want it to start with the ● bullet", first)
+	}
+	// Nothing is clipped: every task word survives the wrap.
+	flat := strings.Join(strings.Fields(narrow), " ")
+	for _, word := range strings.Fields(task) {
+		if !strings.Contains(flat, word) {
+			t.Errorf("wrapped header dropped %q; got:\n%s", word, narrow)
+		}
 	}
 }
 

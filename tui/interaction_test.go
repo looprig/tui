@@ -226,6 +226,46 @@ func TestInteractionEnqueueFIFOAndAppendOnce(t *testing.T) {
 	}
 }
 
+// TestInteractionEnqueueSameCallIDDistinctLoops is the gate-undercount regression: two DIFFERENT
+// loops (e.g. two subagents) surfacing gates that share a ToolExecutionID are DIFFERENT gates and
+// must BOTH queue — a gate's identity is (LoopID, ToolExecutionID), not the call id alone.
+// Deduping on the call id alone silently dropped one loop's gate and undercounted the queue (the
+// "(+N more pending)" note showed too few). A genuine re-delivery (same loop, same call id) is
+// still deduped append-once.
+func TestInteractionEnqueueSameCallIDDistinctLoops(t *testing.T) {
+	t.Parallel()
+
+	m := newInteractionModel()
+	call := callID(7)
+	loopA := loopID(0xA1)
+	loopB := loopID(0xB2)
+
+	// Two loops gate on the SAME ToolExecutionID — both must queue (distinct gates).
+	m = m.ApplyEvent(event.PermissionRequested{
+		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
+		ToolExecutionID: call,
+		Request:         tool.BashRequest{Command: "a"},
+	})
+	m = m.ApplyEvent(event.PermissionRequested{
+		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopB}},
+		ToolExecutionID: call,
+		Request:         tool.BashRequest{Command: "b"},
+	})
+	if m.PendingCount() != 2 {
+		t.Fatalf("PendingCount = %d, want 2 (same call id, distinct loops → distinct gates)", m.PendingCount())
+	}
+
+	// A genuine re-delivery of loopA's gate (same loop, same call id) is deduped append-once.
+	m = m.ApplyEvent(event.PermissionRequested{
+		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
+		ToolExecutionID: call,
+		Request:         tool.BashRequest{Command: "a"},
+	})
+	if m.PendingCount() != 2 {
+		t.Errorf("PendingCount after re-delivery = %d, want 2 (same loop+call deduped)", m.PendingCount())
+	}
+}
+
 // TestInteractionClearOnTerminal covers terminal-event clearing: a TurnDone /
 // TurnFailed / TurnInterrupted clears pending and restores compose mode plus the
 // saved compose draft.

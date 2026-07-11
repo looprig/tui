@@ -46,9 +46,25 @@ func renderEntry(e entry, expand bool, width int) []string {
 		return []string{styles.InterruptedStyle.Render(interruptedTombstone)}
 	case kindSubagent:
 		return renderSubagentLine(e.Agent, e.Verb, width)
+	case kindHarness:
+		return renderHarnessLine(firstText(e.Blocks), width)
 	default:
 		return nil
 	}
+}
+
+// harnessMark is the hollow-circle glyph (plus its trailing space) prefixing a kindHarness
+// status line — mirroring the idle status dot's ○ so a shell-emitted line reads as chrome,
+// not model output.
+const harnessMark = "○ "
+
+// renderHarnessLine renders a shell-emitted status line (kindHarness) as one faint,
+// out-of-focus "○ <text>" row, width-truncated. It mirrors the idle status dot's hollow
+// circle and the status timer's faint tone (styles.StatusStyle) so a "turn ran for 25s" line
+// reads as a quiet, out-of-band marker rather than assistant output. An empty text still
+// renders the lone marker.
+func renderHarnessLine(text string, width int) []string {
+	return []string{styles.StatusStyle.Render(truncate(harnessMark+text, width))}
 }
 
 // renderSubagentLine renders a collapsed subagent activity entry as one faint

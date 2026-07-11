@@ -87,6 +87,35 @@ func TestLoopBarRender(t *testing.T) {
 			},
 		},
 		{
+			// The idle primary outranks live loops under the cap: with max=2 and four live
+			// subagents, only the focused loop and the primary survive — so the root
+			// conversation is always reachable, never culled by a crowd of live subagents.
+			name: "idle primary survives the cap over live loops",
+			bar: loopBar{
+				entries: []loopBarEntry{
+					{id: l0, name: "main", live: false}, // primary, idle
+					{id: l1, name: "a", live: true},
+					{id: l2, name: "b", live: true},
+					{id: l3, name: "c", live: true},
+					{id: l4, name: "d", live: true},
+				},
+				focused: l1,
+				primary: l0,
+				max:     2,
+			},
+			width: 80,
+			contain: []string{
+				barSegOf(barFocusedMark, "a", l1),      // focused kept
+				barSegOf(barUnfocusedMark, "main", l0), // idle primary kept over the live loops
+				overflowText(3),
+			},
+			absent: []string{
+				barSegOf(barUnfocusedMark, "b", l2),
+				barSegOf(barUnfocusedMark, "c", l3),
+				barSegOf(barUnfocusedMark, "d", l4),
+			},
+		},
+		{
 			name:   "empty bar renders nothing",
 			bar:    loopBar{},
 			width:  80,

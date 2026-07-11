@@ -129,14 +129,18 @@ func (m *interactionModel) enqueueForLoop(p prompt, loopID uuid.UUID) {
 	m.enqueue(p)
 }
 
-// enqueue appends p unless a prompt with the same ToolExecutionID is already pending
-// (append-once: a duplicate gate event must not double-queue). The first prompt to
-// land saves the current compose draft and switches the mode to the head's mode;
-// subsequent appends leave the active head and mode untouched.
+// enqueue appends p unless the SAME gate is already pending (append-once: a re-delivered gate
+// event must not double-queue). A gate's identity is (LoopID, ToolExecutionID), not the call id
+// alone: distinct loops (the primary and its subagents) may surface gates whose ToolExecutionID
+// coincides, and those are DIFFERENT gates that must both queue — deduping on the call id alone
+// would silently drop one loop's gate and undercount the pending queue. A genuine duplicate (the
+// same loop's same gate, e.g. replayed from the backlog and again live) matches on both fields
+// and is ignored. The first prompt to land saves the current compose draft and switches the mode
+// to the head's mode; subsequent appends leave the active head and mode untouched.
 func (m *interactionModel) enqueue(p prompt) {
 	for i := range m.pending {
-		if m.pending[i].ToolExecutionID == p.ToolExecutionID {
-			return // already pending — ignore the duplicate
+		if m.pending[i].ToolExecutionID == p.ToolExecutionID && m.pending[i].LoopID == p.LoopID {
+			return // already pending — ignore the duplicate (same loop's same gate, re-delivered)
 		}
 	}
 	if len(m.pending) == 0 {

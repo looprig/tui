@@ -328,7 +328,7 @@ func renderAssistant(thinking, text, headline string, expand bool, width int, th
 	}
 	if body != "" {
 		if b.Len() > 0 {
-			b.WriteString("\n\n") // one blank line between the thinking block and the AI message
+			b.WriteString("\n") // no blank line: the AI message follows its thinking block directly
 		}
 		b.WriteString(body)
 	}
@@ -380,12 +380,14 @@ func subagentTerminalVerb(s subStatus) string {
 // "⎿ +M nested subagent steps" line collapses the depth-2 activity (design §6). expand
 // drives the child cards' result-preview fold.
 func renderSubagentCard(c ToolCallView, expand bool, width int) string {
-	head := strings.TrimRight(styles.LitDot, " ") + " " +
-		styles.HeadlineStyle.Render(subagentHeaderText(c))
-	// Cap accounts for: header (1), the children's ONE joined element from
-	// renderToolCalls (1), the done line (1), and the optional nested line (1).
-	lines := make([]string, 0, 4)
-	lines = append(lines, head)
+	// The header wraps to the viewport width (a long task string must NOT overrun the right
+	// edge): the first row carries the lit "● " bullet, continuation rows a barWidth-wide
+	// indent so the wrapped task aligns under the header text rather than under the bullet.
+	head := wrapHeadline(subagentHeaderText(c), width)
+	// Cap accounts for: the (possibly multi-row) header, the children's ONE joined element
+	// from renderToolCalls (1), the done line (1), and the optional nested line (1).
+	lines := make([]string, 0, len(head)+3)
+	lines = append(lines, head...)
 
 	// Children render as the existing "⎿" tool cards, one indent level under the header.
 	if body := renderToolCalls(c.Children, expand, width); body != "" {
@@ -404,9 +406,29 @@ func renderSubagentCard(c ToolCallView, expand bool, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+// wrapHeadline renders a "● <text>" bullet headline width-wrapped to the viewport: the
+// first row carries the lit "● " bullet, every continuation row a barWidth-wide blank
+// indent so the wrapped text hangs under the header rather than under the bullet. Each row
+// is bold (HeadlineStyle) — the text is wrapped on its PLAIN form (no ANSI in the wrap
+// input) before styling. A non-empty text always yields at least one row.
+func wrapHeadline(text string, width int) []string {
+	bullet := strings.TrimRight(styles.LitDot, " ") + " " // colored "● "
+	hangingIndent := strings.Repeat(" ", barWidth)
+	rows := wrapToWidth(text, max(1, width-barWidth))
+	out := make([]string, 0, len(rows))
+	for i, row := range rows {
+		prefix := bullet
+		if i > 0 {
+			prefix = hangingIndent
+		}
+		out = append(out, prefix+styles.HeadlineStyle.Render(row))
+	}
+	return out
+}
+
 // subagentHeaderText assembles a Subagent card's header body: the standard tool-card
-// form "Subagent(<agent>)" (tool name + the agent as its argument) plus the truncated
-// task in quotes when present. The task quotes are omitted for an empty task.
+// form "Subagent(<agent>)" (tool name + the agent as its argument) plus the task in
+// quotes when present. The task quotes are omitted for an empty task.
 func subagentHeaderText(c ToolCallView) string {
 	head := c.ToolName + "(" + c.Agent + ")"
 	if c.Task != "" {
@@ -489,7 +511,7 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 	}
 	if body != "" {
 		if b.Len() > 0 {
-			b.WriteString("\n\n")
+			b.WriteString("\n") // no blank line: the message follows its thinking block directly
 		}
 		b.WriteString(body)
 	}
@@ -602,28 +624,41 @@ const thinkingRail = "│ "
 // behind a caller-supplied header label so the SAME renderer serves both the live tail
 // and committed scrollback: the LIVE tail passes the present-tense "thinking"
 // (styles.ThinkingHeader); a COMMITTED entry passes formatThought(duration) — "thought
-// for Nsec" once its span is known, or the bare "thought" fallback when it is not
-// (a cold restore replays no timing). Both modes render on the "│ " rail:
-// COLLAPSED is a SINGLE rail'd line "│ <header>" (no reasoning body); EXPANDED is that same
-// "│ <header>" line followed by the "│ "-prefixed, width-wrapped reasoning — an unbroken
-// vertical rail down the left margin. Empty/whitespace-only reasoning renders nothing in
-// either mode.
+// for Ns" once its span is known, or the bare "thought" fallback when it is not
+// (a cold restore replays no timing). Both modes render on the "│ " rail and BOTH carry a
+// blank "│" rail gap row directly under the header (it stays put whether collapsed or
+// expanded): COLLAPSED is the "│ <header>" line then the "│" gap (no reasoning body);
+// EXPANDED is that same header + gap, then the "│ "-prefixed, width-wrapped reasoning, then a
+// TRAILING "│" gap that sets the body off from the AI message below — an unbroken vertical
+// rail down the left margin, gapped top and bottom. Empty/whitespace-only reasoning renders
+// nothing in either mode.
 func renderThinking(s string, expand bool, width int, header string) string {
 	s = strings.TrimSpace(s) // drop the model's leading/trailing blank reasoning lines
 	if s == "" {
 		return ""
 	}
-	if !expand {
-		// COLLAPSED: one rail'd header line, no body — "│ thought for 10sec" (committed) or
-		// "│ thinking" (live). No arrow, no glyph, no "· N lines · ctrl+t" summary.
-		return styles.ThinkingStyle.Render(thinkingRail + header)
+	// The header, then a blank "│" rail gap row that pads it off whatever follows. The gap is
+	// present in BOTH forms — it stays put whether the block is collapsed or expanded — so
+	// "thought for Ns" always reads with one line of breathing space beneath it (before the
+	// AI message when collapsed, before the reasoning body when expanded). The "│ " rail stays
+	// unbroken (like an empty reasoning line), never a bare gap.
+	out := []string{
+		styles.ThinkingStyle.Render(thinkingRail + header),
+		styles.ThinkingStyle.Render(thinkingRail),
 	}
-	out := []string{styles.ThinkingStyle.Render(thinkingRail + header)}
+	if !expand {
+		// COLLAPSED: header + the rail gap, no reasoning body. No arrow, no glyph, no
+		// "· N lines · ctrl+t" summary.
+		return strings.Join(out, "\n")
+	}
 	for _, raw := range strings.Split(s, "\n") {
 		for _, line := range wrapToWidth(raw, width-barWidth) {
 			out = append(out, styles.ThinkingStyle.Render(thinkingRail+line))
 		}
 	}
+	// A trailing rail gap closes the expanded block: it sets the reasoning body off from the
+	// AI message that follows, keeping the "│" rail (a bare blank line would break it).
+	out = append(out, styles.ThinkingStyle.Render(thinkingRail))
 	return strings.Join(out, "\n")
 }
 
@@ -631,8 +666,8 @@ func renderThinking(s string, expand bool, width int, header string) string {
 // modern shell stamps the model clock onto each Ephemeral thinking chunk — see
 // Screen.handleEventModern): a zero duration (a cold restore / backlog carries no
 // timing, or thinking under one clock tick) yields the bare lowercase "thought"; a
-// sub-second span yields "thought for <1sec"; under a minute "thought for Nsec" (whole
-// seconds, truncated); a minute or more "thought for Nm Nsec". It is the committed
+// sub-second span yields "thought for <1s"; under a minute "thought for Ns" (whole
+// seconds, truncated); a minute or more "thought for Nm Ns". It is the committed
 // counterpart of the live tail's present-tense "thinking" header — the same rail, flipped
 // from present to past once the step commits.
 func formatThought(d time.Duration) string {
@@ -640,13 +675,13 @@ func formatThought(d time.Duration) string {
 		return "thought"
 	}
 	if d < time.Second {
-		return "thought for <1sec"
+		return "thought for <1s"
 	}
 	secs := int(d / time.Second)
 	if secs < 60 {
-		return "thought for " + strconv.Itoa(secs) + "sec"
+		return "thought for " + strconv.Itoa(secs) + "s"
 	}
-	return "thought for " + strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "sec"
+	return "thought for " + strconv.Itoa(secs/60) + "m " + strconv.Itoa(secs%60) + "s"
 }
 
 // wrapToWidth word-wraps s to width columns and returns the resulting rows with

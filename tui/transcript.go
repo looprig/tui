@@ -122,6 +122,12 @@ const (
 	// interleave concurrent subagent streams (Option A, deferred). It carries Agent +
 	// Verb; renderEntry renders it via renderSubagentLine.
 	kindSubagent
+	// kindHarness is an out-of-band, faint status line the shell (not the model) emits —
+	// e.g. "turn ran for 25s" committed when the primary loop's turn ends. It carries a
+	// single TextBlock and renders as a hollow-circle "○ <text>" row in the faint,
+	// out-of-focus status tone (renderHarnessLine), distinct from a leveled kindNotice
+	// (no "▌ " accent bar).
+	kindHarness
 )
 
 // noticeLevel grades a kindNotice's severity, selecting its accent-bar color. The
@@ -874,6 +880,21 @@ func (m transcriptModel) CommitNotice(level noticeLevel, text string) transcript
 // wrapper over CommitNotice(noticeInfo, …) — a system notice IS an info notice.
 func (m transcriptModel) CommitSystem(text string) transcriptModel {
 	return m.CommitNotice(noticeInfo, text)
+}
+
+// CommitHarness appends one kindHarness status line carrying text with a fresh stable ID,
+// and returns the next model. It is the shell-emitted, out-of-band status primitive (e.g.
+// the "turn ran for 25s" line committed when the primary loop's turn ends). Like a notice it
+// does NOT touch the live segment; unlike a notice it renders as a faint "○ <text>" row (no
+// leveled accent bar). An empty text still commits one entry.
+func (m transcriptModel) CommitHarness(text string) transcriptModel {
+	m.nextID++
+	m.committed = append(m.committed, entry{
+		ID:     m.nextID,
+		Kind:   kindHarness,
+		Blocks: []content.Block{&content.TextBlock{Text: text}},
+	})
+	return m
 }
 
 // CommitError appends an error-level notice for a non-fatal failure. It is the

@@ -138,6 +138,10 @@ var (
 	// is FAINT (not bold like UserStyle) so a queued line reads as a quieter "this is
 	// waiting" hint, distinct from the bold committed user row it later promotes to.
 	QueuedStyle = lipgloss.NewStyle().Faint(true)
+	// QueuedLabelStyle renders the "QUEUED" banner shown ABOVE a queued message: the
+	// brand blue (MarkdownHeadingColor, #A2D2FF), bold, so the pending state reads as a
+	// clear labeled header distinct from the faint message preview beneath it.
+	QueuedLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(MarkdownHeadingColor)).Bold(true)
 )
 
 // HeadlineStyle renders the bold headline word shown beside the assistant dot for an

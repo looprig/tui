@@ -325,11 +325,16 @@ func TestModernRegionAt(t *testing.T) {
 	}{
 		{name: "top content row", y: 0, want: regionContent},
 		{name: "last content row", y: lay.contentH - 1, want: regionContent},
+		{name: "pad row above the status line", y: lay.padTopY, want: regionGap},
 		{name: "status row", y: lay.statusY, want: regionStatus},
 		{name: "gap row above the box", y: lay.gapTopY, want: regionGap},
 		{name: "box row", y: lay.boxTop, want: regionBox},
 		{name: "gap row below the box", y: lay.gapBotY, want: regionGap},
 		{name: "bar row (very bottom)", y: lay.barY, want: regionBar},
+	}
+	// The pad row sits directly above the status line, one row below the content region.
+	if lay.padTopY != lay.contentH || lay.statusY != lay.padTopY+1 {
+		t.Errorf("pad geometry: contentH=%d padTopY=%d statusY=%d, want padTopY==contentH and statusY==padTopY+1", lay.contentH, lay.padTopY, lay.statusY)
 	}
 	// The subtests deliberately run SEQUENTIALLY over the shared m: regionAt → layout →
 	// the composer's textarea View() mutates an internal render cache, which is single-
@@ -1568,6 +1573,128 @@ func TestModernTickLifecycle(t *testing.T) {
 	}
 }
 
+// TestModernCommitsTurnRanNotice pins the "turn ran for Ns" harness line: when the PRIMARY loop's
+// turn completes, a faint hollow-circle "○ turn ran for Ns" row commits to the transcript — the
+// frozen form of the live status-bar timer, measured from the Enduring TurnStarted→TurnDone
+// timestamps (independent of the tick clock). A subagent's terminal, a non-Done terminal, and a
+// TurnDone with no recorded start commit nothing.
+func TestModernCommitsTurnRanNotice(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		drive func(t *testing.T, m Screen) Screen
+		want  string // "" = no harness line expected
+	}{
+		{
+			name: "primary TurnDone commits the elapsed line",
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(25*time.Second))})
+				return m
+			},
+			want: "○ turn ran for 25s",
+		},
+		{
+			name: "over a minute reads Nm Ss",
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(154*time.Second))})
+				return m
+			},
+			want: "○ turn ran for 2m 34s",
+		},
+		{
+			name: "subagent TurnDone commits nothing to the primary transcript",
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m = feed(t, m, loopStarted(sub, "reviewer"))
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(sub, base)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(sub, base.Add(9*time.Second))})
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "interrupted turn commits nothing (no 'ran for' summary)",
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m = feed(t, m, event.TurnInterrupted{Header: hdrAt(primary, base.Add(5*time.Second))})
+				return m
+			},
+			want: "",
+		},
+		{
+			name: "TurnDone with no recorded start commits nothing",
+			drive: func(t *testing.T, m Screen) Screen {
+				return feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(5*time.Second))})
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{primaryLoopID: primary}
+			m := newScreenSized(t, agent, 80, 24)
+			m = tt.drive(t, m)
+
+			if tt.want == "" {
+				if containsPlain(m.viewport.lines, "turn ran for") {
+					t.Errorf("committed a 'turn ran for' line, want none; viewport:\n%s", plainAll(m.viewport.lines))
+				}
+				return
+			}
+			if !containsPlain(m.viewport.lines, tt.want) {
+				t.Errorf("viewport missing %q; got:\n%s", tt.want, plainAll(m.viewport.lines))
+			}
+		})
+	}
+}
+
+// TestSuppressSeparator pins the tool-call grouping rule (issue: parallel tool calls should read
+// as one cohesive group led by their assistant message): the breathing-space blank after a
+// committed entry is omitted (glued) ONLY when the next entry is a tool call led by an assistant
+// message or a preceding tool call. Every other adjacency, the last entry (seam to the live
+// tail), and an empty slice keep the blank.
+func TestSuppressSeparator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		committed []entry
+		i         int
+		want      bool
+	}{
+		{name: "assistant leads a tool call: glued", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}}, i: 0, want: true},
+		{name: "tool followed by a sibling tool: glued", committed: []entry{{Kind: kindTool}, {Kind: kindTool}}, i: 0, want: true},
+		{name: "assistant leads parallel tools: a middle tool stays glued", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}, {Kind: kindTool}, {Kind: kindTool}}, i: 1, want: true},
+		{name: "tool followed by an assistant: blank kept", committed: []entry{{Kind: kindTool}, {Kind: kindAssistant}}, i: 0, want: false},
+		{name: "assistant followed by an assistant: blank kept", committed: []entry{{Kind: kindAssistant}, {Kind: kindAssistant}}, i: 0, want: false},
+		{name: "user followed by a tool call: blank kept", committed: []entry{{Kind: kindUser}, {Kind: kindTool}}, i: 0, want: false},
+		{name: "assistant followed by a user: blank kept", committed: []entry{{Kind: kindAssistant}, {Kind: kindUser}}, i: 0, want: false},
+		{name: "notice followed by a tool call: blank kept", committed: []entry{{Kind: kindNotice}, {Kind: kindTool}}, i: 0, want: false},
+		{name: "last entry keeps its blank (seam to the live tail)", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}}, i: 1, want: false},
+		{name: "empty slice", committed: nil, i: 0, want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := suppressSeparator(tt.committed, tt.i); got != tt.want {
+				t.Errorf("suppressSeparator(i=%d) = %v, want %v", tt.i, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestModernStatusGradientAnimates pins that the modern status label SHIMMERS: at two different
 // anim-state frames the same status label renders DIFFERENT styled bytes (the flowing gradient),
 // while the plain (ANSI-free) text — the findable "streaming…" substring — is unchanged. This is
@@ -1714,7 +1841,7 @@ func firstThinkDurIn(entries []entry) (time.Duration, bool) {
 // drives streaming thinking in the REAL harness shape (TokenDeltas with NO CreatedAt) through
 // the modern shell, advancing the model clock via a tickMsg — the SAME clock the turn timer
 // uses — and asserts the committed thinking entry carries the measured, NON-ZERO span rendered
-// as the lowercase "thought for Nsec". Because the deltas are unstamped, the PRE-FIX reducer
+// as the lowercase "thought for Ns". Because the deltas are unstamped, the PRE-FIX reducer
 // (timing from ev.CreatedAt) captures 0 → the bare "thought"; the fix stamps them from m.now.
 // Both a PRIMARY loop (root fold) and a SUBAGENT loop (its own projection) are timed — the
 // subagent's Ephemeral stream flows through handleEventModern too.
@@ -1731,8 +1858,8 @@ func TestModernRealThinkingDurationFromModelClock(t *testing.T) {
 		elapsed time.Duration // the model-clock span between the first thinking chunk and the text chunk
 		wantHdr string        // the committed, collapsed header the viewport must show
 	}{
-		{name: "primary loop thinking timed from the model clock", loop: primary, elapsed: 8 * time.Second, wantHdr: "thought for 8sec"},
-		{name: "subagent loop thinking timed too", loop: sub, elapsed: 25 * time.Second, wantHdr: "thought for 25sec"},
+		{name: "primary loop thinking timed from the model clock", loop: primary, elapsed: 8 * time.Second, wantHdr: "thought for 8s"},
+		{name: "subagent loop thinking timed too", loop: sub, elapsed: 25 * time.Second, wantHdr: "thought for 25s"},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -1980,6 +2107,22 @@ func TestModernBarActiveFilter(t *testing.T) {
 			present: []uuid.UUID{primary, subB},
 		},
 		{
+			// The reported bug: focus sits on a subagent that finishes, and the (idle,
+			// non-focused) primary must NOT drop off — the focused idle subagent keeps the
+			// filter non-empty, so the primary is kept by its own always-visible exception, not
+			// the empty-filter fallback. Without it, there'd be no way back to the primary.
+			name: "primary stays visible while focus sits on a now-idle subagent",
+			drive: func(t *testing.T, m Screen) Screen {
+				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, loopStarted(subA, "a"))
+				m = feed(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
+				m = feed(t, m, event.LoopIdle{Header: hdr(subA)})    // subA finishes → idle
+				m.focusLoop(subA)                                    // user is on the now-idle subagent
+				return m
+			},
+			present: []uuid.UUID{primary, subA},
+		},
+		{
 			name: "empty filter falls back to the primary",
 			drive: func(t *testing.T, m Screen) Screen {
 				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
@@ -2170,9 +2313,10 @@ func TestModernSelectionSpansBlankSeparator(t *testing.T) {
 }
 
 // TestModernRendersQueuedInputs is the user-facing assertion: while a turn runs, the messages a
-// user fires stack up as visible, faint, "queued"-marked rows in the modern viewport (they were
-// invisible before). It also locks the no-duplicate rule — once a queued message's turn starts it
-// commits as a real user row and stops showing as queued.
+// user fires stack up as visible rows in the modern viewport (they were invisible before) — each
+// as a blue "QUEUED" banner row ON TOP of its faint message preview. It also locks the
+// no-duplicate rule — once a queued message's turn starts it commits as a real user row and stops
+// showing as queued.
 func TestModernRendersQueuedInputs(t *testing.T) {
 	t.Parallel()
 
@@ -2198,20 +2342,33 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 		m = feed(t, m, queuedFor(q.id, primary))
 	}
 
-	// All three render as queued rows, in submit order, each faint (QueuedStyle) and marked queued.
+	// All three render, in submit order, as a "QUEUED" banner row atop a faint message row.
 	rows := queuedLines(m.viewport.lines)
-	if len(rows) != len(msgs) {
-		t.Fatalf("queued rows = %d, want %d\nviewport:\n%s", len(rows), len(msgs), plainAll(m.viewport.lines))
+	const rowsPerMsg = 2 // the QUEUED banner + the message preview beneath it
+	if len(rows) != len(msgs)*rowsPerMsg {
+		t.Fatalf("queued rows = %d, want %d (a QUEUED banner + a message row per message)\nviewport:\n%s", len(rows), len(msgs)*rowsPerMsg, plainAll(m.viewport.lines))
 	}
+	label := strings.ToUpper(queuedTag) // "QUEUED"
 	for i, q := range msgs {
-		if !strings.Contains(rows[i].plain, q.text) {
-			t.Errorf("queued row %d plain = %q, want to contain %q", i, rows[i].plain, q.text)
+		banner := rows[i*rowsPerMsg]
+		msg := rows[i*rowsPerMsg+1]
+		// The banner row sits ON TOP: the uppercase QUEUED label in the brand blue #A2D2FF
+		// (QueuedLabelStyle = 38;2;162;210;255), NOT faint — distinct from the message beneath it.
+		if !strings.Contains(banner.plain, label) {
+			t.Errorf("queued banner %d plain = %q, want the %q label on top", i, banner.plain, label)
 		}
-		if !strings.Contains(rows[i].plain, queuedTag) {
-			t.Errorf("queued row %d plain = %q, want the %q marker", i, rows[i].plain, queuedTag)
+		if !strings.Contains(banner.styled, "38;2;162;210;255") { // #A2D2FF, styles.QueuedLabelStyle
+			t.Errorf("queued banner %d not the brand blue #A2D2FF; styled = %q", i, banner.styled)
 		}
-		if !strings.Contains(rows[i].styled, "\x1b[2m") { // SGR 2 = faint, styles.QueuedStyle
-			t.Errorf("queued row %d not faint (QueuedStyle); styled = %q", i, rows[i].styled)
+		if strings.Contains(banner.styled, "\x1b[2m") { // the banner must NOT be faint
+			t.Errorf("queued banner %d is faint, want the blue label; styled = %q", i, banner.styled)
+		}
+		// The message row: the faint preview text beneath the banner.
+		if !strings.Contains(msg.plain, q.text) {
+			t.Errorf("queued row %d plain = %q, want to contain %q", i, msg.plain, q.text)
+		}
+		if !strings.Contains(msg.styled, "\x1b[2m") { // SGR 2 = faint, styles.QueuedStyle
+			t.Errorf("queued row %d not faint (QueuedStyle); styled = %q", i, msg.styled)
 		}
 	}
 
@@ -2222,8 +2379,8 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 		Message: userMsg("first queued"),
 	})
 	rows = queuedLines(m.viewport.lines)
-	if len(rows) != 2 {
-		t.Fatalf("queued rows after dequeue = %d, want 2\nviewport:\n%s", len(rows), plainAll(m.viewport.lines))
+	if len(rows) != 2*rowsPerMsg { // two messages remain, each a banner + a message row
+		t.Fatalf("queued rows after dequeue = %d, want %d\nviewport:\n%s", len(rows), 2*rowsPerMsg, plainAll(m.viewport.lines))
 	}
 	for _, l := range rows {
 		if strings.Contains(l.plain, "first queued") {

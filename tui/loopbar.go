@@ -24,13 +24,16 @@ type loopBarEntry struct {
 
 // loopBar renders the session's loops as one clickable bar line and hit-tests a click
 // column back to a loop id (design §Active-loops bar). It is a PURE view: entries are the
-// assembled rows in stable (creation) order, focused is the currently focused loop id, and
-// max is the VISIBLE CAP — at most max entries render, the rest fold into a "… +N" overflow
-// marker so the bar never grows unbounded. A max <= 0 means no count cap. The segment layout
-// is width-INDEPENDENT, so HitTest (which takes no width) can never disagree with Render.
+// assembled rows in stable (creation) order, focused is the currently focused loop id,
+// primary is the primary (root) loop id — always kept visible so the user can return to it —
+// and max is the VISIBLE CAP: at most max entries render, the rest fold into a "… +N"
+// overflow marker so the bar never grows unbounded. A max <= 0 means no count cap. The
+// segment layout is width-INDEPENDENT, so HitTest (which takes no width) can never disagree
+// with Render.
 type loopBar struct {
 	entries []loopBarEntry
 	focused uuid.UUID
+	primary uuid.UUID
 	max     int
 }
 
@@ -179,13 +182,18 @@ func (b loopBar) priorityOrder() []int {
 	return idx
 }
 
-// priority scores entry i for the visible cap: focused ranks above every live loop, which
-// ranks above every idle loop; within a band the more-recent loop (higher index) ranks higher
-// so recency breaks ties. The bands are spaced by len(entries) so no index crosses a band.
+// priority scores entry i for the visible cap: focused ranks above the primary loop, which
+// ranks above every live loop, which ranks above every idle loop; within a band the
+// more-recent loop (higher index) ranks higher so recency breaks ties. The bands are spaced
+// by len(entries) so no index crosses a band. The primary loop is banded above live so it
+// always survives the cap (the "primary is always reachable" guarantee), never culled by a
+// crowd of live subagents.
 func (b loopBar) priority(i int) int {
 	base := i // recency: later loops rank higher within a band
 	switch {
 	case b.entries[i].id == b.focused:
+		return 3*len(b.entries) + base
+	case b.entries[i].id == b.primary:
 		return 2*len(b.entries) + base
 	case b.entries[i].live:
 		return len(b.entries) + base
