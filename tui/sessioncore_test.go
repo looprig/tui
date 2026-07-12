@@ -223,6 +223,9 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if old.closeCalls != 1 {
 			t.Errorf("old Close calls = %d, want exactly 1", old.closeCalls)
 		}
+		if !errors.Is(c.TerminalError(), msg.err) {
+			t.Errorf("TerminalError = %v, want %v", c.TerminalError(), msg.err)
+		}
 		if cmd == nil {
 			t.Fatal("cmd = nil, want terminal quit after failed replacement open")
 		}

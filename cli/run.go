@@ -128,7 +128,8 @@ var newProgram = func(model tea.Model, opts ...tea.ProgramOption) program {
 // signal-driven shutdown, constructs the agent via newAgent, captures stdout/stderr
 // so third-party libraries land in the log instead of the managed TUI frame, builds
 // and runs the Bubble Tea TUI (with newAgent as the /clear reopen thunk), tears the
-// agent down within a bounded timeout, and returns a process exit code. It never
+// agent down within a bounded timeout, promotes any terminal handoff error retained by the
+// final TUI model, and returns a process exit code. It never
 // calls os.Exit — the caller does — so it stays the single exit point and Run is
 // testable.
 //
@@ -228,6 +229,14 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 		closeCtx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 		defer cancel()
 		_ = toClose.Close(closeCtx)
+	}
+	// Bubble Tea returns a nil error when the model intentionally emits tea.Quit. A fatal
+	// /clear close/open failure uses that quit path after dropping the closed agent, so promote
+	// the cause retained by the final model into the same runtime-error exit path.
+	if runErr == nil {
+		if h, ok := final.(tui.TerminalErrorHolder); ok {
+			runErr = h.TerminalError()
+		}
 	}
 
 	if runErr != nil {

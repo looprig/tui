@@ -44,6 +44,10 @@ type sessionCore struct {
 
 	status Status      // Idle | Running | Interrupting | Resetting
 	sub    EventStream // the session-lifetime event subscription; nil until subscribed
+	// terminalErr is set only when a /clear ownership handoff has closed the old agent but
+	// cannot install a replacement. Bubble Tea exits cleanly; cli.Run reads this error from
+	// the final model to return a process failure instead of exit success.
+	terminalErr error
 
 	// activeLoopID is the session's AUTHORITATIVE selected loop — the post-subscription
 	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
@@ -90,6 +94,10 @@ func (c sessionCore) subscribe() tea.Cmd {
 // into every embedding shell's method set — both Screen and Screen satisfy the
 // composition root's agentHolder through this one definition.
 func (c sessionCore) Agent() Agent { return c.agent }
+
+// TerminalError reports a fatal transport ownership failure that caused the TUI to quit.
+// Ordinary user-visible command errors remain in the transcript and return nil here.
+func (c sessionCore) TerminalError() error { return c.terminalErr }
 
 // turnPhase is the ACTIVE-loop turn-status transition applyTurnStatus reports so a
 // presentation shell can react to it (Screen arms the live-tail blink on turnStarted
@@ -295,6 +303,7 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	if msg.err != nil {
 		c.transcript = c.transcript.CommitError(msg.err)
 		c.agent = nil
+		c.terminalErr = msg.err
 		return tea.Quit, true
 	}
 	c.agent = msg.agent

@@ -351,6 +351,37 @@ func TestReopenAgentClosesPartialReplacementOnError(t *testing.T) {
 	}
 }
 
+// TestReopenAgentCloseFailureStopsBeforeOpen pins the first half of the ownership handoff:
+// one failed Close attempt is wrapped and returned, and the replacement opener is never called.
+func TestReopenAgentCloseFailureStopsBeforeOpen(t *testing.T) {
+	t.Parallel()
+
+	closeErr := errors.New("shutdown failed")
+	old := &fakeAgent{closeErr: closeErr}
+	var openerCalled bool
+	open := func(context.Context) (Agent, error) {
+		openerCalled = true
+		return &fakeAgent{}, nil
+	}
+
+	res := reopenAgent(context.Background(), old, open)().(reopenResultMsg)
+	if !errors.Is(res.err, closeErr) {
+		t.Fatalf("reopen error = %v, want wrapped %v", res.err, closeErr)
+	}
+	if res.err == closeErr {
+		t.Error("reopen returned bare close error, want ownership-handoff context")
+	}
+	if res.agent != nil {
+		t.Fatalf("replacement agent = %T, want nil", res.agent)
+	}
+	if openerCalled {
+		t.Error("replacement opener called after old Close failure")
+	}
+	if old.closeCalls != 1 {
+		t.Errorf("old Close calls = %d, want exactly 1", old.closeCalls)
+	}
+}
+
 func TestCloseAgent(t *testing.T) {
 	t.Parallel()
 

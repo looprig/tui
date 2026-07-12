@@ -15,8 +15,18 @@ type AgentHolder interface {
 	Agent() Agent
 }
 
+// TerminalErrorHolder is the minimal final-model surface cli.Run uses to distinguish a
+// clean Bubble Tea quit from a fatal /clear handoff. Bubble Tea itself returns nil when the
+// model intentionally emits tea.Quit, so the model must retain the cause.
+type TerminalErrorHolder interface {
+	TerminalError() error
+}
+
 // Compile-time assertion that the presentation shell satisfies AgentHolder, so cli/run.go's
 // teardown assertion resolves for the wired shell (Screen). Agent() is a value receiver
 // on the embedded sessionCore, so the zero-value struct literal satisfies the interface — no
 // fields are needed to promote it.
-var _ AgentHolder = Screen{}
+var (
+	_ AgentHolder         = Screen{}
+	_ TerminalErrorHolder = Screen{}
+)

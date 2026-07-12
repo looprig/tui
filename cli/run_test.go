@@ -75,20 +75,21 @@ func (p *fakeProgram) Quit() {}
 // Its Agent() returns a distinct agent so a test can prove teardown closes the FINAL model's
 // agent, not the initial one.
 type fakeHolder struct {
-	agent tui.Agent
+	agent       tui.Agent
+	terminalErr error
 }
 
 func (f fakeHolder) Init() tea.Cmd                       { return nil }
 func (f fakeHolder) Update(tea.Msg) (tea.Model, tea.Cmd) { return f, nil }
 func (f fakeHolder) View() tea.View                      { return tea.NewView("") }
 func (f fakeHolder) Agent() tui.Agent                    { return f.agent }
+func (f fakeHolder) TerminalError() error                { return f.terminalErr }
 
-// Compile-time proof fakeHolder is exactly the two contracts the teardown path needs: a
-// tea.Model (so the fake program can return it as its final model) and a tui.AgentHolder
-// (so Run's teardown assertion resolves its Agent()).
+// Compile-time proof fakeHolder satisfies the final-model contracts Run consumes.
 var (
-	_ tea.Model       = fakeHolder{}
-	_ tui.AgentHolder = fakeHolder{}
+	_ tea.Model               = fakeHolder{}
+	_ tui.AgentHolder         = fakeHolder{}
+	_ tui.TerminalErrorHolder = fakeHolder{}
 )
 
 type failingWriter struct {
@@ -371,23 +372,34 @@ func TestRunTeardownViaAgentHolder(t *testing.T) {
 	}
 }
 
-// TestRunTeardownWithNoLiveAgent covers a failed /clear handoff: the TUI already closed the
-// initial session, the replacement failed, and AgentHolder therefore reports nil. Run must
-// not close the initial agent again or dereference the nil holder result.
+// TestRunTeardownWithNoLiveAgent covers fatal /clear handoffs: the TUI already closed the
+// initial session, either close or replacement open failed, and AgentHolder therefore reports
+// nil. Run must return the runtime failure code without closing initial again or dereferencing
+// the nil holder result.
 func TestRunTeardownWithNoLiveAgent(t *testing.T) {
-	var initialClosed bool
-	swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
-		return &fakeProgram{final: fakeHolder{agent: nil}}
-	})
-	newAgent := func(context.Context) (tui.Agent, error) {
-		return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
-	}
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "current session close failed", err: errors.New("close current session: shutdown failed")},
+		{name: "replacement open failed", err: errors.New("open replacement: lease failed")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var initialClosed bool
+			swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
+				return &fakeProgram{final: fakeHolder{agent: nil, terminalErr: tt.err}}
+			})
+			newAgent := func(context.Context) (tui.Agent, error) {
+				return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
+			}
 
-	if got := Run(context.Background(), newAgent, Banner{Name: "SWE"}); got != exitOK {
-		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
-	}
-	if initialClosed {
-		t.Error("initial agent closed again after failed handoff; TUI already released it")
+			if got := Run(context.Background(), newAgent, Banner{Name: "SWE"}); got != exitAgentError {
+				t.Fatalf("Run() exit = %d, want %d for terminal handoff error", got, exitAgentError)
+			}
+			if initialClosed {
+				t.Error("initial agent closed again after failed handoff; TUI already released it")
+			}
+		})
 	}
 }
 
