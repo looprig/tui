@@ -336,7 +336,6 @@ git commit -m "feat(tui): separate root active and focused loops"
 - Modify: `tui/agent.go:20-45`
 - Modify: `tui/sessioncore.go:311-346`
 - Modify: `tui/sessioncore_test.go:226-330`
-- Modify: `tui/blocks_test.go:1-140` only if an existing assertion needs target context wording
 - Modify: `tui/fixtures_test.go:26-165`
 - Modify: `cli/run_test.go:23-52`
 
@@ -414,7 +413,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add tui/sessioncore.go tui/sessioncore_test.go tui/blocks_test.go tui/fixtures_test.go cli/run_test.go
+git add tui/agent.go tui/sessioncore.go tui/sessioncore_test.go tui/fixtures_test.go cli/run_test.go
 git commit -m "fix(tui): check image capability per target loop"
 ```
 
@@ -471,7 +470,11 @@ CGO_ENABLED=0 GOWORK=off go build -trimpath ./...
 
 Expected: PASS.
 
-Root derivation against a real rig is not a CLI unit gate. Add fresh-session and switched-then-restored **embedding-adapter acceptance tests** in the sibling `tests` repository (or the embedding module's migration), proving `RootLoopID` uses the durably first zero-parent `LoopStarted` while `ActiveLoopID` uses the restored current selection.
+Deferred acceptance criterion, owned by the embedding-adapter migration: its
+fresh-session and switched-then-restored acceptance tests must prove `RootLoopID` uses
+the durably first zero-parent `LoopStarted` while `ActiveLoopID` uses the restored
+current selection. Those tests may live in the sibling `tests` repository, but creating
+them is not an action or completion gate in this CLI plan.
 
 **Step 5: Review and commit only necessary cleanup**
 

@@ -221,11 +221,12 @@ Because CLI commits `vendor/`, `go mod tidy` and `go mod vendor` are mandatory. 
 - Update all CLI fake Agents to satisfy `RootLoopID` and `ActiveLoopID`; remove `PrimaryLoopID` from non-vendor Go source.
 - Refresh vendor, then run unit, race, integration-tagged, security, and static build gates.
 
-CLI unit tests cover only its adapter contract with fakes. The fresh-session and
-switched-then-restored tests that prove `RootLoopID` derives from harness's durably first
-zero-parent `LoopStarted` are **embedding-adapter acceptance tests** and belong in the
-sibling `tests` repository (or the embedding application's migration), not in CLI. This
-avoids importing a composition root into the presentation module.
+CLI unit tests cover only its adapter contract with fakes. Root derivation is a deferred
+acceptance criterion owned by the embedding-adapter migration: that migration's
+fresh-session and switched-then-restored tests must prove `RootLoopID` derives from
+harness's durably first zero-parent `LoopStarted`. They may execute in the sibling
+`tests` repository, but are not a CLI implementation action or gate. This avoids
+importing a composition root into the presentation module.
 
 ## Non-goals
 
