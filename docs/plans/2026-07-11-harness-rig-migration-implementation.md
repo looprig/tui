@@ -6,7 +6,7 @@
 
 **Architecture:** Refresh the package-pruned harness vendor tree first. Split stable root, mutable active, and focused loop state; subscribe before reading the authoritative active baseline; reconcile queued selection events causally; derive displayed active status from per-loop running state; and query image capability for the actual submission target.
 
-**Tech Stack:** Go 1.26.4, `github.com/looprig/harness` v0.10.0, Bubble Tea v2, table-driven tests, Go race detector.
+**Tech Stack:** Go 1.26.4, the reviewed harness release containing rig plus loop display metadata, Bubble Tea v2, table-driven tests, Go race detector.
 
 ---
 
@@ -18,7 +18,9 @@
 - Modify: `vendor/modules.txt`
 - Replace: `vendor/github.com/looprig/harness/**` (only imported packages are emitted)
 
-**Precondition:** `v0.10.0` must resolve to a harness commit containing the reviewed rig branch. If the tag is not published, stop before this task; do not invent a release or commit a vendor tree from an unreviewed source.
+**Precondition:** select the published harness tag containing the reviewed rig branch plus
+`LoopStarted` display metadata (`loop.WithDisplayName`/`WithDescription`). Substitute it for
+`<harness-tag>` below. If it is not published, stop; do not invent a release.
 
 **Step 1: Prove the imported event surface is stale**
 
@@ -36,11 +38,11 @@ Expected: both commands succeed: `modules.txt` records `v0.5.2`, and the importe
 Run:
 
 ```bash
-GOWORK=off go mod edit -require=github.com/looprig/harness@v0.10.0
+GOWORK=off go mod edit -require=github.com/looprig/harness@<harness-tag>
 GOWORK=off go mod tidy
 ```
 
-Expected: `go.mod` requires `v0.10.0`; the existing `replace github.com/looprig/harness => ../harness` remains unchanged.
+Expected: `go.mod` requires the recorded reviewed tag; the existing relative replace remains unchanged.
 
 **Step 3: Refresh package-pruned vendor**
 
@@ -48,8 +50,9 @@ Run:
 
 ```bash
 GOWORK=off go mod vendor
-rg -n '^# github.com/looprig/harness v0\.10\.0 => ../harness$' vendor/modules.txt
+rg -n '^# github.com/looprig/harness <harness-tag> => ../harness$' vendor/modules.txt
 rg -n 'type ActiveLoopChanged' vendor/github.com/looprig/harness/pkg/event --glob '*.go'
+rg -n 'DisplayName' vendor/github.com/looprig/harness/pkg/event --glob '*.go'
 test ! -d vendor/github.com/looprig/harness/pkg/rig
 test ! -d vendor/github.com/looprig/harness/pkg/session
 ```
@@ -286,6 +289,9 @@ git commit -m "feat(tui): reconcile active loop after subscription"
 
 Add tests proving:
 
+- `LoopStarted.DisplayName` becomes the displayed/stored label;
+- empty display metadata falls back to `Header.AgentName` for older journals;
+- display metadata never changes loop ID, root, active, or focus identity;
 - `New` initializes `focusedLoopID` from `Agent.ActiveLoopID`, even when root differs;
 - successful `/clear` initializes focus from the replacement Agent's `ActiveLoopID`;
 - a later `ActiveLoopChanged` updates current active/bar/status but leaves focus unchanged;
@@ -312,6 +318,10 @@ Initialize `Screen.focusedLoopID` from `Agent.ActiveLoopID` in `New`. On success
 Rename `loopBar.primary` to `root`, add `active`, and change selection/priority helpers to keep focused, active, and root independently. `Screen.bar` passes `m.focusedLoopID`, `m.activeLoopID`, and `m.transcript.rootLoopID`.
 
 Keep `trackTurnClock` per-loop. Change any “current active turn” status lookup to the reconciled active/running state; root-only transcript notices remain explicitly root-scoped rather than being mislabeled active.
+
+When folding `LoopStarted`, use `DisplayName` when non-empty and otherwise
+`Header.AgentName`. Store that presentation label in transcript/loop-bar metadata; every state
+map remains keyed by `LoopID`.
 
 **Step 4: Run TUI tests to verify GREEN**
 
@@ -429,7 +439,7 @@ Run:
 ```bash
 ! rg -n 'PrimaryLoopID|primaryLoopID|DefaultEventFilter|session\.Compile|session\.Runner|session\.New|session\.Restore|serve\.Runner|CheckpointWorkspace|WithWorkspace|checkpoint watcher' . --glob '*.go' --glob '!vendor/**'
 ! rg -n 'AcceptsImages\(\)' tui cli --glob '*.go'
-rg -n 'github.com/looprig/harness v0\.10\.0' go.mod vendor/modules.txt
+rg -n 'github.com/looprig/harness <harness-tag>' go.mod vendor/modules.txt
 rg -n 'type ActiveLoopChanged' vendor/github.com/looprig/harness/pkg/event --glob '*.go'
 ```
 

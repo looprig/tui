@@ -204,7 +204,12 @@ submissions, proving the query is target-specific and dynamic.
 
 ### Version and vendor
 
-The rig lifecycle is the next breaking harness release after `v0.9.0`; the CLI plan targets `github.com/looprig/harness v0.10.0`. Do not merge the dependency bump until that tag contains the reviewed rig branch. Local execution may use CLI's existing `replace github.com/looprig/harness => ../harness`, but `go.mod` still records `v0.10.0` as the release contract.
+The selected harness release must contain both the reviewed rig branch and the loop display
+metadata prerequisite recorded by the SWE migration plan. `LoopStarted` keeps its stable
+topology key and adds a display name. CLI renders the display name when present and falls back
+to the old agent name; root, active, and focus remain keyed by loop ID. Do not merge the bump
+until that reviewed tag is published. Local execution may use the existing relative replace,
+but `go.mod` still records the selected release contract.
 
 Because CLI commits `vendor/`, `go mod tidy` and `go mod vendor` are mandatory. Verification must inspect both source and vendor: a green build against an old vendor copy is not evidence that the migration matches the new harness.
 
@@ -218,6 +223,8 @@ Because CLI commits `vendor/`, `go mod tidy` and `go mod vendor` are mandatory. 
 - Prove bar capping retains focused, active, and root loops in priority order.
 - Prove `New` and successful `/clear` focus the then-active loop, while later selection does not move focus.
 - Prove image acceptance is loop-targeted, fails closed for an unknown loop, and observes a model capability change.
+- Prove `LoopStarted` display name is rendered/stored when present and old events fall back to
+  `AgentName` without changing loop identity.
 - Update all CLI fake Agents to satisfy `RootLoopID` and `ActiveLoopID`; remove `PrimaryLoopID` from non-vendor Go source.
 - Refresh vendor, then run unit, race, integration-tagged, security, and static build gates.
 
@@ -239,4 +246,4 @@ importing a composition root into the presentation module.
 
 ## Removal checks
 
-After implementation, non-vendor CLI source must have no `PrimaryLoopID`, `session.Compile`, `session.Runner`, public `session.New/Restore`, `serve.Runner`, `CheckpointWorkspace`, `WithWorkspace*`, or checkpoint watcher. Vendor must likewise contain no removed harness lifecycle surface after the `v0.10.0` refresh.
+After implementation, non-vendor CLI source must have no `PrimaryLoopID`, `session.Compile`, `session.Runner`, public `session.New/Restore`, `serve.Runner`, `CheckpointWorkspace`, `WithWorkspace*`, or checkpoint watcher. Vendor must likewise contain no removed harness lifecycle surface after the selected reviewed refresh.
