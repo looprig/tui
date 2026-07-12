@@ -559,8 +559,8 @@ func (m *Screen) handlePromptResult(msg promptResultMsg) tea.Cmd {
 }
 
 // handleReopenResult applies a /clear reopen outcome. The core owns the transport ordering —
-// on error the old agent is kept and it returns Idle with an error entry the viewport
-// re-renders; on success it swaps in the fresh agent, resets the shared transport, and
+// on error no live agent remains, so it renders the error and exits; on success it swaps
+// in the fresh agent, resets the shared transport, and
 // re-subscribes with the INJECTED (all-loops) filter. Screen then resets its own
 // viewport/collapse/focus so no remnant of the old session survives the swap.
 func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {

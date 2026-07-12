@@ -281,7 +281,8 @@ func TestReopenAgent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			msg := reopenAgent(context.Background(), tt.open)()
+			old := &fakeAgent{}
+			msg := reopenAgent(context.Background(), old, tt.open)()
 			res, ok := msg.(reopenResultMsg)
 			if !ok {
 				t.Fatalf("msg = %T, want reopenResultMsg", msg)
@@ -292,7 +293,61 @@ func TestReopenAgent(t *testing.T) {
 			if (res.err != nil) != tt.wantErr {
 				t.Errorf("err != nil = %v, want %v", res.err != nil, tt.wantErr)
 			}
+			if !old.closeCalled {
+				t.Error("old agent was not closed before replacement open")
+			}
 		})
+	}
+}
+
+// TestReopenAgentClosesOldBeforeOpeningReplacement reproduces the exclusive-workspace
+// handoff: the replacement opener rejects the call unless the old session has already
+// released its lease via Close.
+func TestReopenAgentClosesOldBeforeOpeningReplacement(t *testing.T) {
+	t.Parallel()
+
+	old := &fakeAgent{}
+	fresh := &fakeAgent{}
+	open := func(context.Context) (Agent, error) {
+		if !old.closeCalled {
+			return nil, errors.New("workspace lease still held")
+		}
+		return fresh, nil
+	}
+
+	msg := reopenAgent(context.Background(), old, open)()
+	res, ok := msg.(reopenResultMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want reopenResultMsg", msg)
+	}
+	if res.err != nil {
+		t.Fatalf("reopen error = %v", res.err)
+	}
+	if res.agent != fresh {
+		t.Fatalf("agent = %p, want fresh %p", res.agent, fresh)
+	}
+	if old.closeCalls != 1 {
+		t.Fatalf("old Close calls = %d, want exactly 1", old.closeCalls)
+	}
+}
+
+// TestReopenAgentClosesPartialReplacementOnError guards the opener contract defensively:
+// if construction returns both an agent and an error, the unusable partial replacement must
+// be closed before the terminal error is delivered.
+func TestReopenAgentClosesPartialReplacementOnError(t *testing.T) {
+	t.Parallel()
+
+	old := &fakeAgent{}
+	partial := &fakeAgent{}
+	openErr := errors.New("partial open failed")
+	open := func(context.Context) (Agent, error) { return partial, openErr }
+
+	res := reopenAgent(context.Background(), old, open)().(reopenResultMsg)
+	if !errors.Is(res.err, openErr) {
+		t.Fatalf("reopen error = %v, want %v", res.err, openErr)
+	}
+	if partial.closeCalls != 1 {
+		t.Fatalf("partial replacement Close calls = %d, want exactly 1", partial.closeCalls)
 	}
 }
 

@@ -54,6 +54,7 @@ type fakeAgent struct {
 	interruptErr       error
 
 	closeCalled bool
+	closeCalls  int
 	closeErr    error
 
 	// acceptsImages is the per-loop image capability the widened AcceptsImages(loopID)
@@ -146,6 +147,7 @@ func (f *fakeAgent) Interrupt(_ context.Context) (bool, error) {
 
 func (f *fakeAgent) Close(_ context.Context) error {
 	f.closeCalled = true
+	f.closeCalls++
 	return f.closeErr
 }
 

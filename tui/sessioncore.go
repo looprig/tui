@@ -281,30 +281,22 @@ func (c *sessionCore) applyInterruptResult(msg interruptResultMsg) bool {
 	return false
 }
 
-// applyReopenResult applies a /clear reopen outcome (the model is Resetting). On error
-// the old agent is kept and the status returns to Idle with an error entry (the shell
-// presents it: the returned bool is true, cmd nil). On success the fresh agent is swapped
-// in, the shared transport state is reset, the status returns to Idle, the OLD
-// subscription is closed and a NEW one is established against the fresh agent, and the old
-// agent is closed best-effort — the returned bool is false, and the shell resets its own
-// presentation to match the fresh session.
+// applyReopenResult applies a /clear reopen outcome (the model is Resetting). The reopen
+// command has already closed the old agent before attempting the replacement. On error no
+// live session remains: the old agent is dropped, an error entry is presented, and the TUI
+// exits. On success the fresh agent is swapped in, shared transport state resets, and a new
+// subscription is established against it.
 //
 // Ordering matters: the agent is swapped to msg.agent BEFORE the re-subscribe command is
 // built so it reads the NEW agent (c.subscribe reads c.agent). The old subscription is
-// closed best-effort first so the old agent's hub does not leak it; c.sub is cleared so a
-// late subClosedMsg from the old stream (nil err — an intentional Close) is a harmless
-// no-op.
+// c.sub was closed and cleared when /clear began, so a late subClosedMsg from the old stream
+// (nil err — an intentional Close) is a harmless no-op.
 func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	if msg.err != nil {
 		c.transcript = c.transcript.CommitError(msg.err)
-		c.status = StatusIdle
-		return nil, true
+		c.agent = nil
+		return tea.Quit, true
 	}
-	if c.sub != nil {
-		_ = c.sub.Close() // best-effort; idempotent, nothing actionable at the UI
-	}
-	c.sub = nil
-	old := c.agent
 	c.agent = msg.agent
 	// Read the NEW agent's root loop id (the swap above happened first) so the fresh
 	// transcript scopes its committed user rows to the replacement loop.
@@ -319,7 +311,7 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	// Re-subscribe via the INJECTED filter (c.subscribe) against the freshly swapped
 	// agent, so a /clear re-attaches the all-loops scope rather than silently narrowing
 	// the post-clear session and starving every subagent projection.
-	return tea.Batch(closeAgent(old), c.subscribe()), false
+	return c.subscribe(), false
 }
 
 // applyPromptResult surfaces a bounded prompt-dispatch (approve/deny/answer) outcome. A
@@ -418,7 +410,11 @@ func (c *sessionCore) runSlash(name string) (tea.Cmd, bool) {
 	case "/clear":
 		if c.status == StatusIdle {
 			c.status = StatusResetting
-			return reopenAgent(c.appCtx, c.openAgent), false
+			if c.sub != nil {
+				_ = c.sub.Close()
+				c.sub = nil
+			}
+			return reopenAgent(c.appCtx, c.agent, c.openAgent), false
 		}
 		return nil, false
 	default:

@@ -371,6 +371,26 @@ func TestRunTeardownViaAgentHolder(t *testing.T) {
 	}
 }
 
+// TestRunTeardownWithNoLiveAgent covers a failed /clear handoff: the TUI already closed the
+// initial session, the replacement failed, and AgentHolder therefore reports nil. Run must
+// not close the initial agent again or dereference the nil holder result.
+func TestRunTeardownWithNoLiveAgent(t *testing.T) {
+	var initialClosed bool
+	swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
+		return &fakeProgram{final: fakeHolder{agent: nil}}
+	})
+	newAgent := func(context.Context) (tui.Agent, error) {
+		return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
+	}
+
+	if got := Run(context.Background(), newAgent, Banner{Name: "SWE"}); got != exitOK {
+		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
+	}
+	if initialClosed {
+		t.Error("initial agent closed again after failed handoff; TUI already released it")
+	}
+}
+
 // swapNewProgram replaces the package-level program-construction seam for the
 // duration of the test and restores it on cleanup, so Run is exercised without a
 // real terminal.

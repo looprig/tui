@@ -106,6 +106,8 @@ func AllLoopsEventFilter() event.EventFilter {
 	}
 }
 
-// OpenAgent constructs a fresh Agent. The composition root binds it to
-// registry.Open(name); the TUI calls it on /clear to replace the current agent.
+// OpenAgent constructs a fresh Agent. The composition root binds it to its session factory.
+// On /clear the TUI closes the current Agent before invoking OpenAgent, allowing exclusive
+// resources to transfer to the replacement. A failed open is terminal because the closed
+// current Agent cannot be resumed.
 type OpenAgent func(context.Context) (Agent, error)

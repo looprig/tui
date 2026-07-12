@@ -1548,6 +1548,7 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	old := &fakeAgent{rootLoopID: callID(1)}
 	fresh := &fakeAgent{rootLoopID: callID(2)}
 	m := newScreenSized(t, old, 80, 24)
+	m.openAgent = fakeOpen(fresh)
 	m = feed(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
 	m = feed(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
 	m = feed(t, m, event.TurnDone{Header: hdr(callID(1))}) // return to idle so /clear is allowed
@@ -1562,8 +1563,10 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 		t.Fatal("/clear cmd = nil, want the reopen cmd")
 	}
 
-	// The reopen result swaps the agent and resets the modern presentation.
-	m, cmd = updateScreen(t, m, reopenResultMsg{agent: fresh})
+	// The reopen command closes old before opening fresh; its result swaps the agent and
+	// resets the modern presentation.
+	msg := cmd()
+	m, cmd = updateScreen(t, m, msg)
 	if m.Agent() != fresh {
 		t.Errorf("agent = %p, want fresh %p", m.Agent(), fresh)
 	}
@@ -1577,7 +1580,7 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 		t.Errorf("viewport lines = %d, want 0 (viewport reset)", len(m.viewport.lines))
 	}
 	if cmd == nil {
-		t.Fatal("reopen cmd = nil, want closeAgent + re-subscribe")
+		t.Fatal("reopen cmd = nil, want re-subscribe")
 	}
 	drainCmd(t, cmd)
 	if fresh.subscribeCount != 1 {

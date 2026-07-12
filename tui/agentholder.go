@@ -3,7 +3,9 @@ package tui
 // AgentHolder is the narrow, read-only view of a presentation shell that the CLI
 // composition root (cli/run.go — a DIFFERENT package) type-asserts against at teardown:
 // it exposes ONLY the live Agent, so Run can bound a best-effort Close of whichever agent
-// a /clear may have swapped in, without depending on either concrete shell type. Both
+// a /clear may have swapped in, without depending on either concrete shell type. It returns
+// nil after a failed /clear handoff because the prior agent was already closed and no
+// replacement exists. Both
 // Screen and Screen satisfy it through the Agent() method promoted from the embedded
 // sessionCore (a value receiver), so Run asserts the final tea.Model against this one
 // interface and teardown works whichever shell cli.Run wires. It is exported because the

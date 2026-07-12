@@ -216,15 +216,19 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 	// Backstop bounded Close of the *current* agent (which /clear may have swapped),
 	// even on a Run error: prefer the live agent read off the final model through the
 	// tui.AgentHolder interface (which both Screen and Screen satisfy), else fall
-	// back to the initial one. Close is idempotent, so the double call with the TUI's own
-	// Ctrl+C teardown is safe. Best-effort on teardown.
-	toClose := agent
+	// back to the initial one. A failed /clear handoff reports nil because its old session was
+	// already closed and no replacement opened; in that case there is nothing left to close.
+	// Close is idempotent, so the double call with the TUI's own Ctrl+C teardown is safe.
+	// Best-effort on teardown.
+	toClose := tui.Agent(agent)
 	if h, ok := final.(tui.AgentHolder); ok {
 		toClose = h.Agent()
 	}
-	closeCtx, cancel := context.WithTimeout(context.Background(), closeTimeout)
-	defer cancel()
-	_ = toClose.Close(closeCtx)
+	if toClose != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+		defer cancel()
+		_ = toClose.Close(closeCtx)
+	}
 
 	if runErr != nil {
 		logger.Error("tui exited with error", "err", runErr.Error())

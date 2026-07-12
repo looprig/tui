@@ -43,8 +43,8 @@ type interruptResultMsg struct {
 	err       error
 }
 
-// reopenResultMsg carries the freshly opened replacement agent (nil on err)
-// from a /clear reopen.
+// reopenResultMsg carries the freshly opened replacement agent (nil on err) from a /clear
+// handoff. The old agent has already been closed before this message is produced.
 type reopenResultMsg struct {
 	agent Agent
 	err   error

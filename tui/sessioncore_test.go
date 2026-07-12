@@ -140,8 +140,8 @@ func TestSessionCoreApplyTurnStatus(t *testing.T) {
 // TestSessionCoreReopenOrdering pins the /clear reopen ordering the two shells share:
 // on success the OLD subscription is CLOSED, the agent is swapped to the fresh one, the
 // transcript/interaction/status reset, and the re-subscribe targets the FRESH agent
-// (proving the swap happened before the re-subscribe command was built). On error the old agent is
-// kept, an error entry commits, and the shell is told to present it.
+// (proving the swap happened before the re-subscribe command was built). On error the already
+// closed old agent is dropped, an error entry commits, and the shell is told to present and exit.
 func TestSessionCoreReopenOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -151,13 +151,18 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		old := &fakeAgent{rootLoopID: callID(0x01)}
 		fresh := &fakeAgent{rootLoopID: callID(0x02)}
 		c := newTestCore(old)
+		c.openAgent = fakeOpen(fresh)
 		oldSub := newFakeSubscription()
 		c.sub = oldSub
-		c.status = StatusResetting
 		c.transcript = c.transcript.CommitUser([]content.Block{&content.TextBlock{Text: "x"}})
 		c = feedPrompt(c)
 
-		cmd, present := c.applyReopenResult(reopenResultMsg{agent: fresh})
+		reopen, present := c.runSlash("/clear")
+		if present || reopen == nil {
+			t.Fatal("/clear did not begin reopen")
+		}
+		msg := reopen().(reopenResultMsg)
+		cmd, present := c.applyReopenResult(msg)
 		if present {
 			t.Fatal("present = true on success, want false (nothing to flush; the shell resets)")
 		}
@@ -182,7 +187,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if c.status != StatusIdle {
 			t.Errorf("status = %d, want StatusIdle", c.status)
 		}
-		// Draining the batch must close the OLD agent and re-subscribe against the FRESH one.
+		// Draining the command re-subscribes against the FRESH agent; the old agent was
+		// already closed before the opener returned it.
 		drainCmd(t, cmd)
 		if !old.closeCalled {
 			t.Error("old agent Close() not called")
@@ -195,25 +201,30 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		}
 	})
 
-	t.Run("error keeps the old agent and asks the shell to present", func(t *testing.T) {
+	t.Run("error drops the closed old agent, presents, and exits", func(t *testing.T) {
 		t.Parallel()
 
 		old := &fakeAgent{}
 		c := newTestCore(old)
-		c.status = StatusResetting
+		c.openAgent = func(context.Context) (Agent, error) { return nil, errors.New("no agent") }
 
-		cmd, present := c.applyReopenResult(reopenResultMsg{err: errors.New("no agent")})
+		reopen, present := c.runSlash("/clear")
+		if present || reopen == nil {
+			t.Fatal("/clear did not begin reopen")
+		}
+		msg := reopen().(reopenResultMsg)
+		cmd, present := c.applyReopenResult(msg)
 		if !present {
 			t.Error("present = false on error, want true (the committed error must be shown)")
 		}
-		if cmd != nil {
-			t.Errorf("cmd = non-nil, want nil (the shell flushes; no transport cmd)")
+		if c.Agent() != nil {
+			t.Error("agent retained on error after close, want nil (no live session remains)")
 		}
-		if c.Agent() != old {
-			t.Error("agent swapped on error, want unchanged")
+		if old.closeCalls != 1 {
+			t.Errorf("old Close calls = %d, want exactly 1", old.closeCalls)
 		}
-		if c.status != StatusIdle {
-			t.Errorf("status = %d, want StatusIdle", c.status)
+		if cmd == nil {
+			t.Fatal("cmd = nil, want terminal quit after failed replacement open")
 		}
 		if rec := c.transcript.committed[len(c.transcript.committed)-1]; rec.Kind != kindNotice || rec.Level != noticeError {
 			t.Errorf("last committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)

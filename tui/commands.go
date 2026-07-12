@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -152,14 +153,27 @@ func provideAnswerCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID
 	}
 }
 
-// reopenAgent builds a fresh agent for /clear under a bounded context. It only
-// constructs the agent; the swap and the old agent's shutdown happen on the
-// Update loop in reopenResultMsg, so no two goroutines ever touch m.agent.
-func reopenAgent(ctx context.Context, open OpenAgent) tea.Cmd {
+// reopenAgent hands ownership from old to a fresh /clear session. It closes old first so
+// exclusive resources (notably a workspace root lease) are released before open constructs
+// the replacement. Once close starts there is no rollback: a close/open error is terminal and
+// the Update loop exits instead of pretending the old session remains live.
+func reopenAgent(ctx context.Context, old Agent, open OpenAgent) tea.Cmd {
 	return func() tea.Msg {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), closeTimeout)
+		err := old.Close(closeCtx)
+		closeCancel()
+		if err != nil {
+			return reopenResultMsg{err: fmt.Errorf("close current session: %w", err)}
+		}
 		rctx, cancel := context.WithTimeout(ctx, reopenTimeout)
 		defer cancel()
 		a, err := open(rctx)
+		if err != nil && a != nil {
+			partialCloseCtx, partialCloseCancel := context.WithTimeout(context.Background(), closeTimeout)
+			_ = a.Close(partialCloseCtx)
+			partialCloseCancel()
+			a = nil
+		}
 		return reopenResultMsg{agent: a, err: err}
 	}
 }
