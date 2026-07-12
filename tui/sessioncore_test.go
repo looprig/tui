@@ -123,7 +123,7 @@ func TestSessionCoreApplyTurnStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			c := newTestCore(&fakeAgent{rootLoopID: primary})
+			c := newTestCore(&fakeAgent{activeLoopID: primary})
 			c.status = tt.startStatus
 
 			phase := c.applyTurnStatus(tt.ev)
@@ -148,8 +148,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 	t.Run("success closes old sub before swapping and re-subscribes the fresh agent", func(t *testing.T) {
 		t.Parallel()
 
-		old := &fakeAgent{rootLoopID: callID(0x01)}
-		fresh := &fakeAgent{rootLoopID: callID(0x02)}
+		old := &fakeAgent{activeLoopID: callID(0x01)}
+		fresh := &fakeAgent{activeLoopID: callID(0x02)}
 		c := newTestCore(old)
 		c.openAgent = fakeOpen(fresh)
 		oldSub := newFakeSubscription()
@@ -174,9 +174,6 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		}
 		if c.Agent() != fresh {
 			t.Errorf("agent = %p, want fresh %p", c.Agent(), fresh)
-		}
-		if c.transcript.rootLoopID != fresh.rootLoopID {
-			t.Errorf("transcript rootLoopID = %v, want fresh %v (read after the swap)", c.transcript.rootLoopID, fresh.rootLoopID)
 		}
 		if len(c.transcript.committed) != 0 {
 			t.Errorf("committed = %d, want 0 (reset)", len(c.transcript.committed))
@@ -342,7 +339,6 @@ func TestSessionCoreMapAction(t *testing.T) {
 func TestSessionCoreSubscribeBaseline(t *testing.T) {
 	t.Parallel()
 
-	root := loopID(0xF0)
 	planner, builder, reviewer := loopID(0xA1), loopID(0xB2), loopID(0xC3)
 	session := loopID(0x99)
 
@@ -365,7 +361,7 @@ func TestSessionCoreSubscribeBaseline(t *testing.T) {
 			t.Parallel()
 
 			sub := newFakeSubscription()
-			agent := &fakeAgent{rootLoopID: root, activeLoopID: tt.baseline, subStream: sub}
+			agent := &fakeAgent{activeLoopID: tt.baseline, subStream: sub}
 			c := newTestCore(agent)
 
 			// Drive the real order: run the subscription command, then apply the
@@ -416,17 +412,17 @@ func TestSessionCoreSelectionFailsClosed(t *testing.T) {
 
 			// Stream installed, but applySubscribed has NOT run — so activeLoopID is still
 			// zero (no authoritative baseline).
-			c := newTestCore(&fakeAgent{rootLoopID: root})
+			c := newTestCore(&fakeAgent{activeLoopID: root})
 			c.sub = newFakeSubscription()
 			c.status = tt.startStatus
 
 			c.handleEvent(selectionEvent(session, event.ActiveLoopChanged{PreviousLoopID: planner, ActiveLoopID: builder}))
 
 			if !c.activeLoopID.IsZero() {
-				t.Errorf("activeLoopID = %v, want zero (fail closed: no baseline)", c.activeLoopID)
+				t.Errorf("activeLoopID = %v, want zero before subscription baseline", c.activeLoopID)
 			}
 			if c.status != tt.startStatus {
-				t.Errorf("status = %d, want %d (untouched)", c.status, tt.startStatus)
+				t.Errorf("status = %d, want %d unchanged", c.status, tt.startStatus)
 			}
 		})
 	}
@@ -457,14 +453,13 @@ func TestSessionCoreReopenSetupWindow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			old := &fakeAgent{rootLoopID: root, subStream: newFakeSubscription()}
+			old := &fakeAgent{activeLoopID: root, subStream: newFakeSubscription()}
 			c := newTestCore(old)
 			c.sub = old.subStream
 			c.status = StatusResetting
 
 			freshSub := newFakeSubscription()
 			fresh := &fakeAgent{
-				rootLoopID:   root,
 				activeLoopID: tt.baseline,
 				subStream:    freshSub,
 				subEnqueue:   []event.Event{selectionEvent(session, event.ActiveLoopChanged{PreviousLoopID: planner, ActiveLoopID: builder})},
@@ -477,7 +472,7 @@ func TestSessionCoreReopenSetupWindow(t *testing.T) {
 				t.Fatal("reopen reported an error, want success")
 			}
 			if !c.activeLoopID.IsZero() {
-				t.Fatalf("activeLoopID = %v after reopen, want zero (baseline re-read on the fresh subscribe)", c.activeLoopID)
+				t.Fatalf("activeLoopID = %v after reopen, want pending zero baseline", c.activeLoopID)
 			}
 
 			subscribeCore(t, &c)
@@ -497,7 +492,6 @@ func TestSessionCoreReopenSetupWindow(t *testing.T) {
 func TestSessionCoreActiveRunningStatus(t *testing.T) {
 	t.Parallel()
 
-	root := loopID(0xF0)
 	planner, builder := loopID(0xA1), loopID(0xB2)
 	session := loopID(0x99)
 
@@ -553,7 +547,7 @@ func TestSessionCoreActiveRunningStatus(t *testing.T) {
 			t.Parallel()
 
 			sub := newFakeSubscription()
-			agent := &fakeAgent{rootLoopID: root, activeLoopID: tt.baseline, subStream: sub}
+			agent := &fakeAgent{activeLoopID: tt.baseline, subStream: sub}
 			c := newTestCore(agent)
 			subscribeCore(t, &c)
 
@@ -641,7 +635,7 @@ func TestSessionCoreTargetImageCapability(t *testing.T) {
 			// so effectiveActiveLoopID falls back to the ROOT — the exact window the
 			// effectiveActiveLoopID deviation exists to serve. A root that supports images
 			// must accept, and the query must target the root, not the zero loop.
-			name:         "generic submit pre-baseline falls back to the root loop",
+			name:         "generic submit before baseline uses the agent active loop",
 			caps:         map[uuid.UUID]bool{root: true},
 			activeLoopID: uuid.UUID{}, // zero: no authoritative baseline yet
 			useToLoop:    false,
@@ -663,7 +657,7 @@ func TestSessionCoreTargetImageCapability(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			agent := &fakeAgent{rootLoopID: root, acceptsImages: tt.caps}
+			agent := &fakeAgent{activeLoopID: root, acceptsImages: tt.caps}
 			c := newTestCore(agent)
 			c.activeLoopID = tt.activeLoopID
 
@@ -719,7 +713,7 @@ func TestSessionCoreTargetImageCapabilityDynamic(t *testing.T) {
 	png := writeFile(t, dir, "image.png", []byte{0x89, 'P', 'N', 'G'})
 	text := "look @" + png
 
-	agent := &fakeAgent{rootLoopID: root, acceptsImages: map[uuid.UUID]bool{builder: true}}
+	agent := &fakeAgent{activeLoopID: root, acceptsImages: map[uuid.UUID]bool{builder: true}}
 	c := newTestCore(agent)
 
 	// First submission: builder is image-capable → accepted and sent.

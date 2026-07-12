@@ -90,7 +90,7 @@ func TestLoopBarRender(t *testing.T) {
 			// The idle root outranks live loops under the cap: with max=2 and four live
 			// subagents, only the focused loop and the root survive — so the root
 			// conversation is always reachable, never culled by a crowd of live subagents.
-			name: "idle root survives the cap over live loops",
+			name: "recent live loop survives without root priority",
 			bar: loopBar{
 				entries: []loopBarEntry{
 					{id: l0, name: "main", live: false}, // root, idle
@@ -100,19 +100,18 @@ func TestLoopBarRender(t *testing.T) {
 					{id: l4, name: "d", live: true},
 				},
 				focused: l1,
-				root:    l0,
 				max:     2,
 			},
 			width: 80,
 			contain: []string{
-				barSegOf(barFocusedMark, "a", l1),      // focused kept
-				barSegOf(barUnfocusedMark, "main", l0), // idle root kept over the live loops
+				barSegOf(barFocusedMark, "a", l1), // focused kept
+				barSegOf(barUnfocusedMark, "d", l4),
 				overflowText(3),
 			},
 			absent: []string{
 				barSegOf(barUnfocusedMark, "b", l2),
 				barSegOf(barUnfocusedMark, "c", l3),
-				barSegOf(barUnfocusedMark, "d", l4),
+				barSegOf(barUnfocusedMark, "main", l0),
 			},
 		},
 		{
@@ -170,7 +169,7 @@ func TestLoopBarRender(t *testing.T) {
 }
 
 // TestLoopBarPriorityActiveRoot proves the 5-band visible-cap priority keeps the focused,
-// active, and ROOT loops as three INDEPENDENT privileged bands above live and idle loops:
+// active, and selected loops as three INDEPENDENT privileged bands above live and idle loops:
 // under a cap the survivors are focused → active → root → live → most-recent idle. It covers
 // root/active/focused all DISTINCT as well as the case where they COINCIDE on one entry (which
 // still survives via the highest band the switch picks).
@@ -190,7 +189,7 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 		{
 			// root, active, focused are three DISTINCT idle loops; under max=3 they survive over
 			// the live loops — proving focused > active > root > live > idle.
-			name: "distinct focused/active/root survive over live loops",
+			name: "focused active and recent live survive",
 			bar: loopBar{
 				entries: []loopBarEntry{
 					{id: l0, name: "root", live: false},
@@ -200,16 +199,16 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 					{id: l4, name: "live2", live: true},
 					{id: l5, name: "idle", live: false},
 				},
-				focused: l2, active: l1, root: l0, max: 3,
+				focused: l2, active: l1, max: 3,
 			},
 			width: 120,
 			contain: []string{
 				barSegOf(barFocusedMark, "focused", l2),
 				barSegOf(barUnfocusedMark, "active", l1),
-				barSegOf(barUnfocusedMark, "root", l0),
+				barSegOf(barUnfocusedMark, "live2", l4),
 				overflowText(3),
 			},
-			absent: []string{"live1", "live2"},
+			absent: []string{"root", "live1"},
 		},
 		{
 			// focused == active == root all name l0: the switch picks the highest band (focused),
@@ -222,14 +221,14 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 					{id: l2, name: "live2", live: true},
 					{id: l3, name: "live3", live: true},
 				},
-				focused: l0, active: l0, root: l0, max: 1,
+				focused: l0, active: l0, max: 1,
 			},
 			width:   120,
 			contain: []string{barSegOf(barFocusedMark, "hub", l0), overflowText(3)},
 			absent:  []string{"live1", "live2", "live3"},
 		},
 		{
-			// active outranks root: with max=2 and both idle, focused + active survive, root folds.
+			// active outranks focused + active survive, root folds.
 			name: "active outranks root under the cap",
 			bar: loopBar{
 				entries: []loopBarEntry{
@@ -237,7 +236,7 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 					{id: l1, name: "active", live: false},
 					{id: l2, name: "focused", live: false},
 				},
-				focused: l2, active: l1, root: l0, max: 2,
+				focused: l2, active: l1, max: 2,
 			},
 			width: 120,
 			contain: []string{
@@ -257,7 +256,7 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 					{id: l1, name: "liveMid", live: true},
 					{id: l2, name: "idleNew", live: false},
 				},
-				focused: loopID(0xFF), active: loopID(0xFE), root: loopID(0xFD), max: 2,
+				focused: loopID(0xFF), active: loopID(0xFE), max: 2,
 			},
 			width: 120,
 			contain: []string{

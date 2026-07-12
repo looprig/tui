@@ -13,7 +13,7 @@ import (
 // loop), every loop's Enduring events, AND the session-scoped selection transition
 // (ActiveLoopChanged). It drives a table through the shared event.ShouldDeliver predicate
 // so the assertion is the real fan-out decision, not a re-derivation of it. There is no
-// primary-only path any more — modern mode renders any focused loop's whole live output,
+// active-only path any more — modern mode renders any focused loop's whole live output,
 // so it must actually RECEIVE every loop's firehose.
 func TestAllLoopsEventFilter(t *testing.T) {
 	t.Parallel()

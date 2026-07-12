@@ -209,7 +209,7 @@ func (m Screen) Init() tea.Cmd {
 	return tea.Batch(
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
-		restoreBacklogCmd(m.appCtx, m.agent, m.agent.RootLoopID()),
+		restoreBacklogCmd(m.appCtx, m.agent),
 		m.subscribe(),
 		// The anim tick chain runs continuously for the life of the program (started here,
 		// re-armed by handleAnim, stopped only on quit). It shimmers the gradient only for
@@ -323,9 +323,9 @@ func (m *Screen) commitStartup() {
 	}
 	m.startupPending = false
 	m.startupCommitted = true
-	m.transcript = m.transcript.CommitNotice(noticeInfo, m.banner.bannerText())
+	m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, m.banner.bannerText())
 	if greeting := strings.TrimSpace(m.banner.Greeting); greeting != "" {
-		m.transcript = m.transcript.CommitNotice(noticeInfo, greeting)
+		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, greeting)
 	}
 }
 
@@ -399,7 +399,7 @@ func (m *Screen) trackTurnClock(ev event.Event) {
 	}
 }
 
-// commitTurnRanNotice appends a faint "○ turn ran for Ns" harness line when the ROOT loop's
+// commitTurnRanNotice appends a faint "○ turn ran for Ns" harness line when the selected loop's
 // turn completes (event.TurnDone) — the frozen form of the live status-bar timer, so a finished
 // turn leaves a record of how long it took. It MUST run before trackTurnClock clears
 // turnStartedAt: the span is the TurnDone timestamp less turnStartedAt[root] (both Enduring
@@ -415,9 +415,6 @@ func (m *Screen) commitTurnRanNotice(ev event.Event) {
 		return
 	}
 	loopID := td.EventHeader().LoopID
-	if loopID != m.transcript.rootLoopID {
-		return
-	}
 	start, ok := m.turnStartedAt[loopID]
 	if !ok || start.IsZero() {
 		return
@@ -430,7 +427,7 @@ func (m *Screen) commitTurnRanNotice(ev event.Event) {
 	if d < 0 {
 		d = 0
 	}
-	m.transcript = m.transcript.CommitHarness("turn ran for " + formatElapsed(d))
+	m.transcript = m.transcript.CommitHarnessFor(loopID, "turn ran for "+formatElapsed(d))
 }
 
 // maybeStartTick launches the 1s status-line tick chain, but only when a turn is active
@@ -496,7 +493,7 @@ func (m *Screen) handleAnim() tea.Cmd {
 // sessionCore.applyRestored is a deferred follow-up; until then, a fix here must land in both.
 func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	if msg.err != nil {
-		m.transcript = m.transcript.CommitError(msg.err)
+		m.transcript = m.transcript.CommitGlobalError(msg.err)
 		m.rerender()
 		return nil
 	}
@@ -601,7 +598,7 @@ func (m *Screen) handleCloseForQuitResult(msg closeForQuitResultMsg) tea.Cmd {
 	m.agent = nil
 	if msg.err != nil {
 		m.terminalErr = fmt.Errorf("close replacement on deferred quit: %w", msg.err)
-		m.transcript = m.transcript.CommitError(m.terminalErr)
+		m.transcript = m.transcript.CommitGlobalError(m.terminalErr)
 	}
 	return tea.Quit
 }
@@ -687,7 +684,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // submit on the root behaves exactly like before (submitToLoop(root) == the root
 // submit). Only uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
-// root-loop submit path (mapAction → submit → Submit) is untouched.
+// selected-loop submit path (mapAction → submit → Submit) is untouched.
 func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
@@ -1009,7 +1006,7 @@ func suppressSeparator(committed []entry, i int) bool {
 
 // liveTailLines renders the focused loop's in-progress live segment to viewport lines,
 // REUSING the existing live renderer (renderLiveAssistant) — never a new one. For the
-// ROOT alias it matches the scrollback surface's live tail: it suppresses the
+// focused projection it matches the scrollback surface's live tail: it suppresses the
 // orchestrator's raw running Subagent card (its activity shows via the nested pending card)
 // and appends the in-flight pending subagent cards. A focused NON-root projection carries
 // no live.Calls and no pending cards of its own, so its live tail is just its streamed
@@ -1024,10 +1021,8 @@ func (m Screen) liveTailLines(live liveSeg) []renderedLine {
 	width := m.contentWidth()
 	calls := live.Calls
 	var pending []ToolCallView
-	if m.focusedLoopID == m.transcript.rootLoopID || m.focusedLoopID.IsZero() {
-		calls = nonSubagentCalls(live.Calls)
-		pending = m.transcript.pendingSubagentCards()
-	}
+	calls = nonSubagentCalls(live.Calls)
+	pending = m.transcript.pendingSubagentCardsFor(m.focusedLoopID)
 	if live.empty() && len(pending) == 0 {
 		return nil
 	}
@@ -1085,7 +1080,7 @@ func (m Screen) queuedTailLines() []renderedLine {
 //
 // The bar shows the loops currently doing work plus three always-kept exceptions:
 // activeBarEntries keeps the LIVE loops, the FOCUSED loop (so the current view is always
-// labeled), the ACTIVE loop (the session's current default target), and the ROOT loop (so the
+// labeled), the ACTIVE loop (the session's current default target), and the selected loop (so the
 // user can always return to the root conversation) — dropping only idle loops that are none of
 // focused/active/root. Without the root exception, focusing a subagent and letting it go idle
 // would hide the (idle, non-focused) root, leaving no way back to it. focused, active, and root
@@ -1096,25 +1091,21 @@ func (m Screen) queuedTailLines() []renderedLine {
 func (m Screen) bar() loopBar {
 	infos := m.transcript.loops()
 	gated := m.interaction.pendingGateLoops()
-	root := m.transcript.rootLoopID
-	active := m.activeLoopID
-	entries := activeBarEntries(infos, gated, m.focusedLoopID, active, root)
-	if len(entries) == 0 {
-		entries = rootBarEntry(infos, gated, root)
-	}
-	return loopBar{entries: entries, focused: m.focusedLoopID, active: active, root: root, max: loopBarCap}
+	active := m.effectiveActiveLoopID()
+	entries := activeBarEntries(infos, gated, m.focusedLoopID, active)
+	return loopBar{entries: entries, focused: m.focusedLoopID, active: active, max: loopBarCap}
 }
 
 // activeBarEntries maps the loop table into bar entries, keeping LIVE loops plus the FOCUSED,
-// ACTIVE, and ROOT loops (all kept even when idle) — only an idle loop that is none of
+// ACTIVE, and selected loops (all kept even when idle) — only an idle loop that is none of
 // focused/active/root drops off the bar. Keeping the root guarantees the root conversation is
 // always reachable, even while focus sits on a now-idle subagent; keeping the active loop keeps
 // the session's current default target visible. The entry order follows loops() (stable creation
 // order), so the bar draws loops in the order they appeared.
-func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, active, root uuid.UUID) []loopBarEntry {
+func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, active uuid.UUID) []loopBarEntry {
 	entries := make([]loopBarEntry, 0, len(infos))
 	for _, li := range infos {
-		if !li.Live && li.ID != focused && li.ID != active && li.ID != root {
+		if !li.Live && li.ID != focused && li.ID != active {
 			continue
 		}
 		entries = append(entries, loopBarEntry{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]})
@@ -1123,18 +1114,9 @@ func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, activ
 }
 
 // rootBarEntry is the fallback shown when the active filter leaves the bar empty (nothing live
-// and the focused loop is not in the table): the root loop's entry, so the bar always labels the
+// and the focused loop is not in the table): the selected loop's entry, so the bar always labels the
 // session. It returns nil when the root is not yet in the table (a brand-new session with no
 // loops) — an empty bar, the pre-turn default.
-func rootBarEntry(infos []loopInfo, gated map[uuid.UUID]bool, root uuid.UUID) []loopBarEntry {
-	for _, li := range infos {
-		if li.ID == root {
-			return []loopBarEntry{{id: li.ID, name: li.Name, live: li.Live, gate: gated[li.ID]}}
-		}
-	}
-	return nil
-}
-
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
 // or a prompt control when a prompt is active) via the shared surface primitive.
 func (m Screen) bottomBoxView() string {
@@ -1160,28 +1142,21 @@ func (m Screen) surfaceInputs() surfaceInputs {
 // ACTIVE loop, not the root: reusing it for a root focus would wrongly read "running" when the
 // root is idle but a DIFFERENT active primer is mid-turn. The only exception is the two
 // session-global transitions the core owns — StatusInterrupting (an interrupt in flight) and
-// StatusResetting (a /clear reopen) — which surface on the ROOT focus's status line only (never a
-// subagent's), preserving the prior "Interrupting/Resetting are never shown for a subagent focus"
-// behavior. The ordinary Running/Idle is read from the focused loop's per-loop turn bit
+// StatusResetting (a /clear reopen) — which surface regardless of focus. The ordinary
+// Running/Idle is read from the focused loop's per-loop turn bit
 // (sessionCore.loopRunning, folded from EVERY loop's TurnStarted/terminal, keyed by loop id).
 // That map — not the root live segment — is the accurate per-loop signal: a sibling primer's
-// TurnStarted marks the SHARED root live segment active (transcript root fold), so the root
+// TurnStarted marks the SHARED root live segment active (transcript loop projection), so the root
 // projection cannot distinguish an idle root from a running sibling. The zero id (the single-loop
-// default) maps to the root loop. statusInputs() then refines a Running label into
+// default) maps to the selected loop. statusInputs() then refines a Running label into
 // thinking…/streaming… from the focused loop's live signals. This is a deliberately MINIMAL
 // "you are viewing loop X, and whether it is live" indication, NOT a full per-loop status
 // machine: Interrupting/Resetting are root-only concerns and are never shown for a subagent.
 func (m Screen) focusedStatus() Status {
-	rootFocus := m.focusedLoopID == m.transcript.rootLoopID || m.focusedLoopID.IsZero()
-	// Interrupt-in-flight and /clear-reset are session-global transitions the core owns; they
-	// surface on the root focus's status line (never a subagent's), as before.
-	if rootFocus && (m.status == StatusInterrupting || m.status == StatusResetting) {
+	if m.status == StatusInterrupting || m.status == StatusResetting {
 		return m.status
 	}
 	focus := m.focusedLoopID
-	if focus.IsZero() {
-		focus = m.transcript.rootLoopID
-	}
 	if m.loopRunning[focus] {
 		return StatusRunning
 	}
@@ -1231,9 +1206,6 @@ func (m Screen) turnElapsed() (time.Duration, bool) {
 		return 0, false
 	}
 	lid := m.focusedLoopID
-	if lid.IsZero() {
-		lid = m.transcript.rootLoopID
-	}
 	start, ok := m.turnStartedAt[lid]
 	if !ok || start.IsZero() {
 		return 0, false

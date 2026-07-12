@@ -42,12 +42,7 @@ type fakeAgent struct {
 	lastSubmitToLoopID     uuid.UUID
 	lastSubmitToLoopBlocks []content.Block
 
-	// rootLoopID is returned by RootLoopID — the stable root used for transcript
-	// attribution; zero is a valid fixed id for the single-loop default. activeLoopID
-	// is returned by ActiveLoopID (the current default input target) and DEFAULTS to
-	// rootLoopID when left zero, so a test that sets only rootLoopID gets active == root
-	// (the Task 2 compile-preserving default; Task 3-4 diverge them).
-	rootLoopID   uuid.UUID
+	// activeLoopID is the current default input target returned by ActiveLoopID.
 	activeLoopID uuid.UUID
 
 	interruptCancelled bool
@@ -132,14 +127,7 @@ func (f *fakeAgent) SubmitToLoop(_ context.Context, loopID uuid.UUID, blocks []c
 	return f.submitID, nil
 }
 
-func (f *fakeAgent) RootLoopID() uuid.UUID { return f.rootLoopID }
-
-// ActiveLoopID returns the configured active loop, defaulting to the root when unset so
-// common test constructors (which set only rootLoopID) get active == root.
 func (f *fakeAgent) ActiveLoopID() uuid.UUID {
-	if f.activeLoopID.IsZero() {
-		return f.rootLoopID
-	}
 	return f.activeLoopID
 }
 

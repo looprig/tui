@@ -31,9 +31,6 @@ type Agent interface {
 	// Submit (same fire-and-forget InputID/Cause.CommandID contract, human agency); a
 	// loopID equal to the ACTIVE loop id behaves exactly like Submit.
 	SubmitToLoop(ctx context.Context, loopID uuid.UUID, blocks []content.Block) (uuid.UUID, error)
-	// RootLoopID returns the stable root used for transcript attribution.
-	RootLoopID() uuid.UUID
-
 	// ActiveLoopID returns the current default input target.
 	ActiveLoopID() uuid.UUID
 	Interrupt(ctx context.Context) (bool, error)
@@ -62,7 +59,7 @@ type Agent interface {
 	// returns nil/empty — the TUI then skips the repaint and behaves exactly as a
 	// fresh session. A read failure returns a typed error the fold surfaces as a
 	// non-fatal restore-error notice (history could not repaint; the live stream is
-	// unaffected). The events are Enduring-only and from the primary loop's session
+	// unaffected). The events are Enduring-only and from the active loop's session
 	// view — never the live 256-cap hub buffer. ctx bounds the read.
 	ReplayBacklog(ctx context.Context) ([]event.Event, error)
 
@@ -94,7 +91,7 @@ type Agent interface {
 // firehose. (The widened scope also DELIVERS each loop's tool-lifecycle events; rendering
 // them as live tool spinners inside a focused subagent projection is deferred — today a
 // projection's live segment shows streamed text/thinking, and tool cards appear at StepDone.
-// See routeProjection.) A primary-only Ephemeral scope would STARVE the per-loop projections
+// See routeProjection.) A active-only Ephemeral scope would STARVE the per-loop projections
 // of a subagent's live output, freezing a focused subagent view at Enduring StepDone
 // granularity. The whole-session hub buffer is bounded and has no replay, so the TUI opens
 // ONE all-loops subscription at startup and never re-subscribes; focus is then a pure view

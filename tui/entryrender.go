@@ -132,7 +132,7 @@ func renderPromptRecord(p *promptContext, width int) []string {
 // bar (styles.NoticeInfoStyle) so the request reads as one information notice. A
 // free-text request (no choices) records just the question. A SUBAGENT-attributed
 // record (p.Agent set) prefixes the question with "<agent>: " so the user sees WHICH
-// agent is asking; a primary-loop record (p.Agent empty) renders the question as-is.
+// agent is asking; a loop-local record (p.Agent empty) renders the question as-is.
 func renderUserInputRecord(p promptContext, width int) []string {
 	question := p.Question
 	if p.Agent != "" {

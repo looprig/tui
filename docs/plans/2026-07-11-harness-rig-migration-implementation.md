@@ -4,7 +4,7 @@
 
 **Goal:** Update CLI's narrow TUI adapter, active-loop state, focus, and target-model capability handling for harness rig sessions without moving composition or control-plane authority into CLI.
 
-**Architecture:** Refresh the package-pruned harness vendor tree first. Split stable root, mutable active, and focused loop state; subscribe before reading the authoritative active baseline; reconcile queued selection events causally; derive displayed active status from per-loop running state; and query image capability for the actual submission target.
+**Architecture:** Refresh the package-pruned harness vendor tree first. Use mutable active and focused loop state with uniform per-loop projections; subscribe before reading the authoritative active baseline; reconcile queued selection events causally; derive displayed active status from per-loop running state; and query image capability for the actual submission target.
 
 **Tech Stack:** Go 1.26.4, the reviewed harness release containing rig plus loop display metadata, Bubble Tea v2, table-driven tests, Go race detector.
 
@@ -77,7 +77,7 @@ git add go.mod go.sum vendor
 git commit -m "build: update harness for rig sessions"
 ```
 
-### Task 2: Split the CLI adapter's root and active queries
+### Task 2: Replace the legacy primary query with the active query
 
 **Files:**
 - Modify: `tui/agent.go:20-127`
@@ -124,7 +124,6 @@ func TestAllLoopsEventFilter(t *testing.T) {
 Change fake Agent contracts to require:
 
 ```go
-RootLoopID() uuid.UUID
 ActiveLoopID() uuid.UUID
 ```
 
@@ -136,16 +135,13 @@ Run:
 GOWORK=off go test -race ./tui ./cli -run 'TestAllLoopsEventFilter|TestSubscribe'
 ```
 
-Expected: FAIL to compile because `Agent` still exposes `PrimaryLoopID` rather than separate root and active queries.
+Expected: FAIL to compile because `Agent` still exposes `PrimaryLoopID` rather than `ActiveLoopID`.
 
 **Step 3: Change the narrow adapter contract**
 
 In `tui/agent.go`, replace `PrimaryLoopID` with:
 
 ```go
-// RootLoopID returns the stable root used for transcript attribution.
-RootLoopID() uuid.UUID
-
 // ActiveLoopID returns the current default input target.
 ActiveLoopID() uuid.UUID
 
@@ -153,7 +149,7 @@ ActiveLoopID() uuid.UUID
 
 Keep `Submit`, `SubmitToLoop`, `Subscribe`, `ReplayBacklog`, gate verbs, `Interrupt`, and `Close` as CLI-owned adapter methods. Delete dead `DefaultEventFilter`, `subscribeCmd`, and `defaultLoopFilter`; retain only `AllLoopsEventFilter`, `sessionCore.subscribe`, and `subscribeWith`.
 
-As a compile-preserving intermediate step, replace every remaining `agent.PrimaryLoopID()` call with `agent.RootLoopID()`. Tasks 3-4 then move current-selection behavior to `activeLoopID`/`ActiveLoopID`. Give fake Agents separate `rootLoopID` and `activeLoopID`; default active to root in common test constructors. Keep the existing zero-argument image capability until Task 5 changes its contract and both callers atomically.
+Replace every remaining `agent.PrimaryLoopID()` call with `agent.ActiveLoopID()`. Give fake Agents one `activeLoopID`; do not derive or cache a second identity. Keep the existing zero-argument image capability until Task 5 changes its contract and both callers atomically.
 
 **Step 4: Verify GREEN and removal**
 
@@ -170,7 +166,7 @@ Expected: no removal-search output; tests PASS.
 
 ```bash
 git add tui cli
-git commit -m "refactor(tui): split root and active loop queries"
+git commit -m "refactor(tui): expose active loop query"
 ```
 
 ### Task 3: Handshake active selection and fold per-loop running state
@@ -291,13 +287,13 @@ Add tests proving:
 
 - `LoopStarted.DisplayName` becomes the displayed/stored label;
 - empty display metadata falls back to `Header.AgentName` for older journals;
-- display metadata never changes loop ID, root, active, or focus identity;
-- `New` initializes `focusedLoopID` from `Agent.ActiveLoopID`, even when root differs;
+- display metadata never changes loop ID, active, or focus identity;
+- `New` initializes `focusedLoopID` from `Agent.ActiveLoopID`;
 - successful `/clear` initializes focus from the replacement Agent's `ActiveLoopID`;
 - a later `ActiveLoopChanged` updates current active/bar/status but leaves focus unchanged;
-- under a visible cap, priority is focused → active → root → live → recent idle.
+- under a visible cap, priority is focused → active → live → recent idle.
 
-Use a table where root, active, and focused are all different, plus a row where they coincide.
+Use a table where active and focused differ, plus a row where they coincide.
 
 **Step 2: Run focused tests to verify RED**
 
@@ -307,17 +303,17 @@ Run:
 GOWORK=off go test -race ./tui -run 'Test.*DisplayName|TestTranscript.*LoopStarted|TestModernNewFocusesActive|TestModernReopenFocusesActive|TestModernSelectionDoesNotStealFocus|TestLoopBar.*ActiveRoot'
 ```
 
-Expected: FAIL because focus still initializes from the old root/primary concept and the bar has only one privileged loop field.
+Expected: FAIL because focus still initializes from the old primary concept and projections are privileged.
 
-**Step 3: Implement stable root and dynamic active presentation**
+**Step 3: Implement uniform projections and dynamic active presentation**
 
-Rename internal `transcriptModel.primaryLoopID` and associated terminology to `rootLoopID` without changing historical fold attribution. `FoldDisplay` and restore repaint receive `Agent.RootLoopID`; they never derive root from the latest active selection.
+Delete the transcript identity field. `FoldDisplay` and restore repaint fold all-loop history into projections selected solely by event `LoopID`.
 
 Initialize `Screen.focusedLoopID` from `Agent.ActiveLoopID` in `New`. On successful `/clear`, set focus from the replacement Agent's `ActiveLoopID` once; do not change it from later selection events.
 
-Rename `loopBar.primary` to `root`, add `active`, and change selection/priority helpers to keep focused, active, and root independently. `Screen.bar` passes `m.focusedLoopID`, `m.activeLoopID`, and `m.transcript.rootLoopID`.
+Keep only `focused` and `active` priority bands in `loopBar`; live and recent loops follow.
 
-Keep `trackTurnClock` per-loop. Change any “current active turn” status lookup to the reconciled active/running state; root-only transcript notices remain explicitly root-scoped rather than being mislabeled active.
+Keep `trackTurnClock` and turn notices per-loop. Change current-active status lookup to the reconciled active/running state.
 
 When folding `LoopStarted`, use `DisplayName` when non-empty and otherwise
 `Header.AgentName`. Store that presentation label in transcript/loop-bar metadata; every state
@@ -337,7 +333,7 @@ Expected: PASS. Root attribution is unchanged; focus and active selection are in
 
 ```bash
 git add tui/transcript.go tui/transcript_test.go tui/displayprojection_test.go tui/loopbar.go tui/loopbar_test.go tui/screen.go tui/screen_test.go tui/restore.go tui/restore_test.go
-git commit -m "feat(tui): separate root active and focused loops"
+git commit -m "feat(tui): separate active and focused loops"
 ```
 
 ### Task 5: Query image capability for the submission target
@@ -481,7 +477,7 @@ CGO_ENABLED=0 GOWORK=off go build -trimpath ./...
 Expected: PASS.
 
 Deferred acceptance criterion, owned by the embedding-adapter migration: its
-fresh-session and switched-then-restored acceptance tests must prove `RootLoopID` uses
+fresh-session and switched-then-restored acceptance tests must prove `ActiveLoopID` uses
 the durably first zero-parent `LoopStarted` while `ActiveLoopID` uses the restored
 current selection. Those tests may live in the sibling `tests` repository, but creating
 them is not an action or completion gate in this CLI plan.

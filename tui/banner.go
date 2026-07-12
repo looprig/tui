@@ -19,7 +19,7 @@ type AgentBanner struct {
 	// registry — never the model). When non-empty it is committed as a SECOND opening
 	// transcript notice, after the banner, by the systemReady handler. It is purely a
 	// rendered opening entry — NOT a turn, NOT a command, never in the model's context —
-	// so the primary loop's history stays empty until the first real user message. Empty
+	// so the active loop's history stays empty until the first real user message. Empty
 	// (the default-off case) → no greeting entry, behavior identical to today.
 	Greeting string
 }

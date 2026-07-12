@@ -98,7 +98,7 @@ func TestSubscribeWith(t *testing.T) {
 	t.Run("success carries the stream and the all-loops filter", func(t *testing.T) {
 		t.Parallel()
 		sub := newFakeSubscription()
-		agent := &fakeAgent{rootLoopID: callID(0x5A), subStream: sub}
+		agent := &fakeAgent{activeLoopID: callID(0x5A), subStream: sub}
 
 		msg := subscribeWith(agent, AllLoopsEventFilter())()
 		res, ok := msg.(subscribedMsg)

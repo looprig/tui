@@ -41,7 +41,7 @@ type uiAction struct {
 	// LoopID is the gate-opening loop's id, carried for uiApprove/uiDeny/uiAnswer so
 	// Screen dispatches the gate reply to the loop that produced the prompt (stamped
 	// on the pending prompt from its request event's Header.LoopID), not
-	// unconditionally to the primary loop. Zero for non-gate actions.
+	// unconditionally to the active loop. Zero for non-gate actions.
 	LoopID          uuid.UUID
 	ToolExecutionID uuid.UUID          // uiApprove / uiDeny / uiAnswer target gate
 	Scope           tool.ApprovalScope // uiApprove persistence breadth

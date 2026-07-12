@@ -1014,7 +1014,7 @@ func TestInteractionChildGateRoutable(t *testing.T) {
 		t.Errorf("mode = %d, want modePermissionPrompt (%d)", m.mode, modePermissionPrompt)
 	}
 
-	// The child gate is routable per loop: the PRIMARY loop terminating does NOT clear the
+	// The child gate is routable per loop: the active loop terminating does NOT clear the
 	// child's still-pending gate (design §7 — only the finishing loop's prompts clear).
 	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}}})
 	if m.PendingCount() != 1 {

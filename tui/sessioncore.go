@@ -60,7 +60,7 @@ type sessionCore struct {
 	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
 	// each ActiveLoopChanged. It is zero until the first successful subscribe (no authority
 	// yet); selection reconciliation FAILS CLOSED while zero, and status derivation falls
-	// back to the root loop (effectiveActiveLoopID).
+	// back to the selected loop (effectiveActiveLoopID).
 	activeLoopID uuid.UUID
 	// loopRunning folds EVERY loop's turn-liveness (TurnStarted → true; any terminal →
 	// false). The DISPLAYED status follows only the active loop's bit; a background loop's
@@ -69,7 +69,7 @@ type sessionCore struct {
 }
 
 // newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk and
-// banner the agent metadata. The transcript is scoped to the agent's root loop so only its
+// banner the agent metadata. The transcript is scoped to the agent's selected loop so only its
 // GENUINE user turns commit human user rows.
 func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) sessionCore {
 	return sessionCore{
@@ -78,7 +78,7 @@ func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner Age
 		appCtx:      ctx,
 		banner:      banner,
 		status:      StatusIdle,
-		transcript:  transcriptModel{rootLoopID: agent.RootLoopID()},
+		transcript:  transcriptModel{},
 		interaction: newInteractionModel(),
 		// The AUTHORITATIVE active baseline is NOT established here — it is read from the
 		// agent only once the subscription is live (applySubscribed), so no selection
@@ -227,14 +227,14 @@ func (c *sessionCore) applyActiveSelection(ev event.ActiveLoopChanged) {
 }
 
 // effectiveActiveLoopID is the loop the displayed status follows: the authoritative
-// activeLoopID once established, else the root loop as the pre-baseline fallback (so a
+// activeLoopID once established, else the selected loop as the pre-baseline fallback (so a
 // single-loop session shows its root's turn status before the first subscribe completes).
 // Status-display ONLY — the selection reconcile (applyActiveSelection) must key on
 // activeLoopID directly and fail closed when it is zero, never on this root fallback, so a
 // stale selection cannot be ordered against a synthesized baseline.
 func (c sessionCore) effectiveActiveLoopID() uuid.UUID {
 	if c.activeLoopID.IsZero() {
-		return c.agent.RootLoopID()
+		return c.agent.ActiveLoopID()
 	}
 	return c.activeLoopID
 }
@@ -261,7 +261,7 @@ func (c *sessionCore) deriveActiveStatus() {
 // every subsequent event.
 func (c *sessionCore) applySubscribed(msg subscribedMsg) (tea.Cmd, bool) {
 	if msg.err != nil {
-		c.transcript = c.transcript.CommitError(msg.err)
+		c.transcript = c.transcript.CommitGlobalError(msg.err)
 		return nil, true
 	}
 	c.sub = msg.sub
@@ -283,7 +283,7 @@ func (c *sessionCore) applySubClosed(msg subClosedMsg) bool {
 	if msg.err == nil {
 		return false
 	}
-	c.transcript = c.transcript.CommitError(msg.err)
+	c.transcript = c.transcript.CommitGlobalError(msg.err)
 	return true
 }
 
@@ -295,7 +295,7 @@ func (c *sessionCore) applySubClosed(msg subClosedMsg) bool {
 // entry noting the send failed and asks the shell to present it.
 func (c *sessionCore) applySubmitResult(msg submitResultMsg) bool {
 	if msg.err != nil {
-		c.transcript = c.transcript.CommitError(msg.err)
+		c.transcript = c.transcript.CommitGlobalError(msg.err)
 		return true
 	}
 	c.transcript = c.transcript.RecordSubmit(msg.inputID, msg.blocks)
@@ -308,7 +308,7 @@ func (c *sessionCore) applySubmitResult(msg submitResultMsg) bool {
 // terminal on the subscription (applyTurnStatus) resolves it to Idle.
 func (c *sessionCore) applyInterruptResult(msg interruptResultMsg) bool {
 	if msg.err != nil {
-		c.transcript = c.transcript.CommitError(msg.err)
+		c.transcript = c.transcript.CommitGlobalError(msg.err)
 		c.status = StatusRunning
 		return true
 	}
@@ -331,15 +331,15 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	}
 	c.handoff = nil
 	if msg.err != nil {
-		c.transcript = c.transcript.CommitError(msg.err)
+		c.transcript = c.transcript.CommitGlobalError(msg.err)
 		c.agent = nil
 		c.terminalErr = msg.err
 		return tea.Quit, true
 	}
 	c.agent = msg.agent
-	// Read the NEW agent's root loop id (the swap above happened first) so the fresh
+	// Read the NEW agent's selected loop id (the swap above happened first) so the fresh
 	// transcript scopes its committed user rows to the replacement loop.
-	c.transcript = transcriptModel{rootLoopID: c.agent.RootLoopID()}
+	c.transcript = transcriptModel{}
 	c.interaction = c.interaction.ClearPrompts()
 	c.status = StatusIdle
 	// Drop the old session's authoritative active baseline and per-loop running fold. The
@@ -362,7 +362,7 @@ func (c *sessionCore) applyPromptResult(msg promptResultMsg) bool {
 	if msg.err == nil {
 		return false
 	}
-	c.transcript = c.transcript.CommitError(msg.err)
+	c.transcript = c.transcript.CommitGlobalError(msg.err)
 	return true
 }
 
@@ -414,8 +414,8 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 		// message as a plain user row FIRST, then the error beneath it — the message is
 		// preserved in scrollback rather than lost, and composeEnter already emptied the
 		// input. The message was NOT sent to the model (the build failed).
-		c.transcript = c.transcript.CommitUserText(text)
-		c.transcript = c.transcript.CommitError(err)
+		c.transcript = c.transcript.CommitGlobalUserText(text)
+		c.transcript = c.transcript.CommitGlobalError(err)
 		return nil, true
 	}
 	return submitCmd(c.appCtx, c.agent, blocks), false
@@ -427,12 +427,12 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 // buildBlocks error commits the SAME plain-user-row-plus-faint-error entries and sends
 // nothing (returning true so the shell presents them). It exists so the modern shell can
 // route a composer submit to the focused loop while reusing the one buildBlocks +
-// error-commit path — Screen never calls it (its submit stays the root-loop submit).
+// error-commit path — Screen never calls it (its submit stays the selected-loop submit).
 func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool) {
 	blocks, err := buildBlocks(text, c.agent.AcceptsImages(loopID))
 	if err != nil {
-		c.transcript = c.transcript.CommitUserText(text)
-		c.transcript = c.transcript.CommitError(err)
+		c.transcript = c.transcript.CommitGlobalUserText(text)
+		c.transcript = c.transcript.CommitGlobalError(err)
 		return nil, true
 	}
 	return submitToLoopCmd(c.appCtx, c.agent, loopID, blocks), false

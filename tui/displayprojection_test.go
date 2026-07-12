@@ -20,7 +20,6 @@ func TestFoldDisplay(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(0xAA)
-	other := callID(0xBB)
 	hdr := event.Header{Coordinates: identity.Coordinates{LoopID: primary}}
 	user := func(text string) *content.UserMessage {
 		return &content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: []content.Block{&content.TextBlock{Text: text}}}}
@@ -61,7 +60,7 @@ func TestFoldDisplay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := FoldDisplay(tt.events, primary)
+			got := FoldDisplay(tt.events)
 			if got.CommittedLen() != tt.wantCommittedLen {
 				t.Errorf("CommittedLen() = %d, want %d", got.CommittedLen(), tt.wantCommittedLen)
 			}
@@ -81,17 +80,12 @@ func TestFoldDisplay(t *testing.T) {
 	// EqualTranscript is reflexive across two independent folds of the SAME events
 	// from the SAME zero state — the deep-equality the displayed==restored property
 	// relies on.
-	a := FoldDisplay(cleanTurn, primary)
-	b := FoldDisplay(cleanTurn, primary)
+	a := FoldDisplay(cleanTurn)
+	b := FoldDisplay(cleanTurn)
 	if !a.EqualTranscript(b) {
 		t.Error("EqualTranscript on two folds of identical events = false, want true")
 	}
 
-	// A different primary loop scope yields a different committed transcript (the
-	// primary-loop user row is scoped), so EqualTranscript must be false.
-	if a.EqualTranscript(FoldDisplay(cleanTurn, other)) {
-		t.Error("EqualTranscript across different rootLoopID = true, want false")
-	}
 }
 
 // equalTranscriptModel is a same-package test bridge: it deep-compares a

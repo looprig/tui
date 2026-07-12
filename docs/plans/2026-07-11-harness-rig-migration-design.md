@@ -20,9 +20,9 @@ The required search and broader import/call-site searches found these sites outs
 | Harness version | `go.mod:16`, `go.mod:101`; `vendor/github.com/looprig/harness/**`; `vendor/modules.txt` | CLI requires harness `v0.5.2`, uses a local `replace`, and commits a vendored copy. The dependency and vendor tree must move together. |
 | Presentation adapter | `tui/agent.go:12-127` | `Agent` is a CLI-owned narrow interface. It adds image capability, restored-backlog, gate convenience, and UI shutdown methods that are intentionally not identical to `session.Session`. |
 | Event subscription | `tui/commands.go:37-79`; `tui/sessioncore.go:96-101`; `tui/fixtures_test.go:128-194` | CLI opens one whole-session subscription and continuously unwraps `event.Delivery.Event`. The current screen already requests all-loop ephemeral and enduring events. |
-| Loop identity/routing | `tui/agent.go:22-36`; `tui/sessioncore.go:34-170`; `tui/screen.go:51-61,152-161,654-667,1041-1080`; `tui/transcript.go:368-378` | The public adapter and internal projection still conflate “primary” with both a stable transcript root and the mutable active loop. Final harness has a mutable active loop and no primary-loop accessor. Focused-loop submit already uses `SubmitToLoop`. |
-| Active-loops bar | `tui/loopbar.go:14-202`; `tui/screen.go:1041-1080` | The bar keeps the immutable “primary” visible under its cap. It must retain stable root, current active, and focus independently, updating active from `ActiveLoopChanged`. |
-| Restore repaint | `tui/restore.go:131-183`; `tui/screen.go:196-207` | `ReplayBacklog` is a consumer-specific adapter capability. The initial active loop remains the stable root of one repaint; later `ActiveLoopChanged` events update runtime selection, not historical attribution. |
+| Loop identity/routing | `tui/agent.go:22-36`; `tui/sessioncore.go:34-170`; `tui/screen.go:51-61,152-161,654-667,1041-1080`; `tui/transcript.go:368-378` | The public adapter and internal projection still conflate “primary” with both a stable per-loop projection and the mutable active loop. Final harness has a mutable active loop and no primary-loop accessor. Focused-loop submit already uses `SubmitToLoop`. |
+| Active-loops bar | `tui/loopbar.go`; `tui/screen.go` | The bar retains focused, then active, then live/recent loops. It has no root band. |
+| Restore repaint | `tui/restore.go`; `tui/screen.go` | `ReplayBacklog` supplies all-loop enduring history, and every loop is projected uniformly. |
 | Gate replies | `tui/agent.go:63-77`; `tui/commands.go:131-162`; `tui/interaction.go:292-325` | CLI keeps ergonomic `Approve`, `Deny`, and `ProvideAnswer`. The embedding adapter translates them to `Session.RespondGate`; CLI does not need the session controller. |
 | Teardown | `tui/commands.go:165-185`; `tui/sessioncore.go:231-266`; `cli/run.go:216-227` | `Agent.Close` is the UI ownership seam and remains idempotent. An adapter that owns a `SessionController` implements it with `Shutdown`. |
 | Session ID | No current read site | Final IDs come from `sess.SessionID()`, not a second return value from construction. CLI does not add an unused `SessionID` method until presentation needs it. |
@@ -82,7 +82,7 @@ This table is the rule for embedding applications. Rows marked “not in CLI” 
 | `runner.Run(ctx)` | `sess, err := r.NewSession(ctx)` | Not in CLI. The adapter receives the returned controller. |
 | `runner.Restore(ctx, id)` | `sess, err := r.RestoreSession(ctx, id)` | Not in CLI. The adapter also receives whatever replay reader it needs for `ReplayBacklog`. |
 | separately returned session ID / exported field | `sess.SessionID()` | No new CLI interface member; the embedding layer reads it when needed. |
-| immutable `PrimaryLoopID()` | stable adapter `RootLoopID()` plus current `sess.ActiveLoop().ID()` / durable `event.ActiveLoopChanged` | Replace the conflated method with separate root and active queries. A restored adapter derives the root from the first root `LoopStarted`; it does not pretend the final active loop was always root. |
+| immutable `PrimaryLoopID()` | `ActiveLoopID()` backed by `sess.ActiveLoop().ID()` / durable `event.ActiveLoopChanged` | Active is the sole default submission baseline; the UI derives no stable root identity. |
 | default input target | `sess.Submit(...)` | CLI's focused-loop composer continues using `SubmitToLoop`; an embedding adapter may map CLI's generic `Submit` convenience to `sess.Submit`. |
 | explicit loop input | `sess.SubmitToLoop(...)` | Direct adapter mapping. |
 | session subscription wrapper | `sess.SubscribeEvents(...)` | Keep CLI's shorter `Subscribe` adapter name. |
@@ -108,12 +108,9 @@ Replace the one conflated public query:
 PrimaryLoopID() uuid.UUID
 ```
 
-with two narrow read queries:
+with one selection query and one target-specific capability query:
 
 ```go
-// RootLoopID returns the stable root used for transcript attribution.
-RootLoopID() uuid.UUID
-
 // ActiveLoopID returns the session's current default input target.
 ActiveLoopID() uuid.UUID
 
@@ -121,34 +118,24 @@ ActiveLoopID() uuid.UUID
 AcceptsImages(loopID uuid.UUID) bool
 ```
 
-The adapter implements `ActiveLoopID` as `sess.ActiveLoop().ID()`. For a fresh
-session, `RootLoopID` is the initial active primer. For restore, it is the first root
-`LoopStarted` (zero parent cause) in durable history; it must not be recomputed from
-the latest active selection. This is valid because harness durably constructs the
-active primer first and restore uses that first root as the default selection before
-folding later `ActiveLoopChanged` events. The concrete adapter migration must lock that
-cross-module assumption with a new-session and switched-then-restored test; put those
-tests in the sibling `tests` repository if importing the composition root would reverse
-CLI's dependency direction.
+The adapter implements `ActiveLoopID` as `sess.ActiveLoop().ID()`. Restore uses the
+controller's durable active selection. Zero-parent `LoopStarted` remains topology data;
+it does not mint a second UI identity.
 
 `AcceptsImages(id)` performs a fresh `sess.Loop(id)` lookup and returns
 `handle.Model().Caps.AcceptsImages`; an unknown/non-live loop returns false. It does not
 cache the initial model because `loop.Controller.SetMode` and `Change` can change the
 selected model at a turn boundary.
 
-### Separate transcript root, current active loop, and focus
+### Separate active selection, focus, and uniform projections
 
-These are different concepts and must not alias one mutable field:
+These are different concepts:
 
-- **Transcript root:** the session's original active primer, supplied by `Agent.RootLoopID`. It is a stable attribution anchor for the existing root transcript/replay projection. Rename internal `primaryLoopID` terminology to `rootLoopID`; do not rewrite historical rows when active selection changes.
 - **Active loop:** the session's current durable default target. Establish its authoritative baseline from `Agent.ActiveLoopID()` only after subscribing, then reconcile every `event.ActiveLoopChanged` from the all-loop stream.
 - **Focused loop:** the projection currently visible and the target of CLI's explicit `SubmitToLoop`. Focus does not silently change when another controller selects an active loop.
+- **Per-loop projections:** every initial primer and delegate is keyed and folded uniformly by event `LoopID`.
 
-The active-loops bar admits the root, current active loop, focused loop, and live
-loops, then applies cap priority in that order: focused, active, root, live, recent
-idle. This keeps the root reachable without falsely using it as the current default
-target. A future visual marker for active selection is presentation work, not required
-by this migration.
+The active-loops bar applies cap priority focused, active, live, then recent idle.
 
 ### Subscription and ordering
 
@@ -158,8 +145,8 @@ Startup and reopen use a **subscribe-before-baseline handshake**. `New` may quer
 `ActiveLoopID` only to initialize focus. The authoritative session-core baseline is read
 in `applySubscribed`, after `Subscribe` has returned a live stream, so every later
 selection is either in that stream or reflected by the baseline query. Successful
-`/clear` swaps the Agent and resets the stable root, but leaves the current-active
-baseline pending until the fresh subscription is installed.
+`/clear` swaps the Agent and clears projections/running state, while the current-active
+baseline remains pending until the fresh subscription is installed.
 
 The stream can already contain selection events when the baseline is read. Reconcile an
 `ActiveLoopChanged{PreviousLoopID: p, ActiveLoopID: a}` against current `c` causally:
@@ -189,7 +176,7 @@ independent and uses its per-loop projection.
 `Screen.New` initializes `focusedLoopID` from `Agent.ActiveLoopID`. Successful `/clear`
 does the same with the replacement Agent. Later `ActiveLoopChanged` events update active
 status and bar retention but never steal focus. On `/clear`, close the old subscription,
-swap Agent, reset `RootLoopID`, per-loop running state, and active state, then subscribe
+swap Agent, reset `ActiveLoopID`, per-loop running state, and active state, then subscribe
 to the new session and establish its authoritative active baseline in `applySubscribed`.
 Old-session events cannot mutate the new selection because the stale subscription is
 closed before the swap.
@@ -207,7 +194,7 @@ submissions, proving the query is target-specific and dynamic.
 The selected harness release must contain both the reviewed rig branch and the loop display
 metadata prerequisite recorded by the SWE migration plan. `LoopStarted` keeps its stable
 topology key and adds a display name. CLI renders the display name when present and falls back
-to the old agent name; root, active, and focus remain keyed by loop ID. Do not merge the bump
+to the old agent name; active and focus remain keyed by loop ID. Do not merge the bump
 until that reviewed tag is published. Local execution may use the existing relative replace,
 but `go.mod` still records the selected release contract.
 
@@ -217,20 +204,20 @@ Because CLI commits `vendor/`, `go mod tidy` and `go mod vendor` are mandatory. 
 
 - Table-drive the subscription/baseline handshake: transition before baseline, transition after baseline, same-active queued event, multiple queued transitions, and the `/clear` setup window.
 - Table-drive per-loop running state and active display: running→idle selection, idle→running selection, and a terminal from the old active loop.
-- Prove the transcript root remains stable while `activeLoopID` changes.
+- Prove the per-loop projection remains stable while `activeLoopID` changes.
 - Prove turn status responds to the active loop and ignores another loop.
 - Prove the all-loop filter survives active selection changes without re-subscribing.
-- Prove bar capping retains focused, active, and root loops in priority order.
+- Prove bar capping retains focused and active loops in priority order.
 - Prove `New` and successful `/clear` focus the then-active loop, while later selection does not move focus.
 - Prove image acceptance is loop-targeted, fails closed for an unknown loop, and observes a model capability change.
 - Prove `LoopStarted` display name is rendered/stored when present and old events fall back to
   `AgentName` without changing loop identity.
-- Update all CLI fake Agents to satisfy `RootLoopID` and `ActiveLoopID`; remove `PrimaryLoopID` from non-vendor Go source.
+- Update all CLI fake Agents to satisfy `ActiveLoopID`; remove `PrimaryLoopID` from non-vendor Go source.
 - Refresh vendor, then run unit, race, integration-tagged, security, and static build gates.
 
 CLI unit tests cover only its adapter contract with fakes. Root derivation is a deferred
 acceptance criterion owned by the embedding-adapter migration: that migration's
-fresh-session and switched-then-restored tests must prove `RootLoopID` derives from
+fresh-session and switched-then-restored tests must prove `ActiveLoopID` derives from
 harness's durably first zero-parent `LoopStarted`. They may execute in the sibling
 `tests` repository, but are not a CLI implementation action or gate. This avoids
 importing a composition root into the presentation module.

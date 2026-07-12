@@ -20,7 +20,7 @@ import (
 // fold exactly (transcript.ApplyEvent + interaction.ApplyEvent), which is the point:
 // the repaint is correct iff the background fold equals this fold.
 func foldBacklog(primary uuid.UUID, backlog []event.Event) (transcriptModel, interactionModel) {
-	tr := transcriptModel{rootLoopID: primary}
+	tr := transcriptModel{}
 	in := newInteractionModel()
 	for _, ev := range backlog {
 		tr = tr.ApplyEvent(ev)
@@ -75,7 +75,7 @@ func TestReplayBacklogSeam(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			agent := &fakeAgent{rootLoopID: primary, backlog: tt.backlog, replayErr: tt.err}
+			agent := &fakeAgent{activeLoopID: primary, backlog: tt.backlog, replayErr: tt.err}
 			got, err := agent.ReplayBacklog(context.Background())
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ReplayBacklog() err = %v, wantErr %v", err, tt.wantErr)
@@ -101,7 +101,7 @@ func TestRestoreBacklogFoldsOffLoopOnce(t *testing.T) {
 
 	primary := callID(0xAA)
 
-	// A large backlog: alternating TurnStarted + StepDone for the primary loop, so the
+	// A large backlog: alternating TurnStarted + StepDone for the active loop, so the
 	// fold exercises the real commit path many thousands of times inside the command.
 	const turns = 6000
 	backlog := make([]event.Event, 0, turns*2)
@@ -118,11 +118,11 @@ func TestRestoreBacklogFoldsOffLoopOnce(t *testing.T) {
 		)
 	}
 
-	agent := &fakeAgent{rootLoopID: primary, backlog: backlog}
+	agent := &fakeAgent{activeLoopID: primary, backlog: backlog}
 
 	// The fold runs OFF the update loop in restoreBacklogCmd. Executing it once yields a
 	// SINGLE restoredMsg carrying the already-folded reducer state — no per-event message.
-	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
 	if msg.err != nil {
 		t.Fatalf("restoredMsg err = %v, want nil", msg.err)
 	}
@@ -159,9 +159,9 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 		event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}},
 	}
 
-	agent := &fakeAgent{rootLoopID: primary, backlog: backlog}
+	agent := &fakeAgent{activeLoopID: primary, backlog: backlog}
 
-	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
 	if msg.err != nil {
 		t.Fatalf("restoredMsg err = %v, want nil", msg.err)
 	}
