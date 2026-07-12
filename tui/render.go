@@ -664,10 +664,11 @@ func renderThinking(s string, expand bool, width int, header string) string {
 
 // formatThought renders a committed thinking block's header from its measured span (the
 // modern shell stamps the model clock onto each Ephemeral thinking chunk — see
-// Screen.handleEventModern): a zero duration (a cold restore / backlog carries no
-// timing, or thinking under one clock tick) yields the bare lowercase "thought"; a
-// sub-second span yields "thought for <1s"; under a minute "thought for Ns" (whole
-// seconds, truncated); a minute or more "thought for Nm Ns". It is the committed
+// Screen.handleEventModern): a zero duration (a cold restore / backlog carries NO timing)
+// yields the bare lowercase "thought"; any measured span under a second is floored to
+// "thought for 1s" (thinking that ran is never shown as timeless — thinkDuration reports the
+// positive measuredFloor sentinel for a same-tick span); under a minute "thought for Ns"
+// (whole seconds, truncated); a minute or more "thought for Nm Ns". It is the committed
 // counterpart of the live tail's present-tense "thinking" header — the same rail, flipped
 // from present to past once the step commits.
 func formatThought(d time.Duration) string {
@@ -675,7 +676,7 @@ func formatThought(d time.Duration) string {
 		return "thought"
 	}
 	if d < time.Second {
-		return "thought for <1s"
+		return "thought for 1s"
 	}
 	secs := int(d / time.Second)
 	if secs < 60 {

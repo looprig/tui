@@ -2018,6 +2018,35 @@ func TestModernComposerDefaultsToTwoLines(t *testing.T) {
 	}
 }
 
+// TestModernComposerVerticalPadding pins the modern composer's padded-card look: styleComposer
+// frames the input with one pad row above and below the text (matching the user-message card),
+// and the ▌ accent rail runs CONTINUOUSLY through those pad rows — so the composer's first and
+// last rendered rows carry the ▌ rail and the gray panel fill but no message text, an unbroken
+// edge down the padded box. The scrollback composer stays bare (its unpadded default is covered
+// by the component-level TestInputBoxVerticalPadding).
+func TestModernComposerVerticalPadding(t *testing.T) {
+	t.Parallel()
+
+	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) fill open
+	const accentBar = "▌"               // styles.AccentBar — the composer's left edge glyph
+
+	agent := &fakeAgent{primaryLoopID: callID(1)}
+	m := newScreenSized(t, agent, 80, 24)
+
+	lines := strings.Split(m.interaction.input.View(), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("modern composer rendered %d line(s), want >= 3 (pad, text, pad); view=%q", len(lines), m.interaction.input.View())
+	}
+	for _, p := range []struct{ where, line string }{{"first", lines[0]}, {"last", lines[len(lines)-1]}} {
+		if got := strings.TrimSpace(stripANSI(p.line)); got != accentBar {
+			t.Errorf("%s composer pad row = %q, want just the %q rail (continuous edge, no text)", p.where, got, accentBar)
+		}
+		if !strings.Contains(p.line, bgSGR) {
+			t.Errorf("%s composer pad row missing the gray panel fill; got %q", p.where, p.line)
+		}
+	}
+}
+
 // TestModernRenderFocusedPrimaryExcludesSubagentLeak is the end-to-end regression guard:
 // with the primary loop focused (the default), renderFocused renders projectionFor(primary)
 // = the root fold, so a CONCURRENT subagent's live Ephemeral stream (delivered under the

@@ -88,16 +88,21 @@ func renderTip(tip string) string {
 	return styles.StatusStyle.Render("Tips: " + tip)
 }
 
-// renderStatusLine renders the derived label as an animated lime↔blue gradient
-// (gradientLabel), prefixed by the status dot, which rides the same gradient (see
-// statusDot). phase is the live animation frame that flows both the label and the dot
-// (0 at rest → a static gradient). statusLabel always returns a non-empty label (idle
-// reads "idle"), so the status row is always present above the composer; the empty-label
+// renderStatusLine renders the derived label prefixed by the status dot. IDLE is a quiet
+// resting state, so it renders SUBTLE and STATIC — a faint "○ idle" (styles.StatusStyle), with
+// NO lime↔blue gradient — reserving the animated gradient for when something is actually
+// happening. Every ACTIVE state renders the label as the animated gradient (gradientLabel) with
+// the dot riding the same flowing band (statusDot); phase is the live animation frame. The
+// continuous anim tick therefore only shimmers active states; while idle it costs a no-op
+// recompose of this static line. statusLabel always returns a non-empty label, so the empty
 // guard is a defensive no-op.
 func renderStatusLine(status Status, in statusInputs, phase uint) string {
 	label := statusLabel(status, in)
 	if label == "" {
 		return ""
+	}
+	if status == StatusIdle {
+		return styles.StatusStyle.Render(dotHollow + " " + label)
 	}
 	return statusDot(status, phase) + " " + gradientLabel(label, phase)
 }

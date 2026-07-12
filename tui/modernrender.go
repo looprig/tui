@@ -39,6 +39,38 @@ func renderQueued(messages [][]content.Block, width int) string {
 	return strings.Join(out, "\n")
 }
 
+// userPadRows is the number of rail pad rows padUserCard brackets a user card with on EACH
+// side (top and bottom) — the vertical breathing room inside the gray panel.
+const userPadRows = 1
+
+// padUserCard brackets a user entry's rendered lines with userPadRows rail pad row(s) above and
+// below so the MODERN gray panel reads as a padded card rather than text flush to the panel edge.
+// A pad row carries the accent bar in styled (the rail runs unbroken top-to-bottom, so the card
+// reads as one block once paintUserBackground fills it gray) but NO plain text — it is vertical
+// whitespace, so nothing extra reaches the clipboard. Every line's sub is reassigned 0-based
+// across the padded block so provenance (selection anchoring) stays unique and ordered. Empty
+// input is returned unchanged (a zero-line entry has nothing to bracket). MODERN-ONLY: it runs
+// before paintUserBackground so the pad rows pick up the same gray fill; scrollback never pads.
+func padUserCard(lines []renderedLine) []renderedLine {
+	if len(lines) == 0 {
+		return lines
+	}
+	id := lines[0].entry
+	rail := renderedLine{styled: styles.AccentBarStyle.Render(styles.AccentBar), entry: id}
+	out := make([]renderedLine, 0, len(lines)+2*userPadRows)
+	for i := 0; i < userPadRows; i++ {
+		out = append(out, rail)
+	}
+	out = append(out, lines...)
+	for i := 0; i < userPadRows; i++ {
+		out = append(out, rail)
+	}
+	for i := range out {
+		out[i].sub = i
+	}
+	return out
+}
+
 // paintUserBackground is the MODERN-ONLY post-process that paints the gray panel behind a
 // user entry's rendered lines: it replaces each line's styled form with a full-width
 // gray-filled version (styles.FillLineBackground) and leaves plain/entry/sub untouched, so

@@ -259,19 +259,37 @@ func cardSections(sections ...string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// cardFrame frames the assembled card content in CardStyle (rounded border + padding)
-// and trails the faint "(+N more pending)" note when the queue is deeper than one
-// (pending > 1). The box is sized so its text content area equals cardTextWidth(width),
-// which the sections were wrapped/sized to, so a full-width row (the selected-choice
-// highlight) fills the body without CardStyle re-wrapping it.
+// cardRailWidth is the display columns the gate card's left rail prefix ("▌ ") consumes on
+// every content row — the panel's horizontal frame. It matches the user-message card's
+// barWidth; cardTextWidth subtracts it so content sits flush behind the rail.
+const cardRailWidth = 2
+
+// cardFrame frames the assembled card content as a blue PANEL — the user-message card
+// treatment tinted blue: a left ▌ rail (CardRailStyle) down every row, the whole block filled
+// with the subtle blue CardPanelBg, and one rail-only pad row bracketing the content top and
+// bottom (so the card reads as a padded panel). It trails the faint "(+N more pending)" note,
+// OUTSIDE the panel, when the queue is deeper than one (pending > 1).
 //
-// The June mockups drew the title embedded in the top border (┌─ Approve Bash? ─┐), but
-// Lipgloss v2 exposes no border-title API, so the title is a bold first content row
-// inside the card instead. The visual contract is otherwise the intended card.
+// The two pad rows keep the frame exactly two rows tall, so surface.go's boxBorderH height
+// reservation stays correct. Content lines were wrapped/sized to cardTextWidth(width) so they
+// sit behind the rail; a blank content line (the \n\n between sections) renders as a rail-only
+// row, keeping the rail unbroken. The selected-choice row carries its own brighter-blue fill
+// (CardSelectedStyle) spanning cardTextWidth, so it reads as a filled bar on the panel.
 func cardFrame(content string, width, pending int) string {
-	textW := cardTextWidth(width)
-	boxW := textW + styles.CardStyle.GetHorizontalFrameSize()
-	box := styles.CardStyle.Width(boxW).Render(content)
+	open, reset := styles.DeriveBackgroundSGR(styles.CardPanelBg)
+	rail := styles.CardRailStyle.Render(styles.AccentBar)
+	pad := styles.FillLineBackgroundWith(rail, width, open, reset)
+	rows := make([]string, 0, strings.Count(content, "\n")+3)
+	rows = append(rows, pad)
+	for _, line := range strings.Split(content, "\n") {
+		row := rail
+		if line != "" {
+			row = rail + " " + line
+		}
+		rows = append(rows, styles.FillLineBackgroundWith(row, width, open, reset))
+	}
+	rows = append(rows, pad)
+	box := strings.Join(rows, "\n")
 	if pending > 1 {
 		note := styles.CardHintStyle.Render("(+" + strconv.Itoa(pending-1) + " more pending)")
 		return box + "\n" + note
@@ -279,12 +297,11 @@ func cardFrame(content string, width, pending int) string {
 	return box
 }
 
-// cardTextWidth is the usable text width inside the card body: the box width less the
-// card's full horizontal frame (border + padding), floored at 1. Descriptions,
-// questions, choice rows and the key legend are wrapped/sized to this width, and the
-// selected-choice highlight spans it.
+// cardTextWidth is the usable text width inside the card body: the panel width less the left
+// rail prefix (cardRailWidth), floored at 1. Descriptions, questions, choice rows and the key
+// legend are wrapped/sized to this width, and the selected-choice highlight spans it.
 func cardTextWidth(width int) int {
-	w := width - styles.CardStyle.GetHorizontalFrameSize()
+	w := width - cardRailWidth
 	if w < 1 {
 		w = 1
 	}

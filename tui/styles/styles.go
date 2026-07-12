@@ -282,12 +282,6 @@ var BoxStyle = lipgloss.NewStyle().
 	BorderForeground(InputAccent).
 	PaddingLeft(1)
 
-// PromptBoxStyle is the emphasised border drawn around an active permission/AskUser
-// prompt control. It uses a rounded border (visually distinct from the composer's
-// square NormalBorder and from the faint, borderless tool cards) so a pending gate
-// reads as a foreground, action-required affordance rather than scrollback narration.
-var PromptBoxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
-
 // PromptHeaderStyle renders a prompt box's header label (e.g. "Approve Bash?"),
 // bold so the action reads at a glance above the body.
 var PromptHeaderStyle = lipgloss.NewStyle().Bold(true)

@@ -14,27 +14,41 @@ import (
 // emits an SGR even with color off, so this holds across color profiles.
 var styledCursor = regexp.MustCompile("\x1b\\[[0-9;]*m▸")
 
-// cardBorderGlyphs are the rounded-border corner glyphs CardStyle draws around a gate
-// card. A rendered card MUST contain them (they survive stripANSI — only SGR color
-// codes are stripped), proving the permission/AskUser control is framed as a bordered
-// card rather than the prior compact control.
-var cardBorderGlyphs = []string{"╭", "╮", "╰", "╯"}
+// panelRail is the blue ▌ edge every gate row carries in the panel-styled card. It
+// survives stripANSI (only SGR color codes are stripped), so it is the color-agnostic
+// evidence the control is the blue panel rather than the prior rounded-border card.
+const panelRail = "▌"
 
-// assertCardFramed fails t unless got carries the rounded-border corners AND spans
-// more than one line — the minimum evidence that the render is the bordered card.
-func assertCardFramed(t *testing.T, got string) {
+// assertPanelFramed fails t unless got is the blue-panel gate: it draws NO rounded border,
+// spans at least three rows, opens with a rail-only pad row, and every row carries the ▌ rail
+// down the left edge. The trailing "(+N more pending)" note sits OUTSIDE the panel, so it is
+// exempt from the rail check.
+func assertPanelFramed(t *testing.T, got string) {
 	t.Helper()
-	for _, g := range cardBorderGlyphs {
-		if !strings.Contains(got, g) {
-			t.Errorf("card render missing border glyph %q in:\n%s", g, got)
+	for _, g := range []string{"╭", "╮", "╰", "╯"} {
+		if strings.Contains(got, g) {
+			t.Errorf("panel gate unexpectedly draws rounded-border glyph %q in:\n%s", g, got)
 		}
 	}
-	if lines := strings.Count(got, "\n"); lines < 3 {
-		t.Errorf("card render too short to be a framed card (%d newlines):\n%s", lines, got)
+	lines := strings.Split(stripANSI(got), "\n")
+	if len(lines) < 3 {
+		t.Errorf("panel gate too short to be framed (%d lines):\n%s", len(lines), got)
+		return
+	}
+	if got := strings.TrimSpace(lines[0]); got != panelRail {
+		t.Errorf("panel gate first row = %q, want a %q-only pad row", got, panelRail)
+	}
+	for i, ln := range lines {
+		if ln == "" || strings.HasPrefix(ln, "(+") {
+			continue // a blank tail line or the pending note, which sits outside the panel
+		}
+		if !strings.HasPrefix(ln, panelRail) {
+			t.Errorf("panel gate row %d does not start with the %q rail: %q", i, panelRail, ln)
+		}
 	}
 }
 
-// TestRenderPermissionBox covers the permission card: a bordered, padded box with a
+// TestRenderPermissionBox covers the permission card: a blue-panel box with a
 // bold "Approve <ToolName>?" title, the request description as its body, and a footer
 // row of key hints that shows ONLY the scope keys the request offers — [y] once iff
 // ScopeOnce, [s] session iff ScopeSession, [w] workspace iff ScopeWorkspace — plus
@@ -96,7 +110,7 @@ func TestRenderPermissionBox(t *testing.T) {
 			rendered := renderPermissionBox(p, 80, tt.pending)
 			got := stripANSI(rendered)
 
-			assertCardFramed(t, rendered)
+			assertPanelFramed(t, rendered)
 			for _, sub := range tt.wantContain {
 				if !strings.Contains(got, sub) {
 					t.Errorf("renderPermissionBox missing %q in:\n%s", sub, got)
@@ -111,7 +125,7 @@ func TestRenderPermissionBox(t *testing.T) {
 	}
 }
 
-// TestRenderAskUserBoxChoices covers the choice-list AskUser card: a bordered box with
+// TestRenderAskUserBoxChoices covers the choice-list AskUser card: a blue-panel box with
 // numbered choices [1].., the ▸ cursor on prompt.selected with that row HIGHLIGHTED, an
 // [o] other escape hatch, the key legend, and a window that scrolls with selected so a
 // high row (including double-digit choices past the 1–9 accelerators) stays visible.
@@ -192,7 +206,7 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			rendered := renderAskUserBox(p, 80, tt.height, tt.pending)
 			got := stripANSI(rendered)
 
-			assertCardFramed(t, rendered)
+			assertPanelFramed(t, rendered)
 			if !styledCursor.MatchString(rendered) {
 				t.Errorf("choice card selected row not highlighted (no styled ▸) in:\n%s", rendered)
 			}
@@ -210,7 +224,7 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 	}
 }
 
-// TestRenderAskUserBoxFreeText covers the free-text card: a bordered box with the
+// TestRenderAskUserBoxFreeText covers the free-text card: a blue-panel box with the
 // "answer" title and the question as its body, NO choice list and NO [o] other hint.
 // The actual answer field is the reused composer the surface stacks below this card.
 func TestRenderAskUserBoxFreeText(t *testing.T) {
@@ -220,7 +234,7 @@ func TestRenderAskUserBoxFreeText(t *testing.T) {
 	rendered := renderAskUserBox(p, 80, 6, 1)
 	got := stripANSI(rendered)
 
-	assertCardFramed(t, rendered)
+	assertPanelFramed(t, rendered)
 	for _, sub := range []string{"answer", "What should the version look like?"} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("free-text box missing %q in:\n%s", sub, got)

@@ -16,6 +16,39 @@ import (
 // non-zero uuid.UUID from a single byte so tests can correlate
 // ToolCallStarted/ToolCallCompleted without crypto/rand.
 
+// TestLiveSegThinkDuration covers the thinking-span measurement: no thinking streamed
+// (thinkStart zero) is an unmeasured zero (the bare "thought" fallback); a real span is
+// end-start (thinkEnd, else the thinkLast fallback); and thinking that WAS measured but
+// collapsed to a non-positive span (all chunks in one tick, or clock skew) floors to the
+// positive measuredFloor sentinel so it never reads as timeless.
+func TestLiveSegThinkDuration(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		start time.Time
+		end   time.Time
+		last  time.Time
+		want  time.Duration
+	}{
+		{name: "no thinking streamed is an unmeasured zero", want: 0},
+		{name: "measured span is end minus start", start: base, end: base.Add(3 * time.Second), want: 3 * time.Second},
+		{name: "end unset falls back to the last thinking chunk", start: base, last: base.Add(2 * time.Second), want: 2 * time.Second},
+		{name: "same-tick span floors to the sentinel", start: base, end: base, want: measuredFloor},
+		{name: "negative span (clock skew) floors to the sentinel", start: base.Add(5 * time.Second), end: base, want: measuredFloor},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := liveSeg{thinkStart: tt.start, thinkEnd: tt.end, thinkLast: tt.last}
+			if got := s.thinkDuration(); got != tt.want {
+				t.Errorf("thinkDuration() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestSplitLines covers the tool-result preview splitter (transcript.go).
 func TestSplitLines(t *testing.T) {
 	t.Parallel()

@@ -155,14 +155,14 @@ func (b *InputBox) SetBackground(bg color.Color) {
 	b.bgReset = reset
 }
 
-// SetVerticalPadding sets the number of background-filled padding rows View draws ABOVE and
-// BELOW the text region, so the modern composer reads as a padded box ([pad][text…][pad])
-// rather than a bare line. It defaults to 0 (the scrollback Screen never calls this, so its
-// composer stays byte-identical); the modern viewport sets 1. Negative values are ignored
-// (fail-safe). The padding rows are filled with the modern gray panel (SetBackground) so they
-// read as part of the box; with no background enabled they render as blank rows. Padding does
-// NOT change the editor's auto-grow — the text region still grows to maxInputLines — it only
-// frames it, so the box's rendered height is the text height plus 2*padV.
+// SetVerticalPadding sets the number of padding rows View draws ABOVE and BELOW the text region,
+// so the modern composer reads as a padded box ([pad][text…][pad]) rather than a bare line. It
+// defaults to 0 (the scrollback Screen never calls this, so its composer stays byte-identical);
+// the modern viewport sets 1. Negative values are ignored (fail-safe). Each padding row carries
+// the box's ▌ accent edge (the rail runs unbroken through the padding), gray-filled by the modern
+// panel (SetBackground) so it reads as part of the box. Padding does NOT change the editor's
+// auto-grow — the text region still grows to maxInputLines — it only frames it, so the box's
+// rendered height is the text height plus 2*padV.
 func (b *InputBox) SetVerticalPadding(n int) {
 	if n < 0 {
 		return
@@ -240,11 +240,11 @@ func (b *InputBox) Update(msg tea.Msg) tea.Cmd {
 // rows — is filled to the box width with the gray panel color, so the composer reads as one
 // continuous panel; the default (scrollback) box paints nothing.
 //
-// With vertical padding (SetVerticalPadding, modern sets 1) padV background-filled blank rows
-// are added ABOVE and BELOW the text rows so the composer reads as a padded box
-// ([pad][text…][pad]) rather than a bare line. A padding row is a full-width fill of the gray
-// panel (blank when no background is enabled). The scrollback composer sets neither, so it
-// returns the bare box unchanged (byte-identical).
+// With vertical padding (SetVerticalPadding, modern sets 1) padV rail rows are added ABOVE and
+// BELOW the text rows so the composer reads as a padded box ([pad][text…][pad]) rather than a
+// bare line. A padding row is the box's ▌ edge alone (so the accent rail runs unbroken through
+// it), gray-filled to the box width when a background is set. The scrollback composer sets
+// neither background nor padding, so it returns the bare box unchanged (byte-identical).
 func (b *InputBox) View() string {
 	view := styles.BoxStyle.Render(b.ta.View())
 	if !b.hasBG && b.padV == 0 {
@@ -257,7 +257,13 @@ func (b *InputBox) View() string {
 		}
 	}
 	if b.padV > 0 {
-		pad := styles.FillLineBackgroundWith("", b.width, b.bgOpen, b.bgReset)
+		// A pad row is the box's ▌ edge alone (BoxStyle.Render of empty content), so the accent
+		// rail runs UNBROKEN through the padding rather than breaking at a blank gap. It is then
+		// gray-filled like the text rows (when a background is set) so it reads as one panel.
+		pad := styles.BoxStyle.Render("")
+		if b.hasBG {
+			pad = styles.FillLineBackgroundWith(pad, b.width, b.bgOpen, b.bgReset)
+		}
 		padded := make([]string, 0, len(lines)+2*b.padV)
 		for i := 0; i < b.padV; i++ {
 			padded = append(padded, pad)

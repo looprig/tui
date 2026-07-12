@@ -70,6 +70,30 @@ func TestRenderStatusLine(t *testing.T) {
 	}
 }
 
+// TestRenderStatusLineIdleSubtle pins that the idle status line is SUBTLE and STATIC — a faint
+// line with no animated lime↔blue gradient — while active states keep the flowing gradient.
+// Idle renders identically regardless of animation phase and carries the faint SGR (not a
+// per-glyph truecolor gradient); a Running line still changes across phases.
+func TestRenderStatusLineIdleSubtle(t *testing.T) {
+	t.Parallel()
+
+	idle0 := renderStatusLine(StatusIdle, statusInputs{}, 0)
+	idle5 := renderStatusLine(StatusIdle, statusInputs{}, 5)
+	if idle0 != idle5 {
+		t.Errorf("idle status line changed with animation phase, want static:\n phase0=%q\n phase5=%q", idle0, idle5)
+	}
+	if !strings.Contains(idle0, "\x1b[2m") {
+		t.Errorf("idle status line is not faint (no \\x1b[2m), want the subtle style; got %q", idle0)
+	}
+	if strings.Contains(idle0, "\x1b[38;2;") {
+		t.Errorf("idle status line carries a truecolor gradient foreground, want no gradient; got %q", idle0)
+	}
+	// Regression: an active (Running) line still flows across animation phases.
+	if run0, run2 := renderStatusLine(StatusRunning, statusInputs{thinking: true}, 0), renderStatusLine(StatusRunning, statusInputs{thinking: true}, 2); run0 == run2 {
+		t.Error("running status line no longer flows across the animation phase")
+	}
+}
+
 // TestStatusLabel covers the pure status-label derivation table (design §"Thinking
 // & status line"): the label is computed from the session Status plus the
 // interaction state (a prompt active, only-thinking-so-far, streaming text), with

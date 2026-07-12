@@ -93,12 +93,13 @@ type Screen struct {
 	ticking bool
 
 	// anim holds the status line's animation state: its frame counter flows the status-label
-	// + dot lime↔blue gradient (renderStatusLine's phase). Unlike Screen — which animates only
-	// while a turn Runs — the modern viewport shimmers CONTINUOUSLY (idle animates too), so a
-	// SINGLE anim tick chain, started at Init and re-armed every blinkInterval, advances it for
-	// the life of the program and stops only on quit (quitting). It is meaningful ONLY to
-	// View's status line; the committed transcript never consults it, and an anim tick
-	// recomposes ONLY the status line — never re-rendering the transcript buffer.
+	// + dot lime↔blue gradient (renderStatusLine's phase). A SINGLE anim tick chain, started at
+	// Init and re-armed every blinkInterval, advances it for the life of the program and stops
+	// only on quit (quitting) — kept continuous for lifecycle simplicity rather than gated on
+	// status. Only ACTIVE states render the gradient, so the shimmer flows only while something
+	// is happening; IDLE renders a static faint line (renderStatusLine), so an idle tick costs
+	// just a no-op recompose. It is meaningful ONLY to View's status line; the committed
+	// transcript never consults it, and an anim tick recomposes ONLY the status line.
 	anim animState
 
 	// quitting latches on ctrl+c so the continuous anim tick chain self-terminates instead of
@@ -169,14 +170,16 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) S
 // still auto-growing to maxInputLines.
 const composerMinLines = 2
 
-// composerPadV is the modern composer's inner vertical padding. It is 0: the composer is a
-// bare two-line input (no padded row above/below the text) that still auto-grows to
-// maxInputLines as the user types. Scrollback's composer also keeps 0.
-const composerPadV = 0
+// composerPadV is the modern composer's inner vertical padding: 1 gray pad row above and below
+// the text, so the composer reads as a padded card matching the user-message card (padUserCard).
+// The text region still auto-grows to maxInputLines as the user types — the padding only frames
+// it. Scrollback's composer keeps 0 (it never calls SetVerticalPadding), staying bare.
+const composerPadV = 1
 
 // styleComposer applies the MODERN composer treatment to in's input box — the 2-line
-// default height and the gray panel fill (styles.PanelBg), with no inner vertical
-// padding — and returns the updated model. It runs at every site that
+// default height, the gray panel fill (styles.PanelBg), and one inner vertical pad row above
+// and below the text (composerPadV, matching the user card) — and returns the updated model.
+// It runs at every site that
 // installs a FRESH (default 1-line, background-free, unpadded) interaction for a Screen:
 // initial construction (NewModern) and the cold-restore install (handleRestored replaces the
 // whole interaction with a freshly-built one). The /clear reopen keeps the same input
@@ -203,9 +206,9 @@ func (m Screen) Init() tea.Cmd {
 		func() tea.Msg { return systemReadyMsg{} },
 		restoreBacklogCmd(m.appCtx, m.agent, m.agent.PrimaryLoopID()),
 		m.subscribe(),
-		// The status-line shimmer runs continuously (idle animates too), so start its single
-		// anim tick chain here for the life of the program; handleAnim re-arms it and stops
-		// only on quit.
+		// The anim tick chain runs continuously for the life of the program (started here,
+		// re-armed by handleAnim, stopped only on quit). It shimmers the gradient only for
+		// ACTIVE states; while idle it just recomposes the static faint status line.
 		animCmd(),
 	)
 }
@@ -451,8 +454,9 @@ func (m *Screen) handleTick(msg tickMsg) tea.Cmd {
 // PURE recompose: it advances ONLY m.anim (the gradient phase) and never re-renders the
 // transcript buffer (renderFocused/SetLines) — the transcript is unchanged on an anim tick,
 // and View recomposes the status line from the new frame every render, so advancing the frame
-// and returning the reschedule is the whole update. Unlike Screen's blink it runs at EVERY
-// status (idle included), so the shimmer never freezes; the turn timer keeps its own 1s tick.
+// and returning the reschedule is the whole update. It runs continuously at every status, but
+// only ACTIVE states render the gradient — while idle the recompose yields the same static
+// faint line (no shimmer). The turn timer keeps its own 1s tick.
 func (m *Screen) handleAnim() tea.Cmd {
 	if m.quitting {
 		return nil
@@ -905,14 +909,21 @@ func (m *Screen) rerender() {
 // every group's LAST entry still carries its trailing blank, the streaming live tail sits
 // exactly one blank below the last committed entry (one gap, never two), so no special-casing
 // is needed at the tail seam. Scrollback's renderEntry owns its own spacing and is untouched.
+//
+// MODERN-ONLY USER CARD: a kindUser entry is first bracketed with rail pad rows (padUserCard)
+// and then gray-filled (paintUserBackground) so its message reads as a padded card — the pad
+// rows are part of the entry (gray, rail-continued), distinct from the transparent blank
+// separator that still follows the whole card.
 func (m Screen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
 	var out []renderedLine
 	for i := range committed {
 		lines := renderEntryLines(committed[i], width, m.collapse.Effective(committed[i].ID))
-		// MODERN-ONLY: paint the gray panel behind user rows (scrollback keeps them bare).
+		// MODERN-ONLY: bracket the user row with rail pad rows (a padded card), then paint the
+		// gray panel behind the whole block — pads included (scrollback keeps user rows bare).
 		if committed[i].Kind == kindUser {
+			lines = padUserCard(lines)
 			lines = paintUserBackground(lines, width)
 		}
 		out = append(out, lines...)

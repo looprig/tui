@@ -269,12 +269,21 @@ func (s *liveSeg) recordNonThinking(at time.Time) {
 	}
 }
 
+// measuredFloor is the minimum span thinkDuration reports for thinking that WAS measured but
+// whose computed span is non-positive — every ThinkingChunk (and the sealing narration chunk)
+// landed inside a single model-clock tick, the common fast/first-turn case. It is a positive
+// sentinel (below one second) so formatThought floors it to "thought for 1s" rather than the
+// bare "thought" reserved for UNMEASURED thinking (thinkStart never set — a cold restore carries
+// no Ephemeral timing). It must stay sub-second so it never inflates a real second count.
+const measuredFloor = time.Nanosecond
+
 // thinkDuration is the measured wall-clock span of this segment's thinking: end - start,
 // where end is the sealed thinkEnd (first non-thinking chunk after thinking) or, when
 // thinking ran up to StepDone with no narration after it, the last thinking chunk
-// (thinkLast). It returns 0 when no thinking streamed (thinkStart zero) or on any
-// non-positive span (clock skew / out-of-order timestamps) — a 0 renders the bare
-// "Thought" fallback, never a negative/garbage duration.
+// (thinkLast). It returns 0 ONLY when no thinking streamed (thinkStart zero) — the bare
+// "thought" fallback. When thinking WAS measured but the span is non-positive (all chunks in
+// one clock tick, or clock skew / out-of-order timestamps) it returns measuredFloor, a positive
+// sentinel that renders "thought for 1s" so measured thinking is never shown as timeless.
 func (s liveSeg) thinkDuration() time.Duration {
 	if s.thinkStart.IsZero() {
 		return 0
@@ -286,7 +295,7 @@ func (s liveSeg) thinkDuration() time.Duration {
 	if d := end.Sub(s.thinkStart); d > 0 {
 		return d
 	}
-	return 0
+	return measuredFloor
 }
 
 // applyChunk routes one streamed chunk into this segment: text accumulates into Text,

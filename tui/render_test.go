@@ -11,9 +11,10 @@ import (
 )
 
 // TestFormatThought covers the committed thinking-header formatter: a zero span (a cold
-// restore / backlog with no timing, or thinking under one clock tick) is the bare lowercase
-// "thought"; a sub-second span is "thought for <1s"; under a minute is "thought for Ns"
-// (whole seconds, truncated); a minute or more is "thought for Nm Ns".
+// restore / backlog with NO timing captured) is the bare lowercase "thought"; any measured
+// span under a second is floored to "thought for 1s" (thinking that ran is never shown as
+// timeless); under a minute is "thought for Ns" (whole seconds, truncated); a minute or more
+// is "thought for Nm Ns".
 func TestFormatThought(t *testing.T) {
 	t.Parallel()
 
@@ -24,8 +25,9 @@ func TestFormatThought(t *testing.T) {
 	}{
 		{name: "zero is the bare fallback", d: 0, want: "thought"},
 		{name: "negative degrades to the fallback", d: -5 * time.Second, want: "thought"},
-		{name: "sub-second", d: 400 * time.Millisecond, want: "thought for <1s"},
-		{name: "just under a second", d: 999 * time.Millisecond, want: "thought for <1s"},
+		{name: "measured-floor sentinel shows one second", d: measuredFloor, want: "thought for 1s"},
+		{name: "sub-second floors to one second", d: 400 * time.Millisecond, want: "thought for 1s"},
+		{name: "just under a second floors to one second", d: 999 * time.Millisecond, want: "thought for 1s"},
 		{name: "exactly one second", d: time.Second, want: "thought for 1s"},
 		{name: "ten seconds", d: 10 * time.Second, want: "thought for 10s"},
 		{name: "truncates to whole seconds", d: 10*time.Second + 900*time.Millisecond, want: "thought for 10s"},

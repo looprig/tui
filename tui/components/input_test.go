@@ -468,9 +468,9 @@ func TestInputBoxBackground(t *testing.T) {
 
 // TestInputBoxVerticalPadding covers the per-instance inner vertical padding: the default
 // composer adds no padding rows, and after SetVerticalPadding(1) the modern composer frames its
-// text with one background-filled blank row ABOVE and one BELOW (so the box reads as
-// [pad][text][pad]), each padding row filled to the box width. The scrollback default stays
-// unpadded, and a negative padding is ignored.
+// text with one RAIL row ABOVE and one BELOW (so the box reads as [pad][text][pad]) — the ▌
+// accent edge runs unbroken through the padding rows, each filled to the box width. The
+// scrollback default stays unpadded, and a negative padding is ignored.
 func TestInputBoxVerticalPadding(t *testing.T) {
 	t.Parallel()
 
@@ -502,11 +502,12 @@ func TestInputBoxVerticalPadding(t *testing.T) {
 		t.Fatalf("modern padded composer height = %d, want %d (text + 2 pad rows)\nview:\n%s",
 			len(lines), minInputLines+2, stripANSI(mod.View()))
 	}
-	// The first and last rows are blank padding — no visible text, but carrying the gray fill
-	// to the box width so they read as part of the box.
+	// The first and last rows are RAIL padding — the ▌ accent runs continuously through them
+	// (no message text), each filled to the box width with the gray panel so the rail reads as
+	// one unbroken edge down the padded box.
 	for _, i := range []int{0, len(lines) - 1} {
-		if got := strings.TrimSpace(stripANSI(lines[i])); got != "" {
-			t.Errorf("padding row %d has visible text %q, want blank", i, got)
+		if got := strings.TrimSpace(stripANSI(lines[i])); got != "▌" {
+			t.Errorf("padding row %d = %q, want just the ▌ rail (continuous edge, no text)", i, got)
 		}
 		if !strings.Contains(lines[i], bgSGR) {
 			t.Errorf("padding row %d missing the gray fill; line=%q", i, lines[i])
