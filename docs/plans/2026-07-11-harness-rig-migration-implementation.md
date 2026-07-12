@@ -304,7 +304,7 @@ Use a table where root, active, and focused are all different, plus a row where 
 Run:
 
 ```bash
-GOWORK=off go test -race ./tui -run 'TestModernNewFocusesActive|TestModernReopenFocusesActive|TestModernSelectionDoesNotStealFocus|TestLoopBar.*ActiveRoot'
+GOWORK=off go test -race ./tui -run 'Test.*DisplayName|TestTranscript.*LoopStarted|TestModernNewFocusesActive|TestModernReopenFocusesActive|TestModernSelectionDoesNotStealFocus|TestLoopBar.*ActiveRoot'
 ```
 
 Expected: FAIL because focus still initializes from the old root/primary concept and the bar has only one privileged loop field.
