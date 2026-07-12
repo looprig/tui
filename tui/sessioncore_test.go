@@ -74,14 +74,14 @@ func TestSessionCoreHandleEventRoutesToBothReducers(t *testing.T) {
 
 			rearm, phase := c.handleEvent(tt.ev)
 
-			if c.transcript.live.Text != tt.wantLiveText {
-				t.Errorf("transcript live.Text = %q, want %q", c.transcript.live.Text, tt.wantLiveText)
+			if c.transcript.testLive().Text != tt.wantLiveText {
+				t.Errorf("transcript live.Text = %q, want %q", c.transcript.testLive().Text, tt.wantLiveText)
 			}
 			if c.interaction.PendingCount() != tt.wantPending {
 				t.Errorf("interaction PendingCount = %d, want %d", c.interaction.PendingCount(), tt.wantPending)
 			}
-			if tt.wantGatePending && c.transcript.live.gateDecisions[callID(1)] != gatePending {
-				t.Errorf("gateDecisions[callID(1)] = %v, want gatePending", c.transcript.live.gateDecisions[callID(1)])
+			if tt.wantGatePending && c.transcript.testLive().gateDecisions[callID(1)] != gatePending {
+				t.Errorf("gateDecisions[callID(1)] = %v, want gatePending", c.transcript.testLive().gateDecisions[callID(1)])
 			}
 			if (rearm != nil) != tt.wantRearm {
 				t.Errorf("rearm != nil = %v, want %v", rearm != nil, tt.wantRearm)
@@ -175,8 +175,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if c.Agent() != fresh {
 			t.Errorf("agent = %p, want fresh %p", c.Agent(), fresh)
 		}
-		if len(c.transcript.committed) != 0 {
-			t.Errorf("committed = %d, want 0 (reset)", len(c.transcript.committed))
+		if len(c.transcript.testCommitted()) != 0 {
+			t.Errorf("committed = %d, want 0 (reset)", len(c.transcript.testCommitted()))
 		}
 		if c.interaction.PendingCount() != 0 {
 			t.Errorf("PendingCount = %d, want 0 (prompts cleared)", c.interaction.PendingCount())
@@ -226,7 +226,7 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if cmd == nil {
 			t.Fatal("cmd = nil, want terminal quit after failed replacement open")
 		}
-		if rec := c.transcript.committed[len(c.transcript.committed)-1]; rec.Kind != kindNotice || rec.Level != noticeError {
+		if rec := c.transcript.testCommitted()[len(c.transcript.testCommitted())-1]; rec.Kind != kindNotice || rec.Level != noticeError {
 			t.Errorf("last committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
 		}
 	})
@@ -273,10 +273,10 @@ func TestSessionCoreMapAction(t *testing.T) {
 		if agent.submitCalled {
 			t.Error("Submit called on a build error, want not called")
 		}
-		if got := len(c.transcript.committed); got != 2 {
+		if got := len(c.transcript.testCommitted()); got != 2 {
 			t.Fatalf("committed = %d, want 2 (user row + error notice)", got)
 		}
-		if rec := c.transcript.committed[1]; rec.Kind != kindNotice || rec.Level != noticeError {
+		if rec := c.transcript.testCommitted()[1]; rec.Kind != kindNotice || rec.Level != noticeError {
 			t.Errorf("second committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
 		}
 	})
@@ -286,12 +286,13 @@ func TestSessionCoreMapAction(t *testing.T) {
 		agent := &fakeAgent{}
 		c := newTestCore(agent)
 		// Remember the gate first so ResolveGate has a pending decision to flip.
-		c.transcript.live.gateDecisions = map[uuid.UUID]gateDecision{callID(7): gatePending}
+		p := c.transcript.ensureProjection(callID(9))
+		p.live.gateDecisions = map[uuid.UUID]gateDecision{callID(7): gatePending}
 		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: callID(9), ToolExecutionID: callID(7), Scope: tool.ScopeOnce})
 		if present {
 			t.Error("present = true, want false (a gate reply commits no scrollback entry)")
 		}
-		if got := c.transcript.live.gateDecisions[callID(7)]; got != gateApproved {
+		if got := p.live.gateDecisions[callID(7)]; got != gateApproved {
 			t.Errorf("gateDecisions[callID(7)] = %v, want gateApproved", got)
 		}
 		if cmd == nil {

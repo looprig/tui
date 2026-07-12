@@ -88,12 +88,12 @@ func TestModernUpdateRoutesEventToTranscriptAndViewport(t *testing.T) {
 	agent := &fakeAgent{activeLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
-	before := len(m.transcript.committed)
+	before := len(m.transcript.testCommitted())
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "hello from the agent")))
 
-	if len(m.transcript.committed) <= before {
-		t.Fatalf("committed did not grow: before=%d after=%d", before, len(m.transcript.committed))
+	if len(m.transcript.testCommitted()) <= before {
+		t.Fatalf("committed did not grow: before=%d after=%d", before, len(m.transcript.testCommitted()))
 	}
 	if len(m.viewport.lines) == 0 {
 		t.Fatal("viewport lines empty after committing an assistant entry")
@@ -116,8 +116,8 @@ func TestModernRendersLiveSegment(t *testing.T) {
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	m = feed(t, m, event.TokenDelta{Header: hdr(primary), Chunk: &content.TextChunk{Text: "streaming words"}})
 
-	if len(m.transcript.committed) != 0 {
-		t.Fatalf("committed = %d, want 0 (live text is not committed yet)", len(m.transcript.committed))
+	if len(m.transcript.testCommitted()) != 0 {
+		t.Fatalf("committed = %d, want 0 (live text is not committed yet)", len(m.transcript.testCommitted()))
 	}
 	if !containsPlain(m.viewport.lines, "streaming") {
 		t.Errorf("viewport lines missing live narration; got %q", plainAll(m.viewport.lines))
@@ -829,7 +829,7 @@ func TestModernFocusIsViewOnly(t *testing.T) {
 	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
 	m = feed(t, m, stepDoneFrom(sub, aiMessage("", "sub answer")))
 
-	committedBefore := len(m.transcript.committed)
+	committedBefore := len(m.transcript.testCommitted())
 
 	m, cmd := updateScreen(t, m, ctrlKey('n'))
 	if cmd != nil {
@@ -838,7 +838,7 @@ func TestModernFocusIsViewOnly(t *testing.T) {
 	if m.focusedLoopID != sub {
 		t.Fatalf("ctrl+n did not focus the subagent (focused=%v)", m.focusedLoopID)
 	}
-	if got := len(m.transcript.committed); got != committedBefore {
+	if got := len(m.transcript.testCommitted()); got != committedBefore {
 		t.Errorf("focus mutated the transcript: committed %d -> %d", committedBefore, got)
 	}
 	if agent.submitCalled || agent.approveCalled || agent.denyCalled || agent.answerCalled {
@@ -1107,7 +1107,7 @@ func TestModernHandleRestored(t *testing.T) {
 			name:    "restored backlog repaints history + projections + loop table",
 			backlog: restored,
 			check: func(t *testing.T, m Screen) {
-				if len(m.transcript.committed) == 0 {
+				if len(m.transcript.testCommitted()) == 0 {
 					t.Fatal("restore did not populate committed transcript")
 				}
 				if !containsPlain(m.viewport.lines, "restored primary answer") {
@@ -1125,10 +1125,10 @@ func TestModernHandleRestored(t *testing.T) {
 			name:   "read failure surfaces a faint error notice",
 			replay: errors.New("replay read"),
 			check: func(t *testing.T, m Screen) {
-				if len(m.transcript.committed) == 0 {
+				if len(m.transcript.testCommitted()) == 0 {
 					t.Fatal("restore error did not commit a notice")
 				}
-				rec := m.transcript.committed[len(m.transcript.committed)-1]
+				rec := m.transcript.testCommitted()[len(m.transcript.testCommitted())-1]
 				if rec.Kind != kindNotice || rec.Level != noticeError {
 					t.Errorf("restore-error entry = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
 				}
@@ -1157,7 +1157,7 @@ func feedRestored(t *testing.T, m Screen, msg restoredMsg) Screen {
 }
 
 // TestModernRestoreEmptyBacklogPreservesBanner proves the real contract of the empty-backlog
-// guard (the load-bearing `if len(msg.transcript.committed) == 0 { return nil }` early-return):
+// guard (the load-bearing `if len(msg.transcript.testCommitted()) == 0 { return nil }` early-return):
 // a NEW session that has ALREADY committed its opening banner must NOT have that banner
 // discarded — nor the displayID counter reset — when the empty restoredMsg arrives. Installing
 // the empty fold wholesale (without the guard) would clobber the banner; asserting the banner
@@ -1171,12 +1171,12 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
 
-	if len(m.transcript.committed) == 0 {
+	if len(m.transcript.testCommitted()) == 0 {
 		t.Fatal("precondition: opening banner not committed before the empty-backlog restore")
 	}
-	bannerLen := len(m.transcript.committed)
-	bannerID := m.transcript.committed[0].ID
-	bannerText := committedText(m.transcript.committed[0])
+	bannerLen := len(m.transcript.testCommitted())
+	bannerID := m.transcript.testCommitted()[0].ID
+	bannerText := committedText(m.transcript.testCommitted()[0])
 	if !strings.Contains(bannerText, "swe") {
 		t.Fatalf("precondition: banner entry = %q, want the agent banner text", bannerText)
 	}
@@ -1186,19 +1186,19 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("empty-backlog restoredMsg err = %v, want nil", msg.err)
 	}
-	if len(msg.transcript.committed) != 0 {
-		t.Fatalf("empty-backlog fold committed = %d, want 0", len(msg.transcript.committed))
+	if len(msg.transcript.testCommitted()) != 0 {
+		t.Fatalf("empty-backlog fold committed = %d, want 0", len(msg.transcript.testCommitted()))
 	}
 
 	// ...and applying it must leave the already-committed banner untouched (the guard).
 	m = feedRestored(t, m, msg)
-	if len(m.transcript.committed) != bannerLen {
-		t.Errorf("committed = %d after empty restore, want %d (banner must survive)", len(m.transcript.committed), bannerLen)
+	if len(m.transcript.testCommitted()) != bannerLen {
+		t.Errorf("committed = %d after empty restore, want %d (banner must survive)", len(m.transcript.testCommitted()), bannerLen)
 	}
-	if m.transcript.committed[0].ID != bannerID {
-		t.Errorf("banner entry id = %v after empty restore, want %v unchanged (displayID counter must not reset)", m.transcript.committed[0].ID, bannerID)
+	if m.transcript.testCommitted()[0].ID != bannerID {
+		t.Errorf("banner entry id = %v after empty restore, want %v unchanged (displayID counter must not reset)", m.transcript.testCommitted()[0].ID, bannerID)
 	}
-	if got := committedText(m.transcript.committed[0]); got != bannerText {
+	if got := committedText(m.transcript.testCommitted()[0]); got != bannerText {
 		t.Errorf("banner entry text = %q after empty restore, want %q unchanged", got, bannerText)
 	}
 }
@@ -1558,8 +1558,8 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	if m.focusedLoopID != fresh.ActiveLoopID() {
 		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.ActiveLoopID())
 	}
-	if len(m.transcript.committed) != 0 {
-		t.Errorf("committed = %d, want 0 (transcript reset)", len(m.transcript.committed))
+	if len(m.transcript.testCommitted()) != 0 {
+		t.Errorf("committed = %d, want 0 (transcript reset)", len(m.transcript.testCommitted()))
 	}
 	if len(m.viewport.lines) != 0 {
 		t.Errorf("viewport lines = %d, want 0 (viewport reset)", len(m.viewport.lines))
@@ -1718,7 +1718,7 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 	m = feed(t, m, loopStarted(subA, "reviewer"))
 	m.focusLoop(subA)
 
-	committedBefore := len(m.transcript.committed)
+	committedBefore := len(m.transcript.testCommitted())
 	m.interaction.input.SetValue("queued while running")
 	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -1728,8 +1728,8 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 	if m.focusedLoopID != subA {
 		t.Errorf("focusedLoopID = %v, want subA %v (Stage 2: submit stays on the focused loop)", m.focusedLoopID, subA)
 	}
-	if len(m.transcript.committed) != committedBefore {
-		t.Errorf("committed grew by %d, want 0 (a queued submit commits no error)", len(m.transcript.committed)-committedBefore)
+	if len(m.transcript.testCommitted()) != committedBefore {
+		t.Errorf("committed grew by %d, want 0 (a queued submit commits no error)", len(m.transcript.testCommitted())-committedBefore)
 	}
 	drainCmd(t, cmd)
 	if !agent.submitToLoopCalled {
@@ -1756,7 +1756,7 @@ func TestModernImageRejectedAtBoundary(t *testing.T) {
 	if agent.submitCalled {
 		t.Error("agent.Submit called on a rejected image, want no send")
 	}
-	rec := m.transcript.committed[len(m.transcript.committed)-1]
+	rec := m.transcript.testCommitted()[len(m.transcript.testCommitted())-1]
 	if rec.Kind != kindNotice || rec.Level != noticeError {
 		t.Errorf("last committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
 	}
@@ -2321,7 +2321,7 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 
 	// The SAME entry via the scrollback renderer must NOT carry the background.
 	var userEntry entry
-	for _, e := range m.transcript.committed {
+	for _, e := range m.transcript.testCommitted() {
 		if e.Kind == kindUser {
 			userEntry = e
 		}
@@ -2389,13 +2389,6 @@ func TestModernComposerVerticalPadding(t *testing.T) {
 	}
 }
 
-// TestModernRenderFocusedPrimaryExcludesSubagentLeak is the end-to-end regression guard:
-// with the active loop focused (the default), renderFocused renders projectionFor(primary)
-// = the root fold, so a CONCURRENT subagent's live Ephemeral stream (delivered under the
-// modern AllLoopsEventFilter) must NOT appear in the primary-focused viewport. Before the
-// root-fold guard, the subagent's TokenDelta and ToolCallStarted leaked into m.live and
-// spliced into the orchestrator's live tail. Focusing the subagent still shows its OWN
-// stream (its projection is unchanged), proving the guard only blocks the ROOT leak.
 // TestModernBarActiveFilter pins the modern active-loops bar's filter (m.bar()): it shows only
 // LIVE loops, ALWAYS keeps the FOCUSED loop (even when idle) so the current view is labeled,
 // drops idle non-focused loops, and falls back to the primary when the filter would leave the

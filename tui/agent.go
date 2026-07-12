@@ -88,10 +88,8 @@ type Agent interface {
 //
 // The TUI renders every loop's WHOLE live stream (a user can focus any subagent loop and
 // watch its live tokens stream), so it must actually RECEIVE every loop's live Ephemeral
-// firehose. (The widened scope also DELIVERS each loop's tool-lifecycle events; rendering
-// them as live tool spinners inside a focused subagent projection is deferred — today a
-// projection's live segment shows streamed text/thinking, and tool cards appear at StepDone.
-// See routeProjection.) A active-only Ephemeral scope would STARVE the per-loop projections
+// firehose. The widened scope also delivers each loop's tool-lifecycle events, which fold
+// into that loop's live projection. An active-only Ephemeral scope would starve projections
 // of a subagent's live output, freezing a focused subagent view at Enduring StepDone
 // granularity. The whole-session hub buffer is bounded and has no replay, so the TUI opens
 // ONE all-loops subscription at startup and never re-subscribes; focus is then a pure view

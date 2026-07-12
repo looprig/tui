@@ -249,7 +249,7 @@ default:
 
 For every loop, `TurnStarted` sets `loopRunning[id] = true`; `TurnDone`, `TurnFailed`, and `TurnInterrupted` set it false. After a turn terminal/start or accepted selection, derive ordinary displayed status from `loopRunning[activeLoopID]`. Preserve explicit `StatusResetting` until reopen completes; keep existing interrupt command semantics and let terminal/idle handling resolve it as currently tested.
 
-On successful `applyReopenResult`, close the old subscription, swap Agent, reset root transcript/prompts/running/active state, and return the fresh subscribe command. Do not read the authoritative active baseline until fresh `applySubscribed`.
+On successful `applyReopenResult`, close the old subscription, swap Agent, reset transcript/prompts/running/active state, and return the fresh subscribe command. Do not read the authoritative active baseline until fresh `applySubscribed`.
 
 **Step 5: Run focused tests to verify GREEN**
 

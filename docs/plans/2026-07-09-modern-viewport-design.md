@@ -36,11 +36,9 @@ use it later becomes the default.
 
 ### The load-bearing correction from review (read this first)
 
-The TUI does **not** currently *see* subagents' live output. `DefaultEventFilter`
-(`tui/agent.go:86`) delivers **Ephemeral** events (TokenDelta + tool lifecycle) from the
-**primary loop only**; other loops surface only at Enduring granularity (StepDone, gates,
-terminals). Therefore, to view a subagent's *whole live stream*, modern mode must **subscribe
-with an all-loops Ephemeral scope** — see §Subscription. This is a **CLI-only** change
+The legacy TUI did not see subagents' live output. The implemented `AllLoopsEventFilter`
+delivers both Ephemeral and Enduring events from every loop. Viewing a subagent's whole live
+stream therefore uses one all-loops subscription — see §Subscription. This was a CLI-only change
 (`Agent.Subscribe(filter)` is already parameterized and `LoopScope{All:true}` exists), so it is
 **Stage 1**, not Stage 2. This one decision drives the projection model, the loop bar, and focus.
 
@@ -131,32 +129,26 @@ type loopProjection struct {
     live      liveSegment  // this loop's in-progress output
 }
 type transcriptModel struct {
-    // ...existing fields unchanged (the folded root view scrollback depends on)...
-    nextID      displayID                        // SINGLE allocator — globally unique IDs
-    projections map[uuid.UUID]*loopProjection     // non-primary loops only (see alias rule)
+    global      []entry                         // visible in every loop view
+    nextID      displayID                       // SINGLE allocator — globally unique IDs
+    projections map[uuid.UUID]*loopProjection   // every loop, keyed by event LoopID
 }
 ```
 
 Rules (each a distinct review fix):
 
-- **Primary is an alias, not a copy.** `projection(primaryLoopID)` returns a view backed by the
-  *existing* `committed`/`live` fold — it is **not** re-folded. Only **non-primary** loops get a
-  separate `loopProjection`. This avoids double-folding, double allocation, and duplicate IDs,
-  and keeps scrollback mode zero-**read**-cost. Projections are folded unconditionally (a small
-  additive write per non-primary loop); scrollback simply never *reads* them. This is deliberate
-  over gating on a build flag — a flag a later task forgot to set would silently empty every
-  focused-loop view; the write cost is negligible.
+- **No privileged root alias.** Every loop event folds exactly once into the projection selected
+  by `EventHeader.LoopID`. Session-global rows live in `global` and are prepended when any loop
+  projection is rendered.
 - **Globally-unique IDs.** All entries (every projection) draw from the one `nextID`, so the
   ModernScreen-level `collapsed map[displayID]bool` can key on `displayID` without cross-loop
   collision.
-- **Non-primary reconstruction uses `storedStepToolCard` only** — never the primary
-  live-card path (`stepToolCard` consults `m.live.Calls`, which would steal same-index primary
-  cards; see the §3a comment in `transcript.go`). Each projection scopes its own user/task-row
-  rule to its own `LoopID`.
-- **Zero-LoopID guard.** Session-scoped events (SessionStarted/Idle/…) have a zero `LoopID`;
-  they are handled at the model level and are **never** routed into a projection.
+- **Loop-local reconstruction.** `stepToolCard` consults only the event loop's live projection;
+  nested child-card reconstruction uses durable `storedStepToolCard` data.
+- **Zero LoopID.** The zero UUID is an ordinary projection key for legacy/single-loop events;
+  session-global rows are committed explicitly through the global helpers.
 
-`ModernScreen.focusedLoopID` (default `agent.PrimaryLoopID()`) selects which projection the
+`ModernScreen.focusedLoopID` (initially `agent.ActiveLoopID()`) selects which projection the
 viewport renders.
 
 ## Renderer provenance contract (new — powers selection, copy, collapse-click, stable scroll)
@@ -294,9 +286,8 @@ tests.
 
 - **`sessionCore` refactor** — `Screen`'s existing suite stays green (the regression gate);
   add core-level tests for subscription lifecycle, `/clear` reopen ordering, event dispatch.
-- **per-loop projections** — non-primary events build that loop's own entries via
-  `storedStepToolCard`; primary projection aliases the existing fold (no duplicate IDs/entries);
-  zero-LoopID events never route to a projection; single `nextID` yields globally-unique IDs.
+- **per-loop projections** — every event builds its LoopID-keyed projection exactly once;
+  global rows are stored once; single `nextID` yields globally-unique IDs.
 - **loop table + liveness** — `LoopStarted`→live+name; `LoopIdle`→idle; bi-state only; visible
   cap + overflow marker; single source (no duplicate registry).
 - **`viewportModel`** — scroll clamps both ends; wheel/Page deltas; auto-follow pins/detaches via
@@ -345,9 +336,9 @@ now (crosses the harness module).
 - B3 subagent Ephemeral filtered out / mis-staged → §Subscription (all-loops, Stage 1).
 - B4 liveness/`DoneChan`/no loop-exit → §Loop lifecycle (bi-state; idle-but-messageable; cap).
 - S5 primary "clickable kindSubagent" wrong model → bar is canonical focus; card-click optional via spawn→loopID index.
-- S6 double-fold → primary projection is an alias; non-primary only.
+- S6 double-fold → one LoopID-keyed fold per event; no privileged alias.
 - S7 displayID collision → single `nextID`.
-- S8 §3a card-steal → `storedStepToolCard` for non-primary; per-projection user-row rule.
+- S8 §3a card-steal → event-local live cards and `storedStepToolCard` for nested children.
 - S9 key conflicts / `ctrl+[`==Esc → §Keys precedence; Page/Home/End + `ctrl+n`/`ctrl+p`.
 - S10 stale anchors on reflow → `(entry,sub,cell)` anchoring + frozen-during-drag + provenance.
 - S11 glue drift → shared `sessionCore`.

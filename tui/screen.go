@@ -340,8 +340,8 @@ func (m *Screen) commitStartup() {
 // is deliberately avoided), so a thinking delta reaches the transcript reducer with a ZERO
 // CreatedAt and its "thought for Nsec" span would always be 0. Stamping it with the SAME
 // clock the turn timer uses (m.now, seeded from TurnStarted.CreatedAt and advanced by the 1s
-// tick) gives the reducer a real, second-granularity timestamp — so both the root live
-// segment AND every subagent projection measure a genuine thinking span, deterministically
+// tick) gives the reducer a real, second-granularity timestamp — so every loop projection
+// measures a genuine thinking span, deterministically
 // driven by injected event/tick times (no render-time wall clock).
 func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	ev = stampEphemeralClock(ev, m.now)
@@ -363,7 +363,7 @@ func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 // CreatedAt; the reducer's recordThinking/recordNonThinking would then never seed a start and
 // the span would collapse to 0. Stamping the delta with clock (m.now) — the same clock the
 // turn timer advances on the 1s tick — feeds the reducer a real timestamp through its
-// EXISTING per-loop timing machinery (root live segment + every projection), so subagent
+// existing per-loop timing machinery, so subagent
 // thinking is timed for free. It touches ONLY a zero-CreatedAt TokenDelta: any other event
 // (including an already-stamped delta, e.g. a test that stamps its own) is returned unchanged,
 // so trackTurnClock still reads the authoritative TurnStarted.CreatedAt. A zero clock (no turn
@@ -497,7 +497,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 		m.rerender()
 		return nil
 	}
-	if len(msg.transcript.committed) == 0 {
+	if msg.transcript.committedLen() == 0 {
 		return nil
 	}
 	m.startupPending = false
@@ -1008,9 +1008,7 @@ func suppressSeparator(committed []entry, i int) bool {
 // REUSING the existing live renderer (renderLiveAssistant) — never a new one. For the
 // focused projection it matches the scrollback surface's live tail: it suppresses the
 // orchestrator's raw running Subagent card (its activity shows via the nested pending card)
-// and appends the in-flight pending subagent cards. A focused NON-root projection carries
-// no live.Calls and no pending cards of its own, so its live tail is just its streamed
-// thinking/text (live tool-spinner parity for projections is deferred — see routeProjection).
+// and appends the in-flight pending subagent cards.
 // The live segment is EXCLUDED from the collapse fold: streaming thinking always renders
 // fully EXPANDED ("│ thinking" + all reasoning) regardless of the global collapse default, so
 // the user watches the model reason in real time; only COMMITTED thinking follows the collapse
@@ -1145,13 +1143,10 @@ func (m Screen) surfaceInputs() surfaceInputs {
 // StatusResetting (a /clear reopen) — which surface regardless of focus. The ordinary
 // Running/Idle is read from the focused loop's per-loop turn bit
 // (sessionCore.loopRunning, folded from EVERY loop's TurnStarted/terminal, keyed by loop id).
-// That map — not the root live segment — is the accurate per-loop signal: a sibling primer's
-// TurnStarted marks the SHARED root live segment active (transcript loop projection), so the root
-// projection cannot distinguish an idle root from a running sibling. The zero id (the single-loop
-// default) maps to the selected loop. statusInputs() then refines a Running label into
+// That map is the accurate per-loop signal. statusInputs() then refines a Running label into
 // thinking…/streaming… from the focused loop's live signals. This is a deliberately MINIMAL
 // "you are viewing loop X, and whether it is live" indication, NOT a full per-loop status
-// machine: Interrupting/Resetting are root-only concerns and are never shown for a subagent.
+// machine: Interrupting/Resetting are session-global transitions.
 func (m Screen) focusedStatus() Status {
 	if m.status == StatusInterrupting || m.status == StatusResetting {
 		return m.status

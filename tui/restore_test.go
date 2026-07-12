@@ -130,7 +130,7 @@ func TestRestoreBacklogFoldsOffLoopOnce(t *testing.T) {
 	// Folding the same backlog directly through the reducers must equal the command's
 	// result: the command folded every event itself, off-loop.
 	wantTr, _ := foldBacklog(primary, backlog)
-	if got, want := len(msg.transcript.committed), len(wantTr.committed); got != want {
+	if got, want := len(msg.transcript.testCommitted()), len(wantTr.testCommitted()); got != want {
 		t.Fatalf("folded committed = %d, want %d (the command must fold the WHOLE backlog off-loop)", got, want)
 	}
 }
@@ -169,11 +169,11 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 	wantTr, wantIn := foldBacklog(primary, backlog)
 
 	// The committed transcript must match the direct fold entry-for-entry.
-	if got, want := len(msg.transcript.committed), len(wantTr.committed); got != want {
+	if got, want := len(msg.transcript.testCommitted()), len(wantTr.testCommitted()); got != want {
 		t.Fatalf("committed = %d, want %d", got, want)
 	}
-	for i := range wantTr.committed {
-		g, w := msg.transcript.committed[i], wantTr.committed[i]
+	for i := range wantTr.testCommitted() {
+		g, w := msg.transcript.testCommitted()[i], wantTr.testCommitted()[i]
 		if g.Kind != w.Kind {
 			t.Errorf("committed[%d].Kind = %d, want %d", i, g.Kind, w.Kind)
 		}

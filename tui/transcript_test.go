@@ -110,7 +110,7 @@ func findLoop(loops []loopInfo, id uuid.UUID) (loopInfo, bool) {
 
 func committedHeadlines(m transcriptModel) []string {
 	var out []string
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind == kindAssistant {
 			out = append(out, e.headline)
 		}
@@ -275,14 +275,14 @@ func TestTranscriptApplyEvent(t *testing.T) {
 				textChunk("cd"),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if got := m.live.Text; got != "abcd" {
+				if got := m.testLive().Text; got != "abcd" {
 					t.Errorf("live.Text = %q, want %q", got, "abcd")
 				}
-				if m.live.Thinking != "" {
-					t.Errorf("live.Thinking = %q, want empty", m.live.Thinking)
+				if m.testLive().Thinking != "" {
+					t.Errorf("live.Thinking = %q, want empty", m.testLive().Thinking)
 				}
-				if len(m.committed) != 0 {
-					t.Errorf("committed = %d entries, want 0", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Errorf("committed = %d entries, want 0", len(m.testCommitted()))
 				}
 			},
 		},
@@ -294,14 +294,14 @@ func TestTranscriptApplyEvent(t *testing.T) {
 				thinkingChunk("soning"),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if got := m.live.Thinking; got != "reasoning" {
+				if got := m.testLive().Thinking; got != "reasoning" {
 					t.Errorf("live.Thinking = %q, want %q", got, "reasoning")
 				}
-				if m.live.Text != "" {
-					t.Errorf("live.Text = %q, want empty", m.live.Text)
+				if m.testLive().Text != "" {
+					t.Errorf("live.Text = %q, want empty", m.testLive().Text)
 				}
-				if len(m.committed) != 0 {
-					t.Errorf("committed = %d entries, want 0", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Errorf("committed = %d entries, want 0", len(m.testCommitted()))
 				}
 			},
 		},
@@ -314,10 +314,10 @@ func TestTranscriptApplyEvent(t *testing.T) {
 				event.TurnDone{},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d entries, want exactly 1", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d entries, want exactly 1", len(m.testCommitted()))
 				}
-				e := m.committed[0]
+				e := m.testCommitted()[0]
 				if e.ID == 0 {
 					t.Errorf("entry ID = 0, want nonzero stable ID")
 				}
@@ -335,8 +335,8 @@ func TestTranscriptApplyEvent(t *testing.T) {
 					t.Errorf("Blocks[1] text = %q, want %q", got, "the answer")
 				}
 				// live reset after commit.
-				if !m.live.empty() {
-					t.Errorf("live not reset after TurnDone: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after TurnDone: %+v", m.testLive())
 				}
 			},
 		},
@@ -347,8 +347,8 @@ func TestTranscriptApplyEvent(t *testing.T) {
 				event.TurnDone{},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 0 {
-					t.Errorf("committed = %d entries, want 0 (empty live must not commit)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Errorf("committed = %d entries, want 0 (empty live must not commit)", len(m.testCommitted()))
 				}
 			},
 		},
@@ -361,10 +361,10 @@ func TestTranscriptApplyEvent(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				// The leftover running call must be flushed, not silently dropped.
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (leftover call flushed, not dropped)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (leftover call flushed, not dropped)", len(m.testCommitted()))
 				}
-				e := m.committed[0]
+				e := m.testCommitted()[0]
 				if e.Kind != kindTool {
 					t.Fatalf("committed[0].Kind = %v, want kindTool", e.Kind)
 				}
@@ -383,11 +383,11 @@ func TestTranscriptApplyEvent(t *testing.T) {
 					t.Errorf("Status = %v, want ToolRunning (TurnDone preserves status, does not cancel)", c.Status)
 				}
 				// live fully reset.
-				if !m.live.empty() || m.live.active {
-					t.Errorf("live not reset after TurnDone: %+v", m.live)
+				if !m.testLive().empty() || m.testLive().active {
+					t.Errorf("live not reset after TurnDone: %+v", m.testLive())
 				}
-				if len(m.live.Calls) != 0 {
-					t.Errorf("live.Calls = %d, want 0 after TurnDone", len(m.live.Calls))
+				if len(m.testLive().Calls) != 0 {
+					t.Errorf("live.Calls = %d, want 0 after TurnDone", len(m.testLive().Calls))
 				}
 			},
 		},
@@ -402,17 +402,17 @@ func TestTranscriptApplyEvent(t *testing.T) {
 			want: func(t *testing.T, m transcriptModel) {
 				// Defensive commitLive path (no StepDone for this step): the resolved
 				// live card is flushed exactly once by TurnDone — never duplicated.
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want exactly 1 (flushed once, no duplication)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want exactly 1 (flushed once, no duplication)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindTool {
-					t.Errorf("committed[0].Kind = %v, want kindTool", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindTool {
+					t.Errorf("committed[0].Kind = %v, want kindTool", m.testCommitted()[0].Kind)
 				}
-				if m.committed[0].Calls[0].Status != ToolOK {
-					t.Errorf("Status = %v, want ToolOK", m.committed[0].Calls[0].Status)
+				if m.testCommitted()[0].Calls[0].Status != ToolOK {
+					t.Errorf("Status = %v, want ToolOK", m.testCommitted()[0].Calls[0].Status)
 				}
-				if !m.live.empty() {
-					t.Errorf("live not reset after TurnDone: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after TurnDone: %+v", m.testLive())
 				}
 			},
 		},
@@ -427,14 +427,14 @@ func TestTranscriptApplyEvent(t *testing.T) {
 				event.TurnDone{},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d entries, want 2", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d entries, want 2", len(m.testCommitted()))
 				}
-				if m.committed[0].ID == m.committed[1].ID {
-					t.Errorf("entry IDs not distinct: both %d", m.committed[0].ID)
+				if m.testCommitted()[0].ID == m.testCommitted()[1].ID {
+					t.Errorf("entry IDs not distinct: both %d", m.testCommitted()[0].ID)
 				}
-				if m.committed[0].ID == 0 || m.committed[1].ID == 0 {
-					t.Errorf("entry IDs must be nonzero: %d, %d", m.committed[0].ID, m.committed[1].ID)
+				if m.testCommitted()[0].ID == 0 || m.testCommitted()[1].ID == 0 {
+					t.Errorf("entry IDs must be nonzero: %d, %d", m.testCommitted()[0].ID, m.testCommitted()[1].ID)
 				}
 			},
 		},
@@ -499,8 +499,8 @@ func TestTranscriptLiveActive(t *testing.T) {
 			for _, ev := range tt.events {
 				m = m.ApplyEvent(ev)
 			}
-			if m.live.active != tt.wantActive {
-				t.Errorf("live.active = %v, want %v", m.live.active, tt.wantActive)
+			if m.testLive().active != tt.wantActive {
+				t.Errorf("live.active = %v, want %v", m.testLive().active, tt.wantActive)
 			}
 		})
 	}
@@ -522,10 +522,10 @@ func TestTranscriptToolCalls(t *testing.T) {
 				toolStarted(callID(1), "Bash", "ls -la"),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.live.Calls) != 1 {
-					t.Fatalf("live.Calls = %d, want 1", len(m.live.Calls))
+				if len(m.testLive().Calls) != 1 {
+					t.Fatalf("live.Calls = %d, want 1", len(m.testLive().Calls))
 				}
-				c := m.live.Calls[0]
+				c := m.testLive().Calls[0]
 				if c.ToolExecutionID != callID(1) {
 					t.Errorf("ToolExecutionID = %v, want %v", c.ToolExecutionID, callID(1))
 				}
@@ -538,8 +538,8 @@ func TestTranscriptToolCalls(t *testing.T) {
 				if c.Status != ToolRunning {
 					t.Errorf("Status = %v, want ToolRunning", c.Status)
 				}
-				if len(m.committed) != 0 {
-					t.Errorf("committed = %d, want 0 (no terminal yet)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Errorf("committed = %d, want 0 (no terminal yet)", len(m.testCommitted()))
 				}
 			},
 		},
@@ -553,13 +553,13 @@ func TestTranscriptToolCalls(t *testing.T) {
 			want: func(t *testing.T, m transcriptModel) {
 				// The card stays in the live tail, resolved; nothing is committed yet —
 				// committing is the step boundary's job (StepDone), not the event's.
-				if len(m.committed) != 0 {
-					t.Fatalf("committed = %d, want 0 (no StepDone/terminal yet)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Fatalf("committed = %d, want 0 (no StepDone/terminal yet)", len(m.testCommitted()))
 				}
-				if len(m.live.Calls) != 1 {
-					t.Fatalf("live.Calls = %d, want 1 (resolved in place, not removed)", len(m.live.Calls))
+				if len(m.testLive().Calls) != 1 {
+					t.Fatalf("live.Calls = %d, want 1 (resolved in place, not removed)", len(m.testLive().Calls))
 				}
-				c := m.live.Calls[0]
+				c := m.testLive().Calls[0]
 				if c.Status != ToolOK {
 					t.Errorf("Status = %v, want ToolOK", c.Status)
 				}
@@ -576,13 +576,13 @@ func TestTranscriptToolCalls(t *testing.T) {
 				toolCompleted(callID(2), true, "boom"),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 0 {
-					t.Fatalf("committed = %d, want 0 (no StepDone/terminal yet)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Fatalf("committed = %d, want 0 (no StepDone/terminal yet)", len(m.testCommitted()))
 				}
-				if len(m.live.Calls) != 1 {
-					t.Fatalf("live.Calls = %d, want 1", len(m.live.Calls))
+				if len(m.testLive().Calls) != 1 {
+					t.Fatalf("live.Calls = %d, want 1", len(m.testLive().Calls))
 				}
-				c := m.live.Calls[0]
+				c := m.testLive().Calls[0]
 				if c.Status != ToolError {
 					t.Errorf("Status = %v, want ToolError", c.Status)
 				}
@@ -608,24 +608,24 @@ func TestTranscriptToolCalls(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				// bare assistant (card-only) + two tool entries.
-				if len(m.committed) != 3 {
-					t.Fatalf("committed = %d, want 3 (bare assistant, tool, tool)", len(m.committed))
+				if len(m.testCommitted()) != 3 {
+					t.Fatalf("committed = %d, want 3 (bare assistant, tool, tool)", len(m.testCommitted()))
 				}
-				if m.committed[1].Kind != kindTool || m.committed[2].Kind != kindTool {
-					t.Errorf("kinds = %v,%v, want kindTool both", m.committed[1].Kind, m.committed[2].Kind)
+				if m.testCommitted()[1].Kind != kindTool || m.testCommitted()[2].Kind != kindTool {
+					t.Errorf("kinds = %v,%v, want kindTool both", m.testCommitted()[1].Kind, m.testCommitted()[2].Kind)
 				}
-				if m.committed[1].ID == m.committed[2].ID {
-					t.Errorf("tool entry IDs not distinct: both %d", m.committed[1].ID)
+				if m.testCommitted()[1].ID == m.testCommitted()[2].ID {
+					t.Errorf("tool entry IDs not distinct: both %d", m.testCommitted()[1].ID)
 				}
 				// The committed cards reuse the LIVE cards' redacted Summary by position.
-				if got := m.committed[1].Calls[0].Summary; got != "a" {
+				if got := m.testCommitted()[1].Calls[0].Summary; got != "a" {
 					t.Errorf("tool[0] Summary = %q, want the redacted live summary %q", got, "a")
 				}
-				if got := m.committed[2].Calls[0].Summary; got != "b" {
+				if got := m.testCommitted()[2].Calls[0].Summary; got != "b" {
 					t.Errorf("tool[1] Summary = %q, want the redacted live summary %q", got, "b")
 				}
-				if !m.live.empty() {
-					t.Errorf("live not reset after StepDone: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after StepDone: %+v", m.testLive())
 				}
 			},
 		},
@@ -642,16 +642,16 @@ func TestTranscriptToolCalls(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				// single empty-text tool → the one card is promoted to the bullet (no umbrella).
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindTool || !m.committed[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.committed[0])
+				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
+					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
 				}
-				if len(m.committed[0].Calls) != 1 {
-					t.Fatalf("committed[0].Calls = %d, want 1", len(m.committed[0].Calls))
+				if len(m.testCommitted()[0].Calls) != 1 {
+					t.Fatalf("committed[0].Calls = %d, want 1", len(m.testCommitted()[0].Calls))
 				}
-				if got := m.committed[0].Calls[0].Status; got != ToolError {
+				if got := m.testCommitted()[0].Calls[0].Status; got != ToolError {
 					t.Errorf("fallback card Status = %v, want ToolError (from IsError)", got)
 				}
 			},
@@ -666,16 +666,16 @@ func TestTranscriptToolCalls(t *testing.T) {
 				),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindTool || !m.committed[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.committed[0])
+				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
+					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
 				}
-				if len(m.committed[0].Calls) != 1 {
-					t.Fatalf("committed[0].Calls = %d, want 1", len(m.committed[0].Calls))
+				if len(m.testCommitted()[0].Calls) != 1 {
+					t.Fatalf("committed[0].Calls = %d, want 1", len(m.testCommitted()[0].Calls))
 				}
-				if got := m.committed[0].Calls[0].Status; got != ToolOK {
+				if got := m.testCommitted()[0].Calls[0].Status; got != ToolOK {
 					t.Errorf("fallback card Status = %v, want ToolOK", got)
 				}
 			},
@@ -687,11 +687,11 @@ func TestTranscriptToolCalls(t *testing.T) {
 				toolCompleted(callID(9), false, "orphan"),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 0 {
-					t.Errorf("committed = %d, want 0 (unknown ToolExecutionID is a no-op)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Errorf("committed = %d, want 0 (unknown ToolExecutionID is a no-op)", len(m.testCommitted()))
 				}
-				if len(m.live.Calls) != 0 {
-					t.Errorf("live.Calls = %d, want 0", len(m.live.Calls))
+				if len(m.testLive().Calls) != 0 {
+					t.Errorf("live.Calls = %d, want 0", len(m.testLive().Calls))
 				}
 			},
 		},
@@ -734,30 +734,30 @@ func TestTranscriptOrdering(t *testing.T) {
 	} {
 		m = m.ApplyEvent(ev)
 	}
-	if len(m.committed) != 3 {
-		t.Fatalf("committed = %d, want 3 (prose1, tool, prose2)", len(m.committed))
+	if len(m.testCommitted()) != 3 {
+		t.Fatalf("committed = %d, want 3 (prose1, tool, prose2)", len(m.testCommitted()))
 	}
 	// [0] step-1 assistant prose committed BEFORE the tool card.
-	if m.committed[0].Kind != kindAssistant {
-		t.Fatalf("committed[0].Kind = %v, want kindAssistant", m.committed[0].Kind)
+	if m.testCommitted()[0].Kind != kindAssistant {
+		t.Fatalf("committed[0].Kind = %v, want kindAssistant", m.testCommitted()[0].Kind)
 	}
-	if got := blockText(m.committed[0].Blocks[0]); got != "before tool" {
+	if got := blockText(m.testCommitted()[0].Blocks[0]); got != "before tool" {
 		t.Errorf("committed[0] text = %q, want %q", got, "before tool")
 	}
 	// [1] the tool card, AFTER prose1.
-	if m.committed[1].Kind != kindTool {
-		t.Errorf("committed[1].Kind = %v, want kindTool", m.committed[1].Kind)
+	if m.testCommitted()[1].Kind != kindTool {
+		t.Errorf("committed[1].Kind = %v, want kindTool", m.testCommitted()[1].Kind)
 	}
 	// [2] step-2 prose, AFTER the tool card.
-	if m.committed[2].Kind != kindAssistant {
-		t.Fatalf("committed[2].Kind = %v, want kindAssistant", m.committed[2].Kind)
+	if m.testCommitted()[2].Kind != kindAssistant {
+		t.Fatalf("committed[2].Kind = %v, want kindAssistant", m.testCommitted()[2].Kind)
 	}
-	if got := blockText(m.committed[2].Blocks[0]); got != "after tool" {
+	if got := blockText(m.testCommitted()[2].Blocks[0]); got != "after tool" {
 		t.Errorf("committed[2] text = %q, want %q", got, "after tool")
 	}
 	// IDs strictly increasing in commit order.
-	if !(m.committed[0].ID < m.committed[1].ID && m.committed[1].ID < m.committed[2].ID) {
-		t.Errorf("IDs not strictly increasing: %d,%d,%d", m.committed[0].ID, m.committed[1].ID, m.committed[2].ID)
+	if !(m.testCommitted()[0].ID < m.testCommitted()[1].ID && m.testCommitted()[1].ID < m.testCommitted()[2].ID) {
+		t.Errorf("IDs not strictly increasing: %d,%d,%d", m.testCommitted()[0].ID, m.testCommitted()[1].ID, m.testCommitted()[2].ID)
 	}
 }
 
@@ -781,23 +781,23 @@ func TestTranscriptTerminals(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				// prose committed, cancelled tool committed, interrupted tombstone.
-				if len(m.committed) != 3 {
-					t.Fatalf("committed = %d, want 3 (prose, cancelled tool, tombstone)", len(m.committed))
+				if len(m.testCommitted()) != 3 {
+					t.Fatalf("committed = %d, want 3 (prose, cancelled tool, tombstone)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindAssistant {
-					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindAssistant {
+					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.testCommitted()[0].Kind)
 				}
-				if m.committed[1].Kind != kindTool {
-					t.Errorf("committed[1].Kind = %v, want kindTool", m.committed[1].Kind)
+				if m.testCommitted()[1].Kind != kindTool {
+					t.Errorf("committed[1].Kind = %v, want kindTool", m.testCommitted()[1].Kind)
 				}
-				if got := m.committed[1].Calls[0].Status; got != ToolCancelled {
+				if got := m.testCommitted()[1].Calls[0].Status; got != ToolCancelled {
 					t.Errorf("running call status = %v, want ToolCancelled", got)
 				}
-				if m.committed[2].Kind != kindInterrupted {
-					t.Errorf("committed[2].Kind = %v, want kindInterrupted", m.committed[2].Kind)
+				if m.testCommitted()[2].Kind != kindInterrupted {
+					t.Errorf("committed[2].Kind = %v, want kindInterrupted", m.testCommitted()[2].Kind)
 				}
-				if !m.live.empty() || m.live.active {
-					t.Errorf("live not reset after interrupt: %+v", m.live)
+				if !m.testLive().empty() || m.testLive().active {
+					t.Errorf("live not reset after interrupt: %+v", m.testLive())
 				}
 			},
 		},
@@ -808,11 +808,11 @@ func TestTranscriptTerminals(t *testing.T) {
 				event.TurnInterrupted{},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (tombstone only)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (tombstone only)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindInterrupted {
-					t.Errorf("Kind = %v, want kindInterrupted", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindInterrupted {
+					t.Errorf("Kind = %v, want kindInterrupted", m.testCommitted()[0].Kind)
 				}
 			},
 		},
@@ -824,20 +824,20 @@ func TestTranscriptTerminals(t *testing.T) {
 				event.TurnFailed{Err: errBoom{}},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d, want 2 (prose, error)", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (prose, error)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindAssistant {
-					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindAssistant {
+					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.testCommitted()[0].Kind)
 				}
-				if m.committed[1].Kind != kindNotice || m.committed[1].Level != noticeError {
-					t.Fatalf("committed[1] = (kind %v, level %d), want (kindNotice, noticeError)", m.committed[1].Kind, m.committed[1].Level)
+				if m.testCommitted()[1].Kind != kindNotice || m.testCommitted()[1].Level != noticeError {
+					t.Fatalf("committed[1] = (kind %v, level %d), want (kindNotice, noticeError)", m.testCommitted()[1].Kind, m.testCommitted()[1].Level)
 				}
-				if got := blockText(m.committed[1].Blocks[0]); got != "boom" {
+				if got := blockText(m.testCommitted()[1].Blocks[0]); got != "boom" {
 					t.Errorf("error text = %q, want %q", got, "boom")
 				}
-				if !m.live.empty() || m.live.active {
-					t.Errorf("live not reset after failure: %+v", m.live)
+				if !m.testLive().empty() || m.testLive().active {
+					t.Errorf("live not reset after failure: %+v", m.testLive())
 				}
 			},
 		},
@@ -848,14 +848,14 @@ func TestTranscriptTerminals(t *testing.T) {
 				event.TurnFailed{Err: nil},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (error only)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (error only)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindNotice || m.committed[0].Level != noticeError {
-					t.Errorf("committed[0] = (kind %v, level %d), want (kindNotice, noticeError)", m.committed[0].Kind, m.committed[0].Level)
+				if m.testCommitted()[0].Kind != kindNotice || m.testCommitted()[0].Level != noticeError {
+					t.Errorf("committed[0] = (kind %v, level %d), want (kindNotice, noticeError)", m.testCommitted()[0].Kind, m.testCommitted()[0].Level)
 				}
-				if !m.live.empty() {
-					t.Errorf("live not reset after failure: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after failure: %+v", m.testLive())
 				}
 			},
 		},
@@ -894,10 +894,10 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 				stepDone(aiMessage("because reasons", "the answer")),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want exactly 1 (the finalized AIMessage)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want exactly 1 (the finalized AIMessage)", len(m.testCommitted()))
 				}
-				e := m.committed[0]
+				e := m.testCommitted()[0]
 				if e.Kind != kindAssistant {
 					t.Fatalf("committed[0].Kind = %v, want kindAssistant", e.Kind)
 				}
@@ -912,8 +912,8 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 					t.Errorf("committed text = %q, want finalized %q (self-heal)", got, "the answer")
 				}
 				// the provisional live segment is gone: dropped deltas do not survive.
-				if !m.live.empty() {
-					t.Errorf("live not reset after StepDone: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after StepDone: %+v", m.testLive())
 				}
 			},
 		},
@@ -926,10 +926,10 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 				stepDone(aiMessage("", "the answer is forty-two")),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1", len(m.testCommitted()))
 				}
-				if got := assistantText(m.committed[0].Blocks); got != "the answer is forty-two" {
+				if got := assistantText(m.testCommitted()[0].Blocks); got != "the answer is forty-two" {
 					t.Errorf("committed text = %q, want the finalized %q (provisional discarded)", got, "the answer is forty-two")
 				}
 			},
@@ -946,16 +946,16 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				// SEPARATE entries: the assistant prose, then the tool card. NOT merged.
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d, want 2 (assistant prose, tool)", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (assistant prose, tool)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindAssistant {
-					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindAssistant {
+					t.Errorf("committed[0].Kind = %v, want kindAssistant", m.testCommitted()[0].Kind)
 				}
-				if got := assistantText(m.committed[0].Blocks); got != "let me check" {
+				if got := assistantText(m.testCommitted()[0].Blocks); got != "let me check" {
 					t.Errorf("assistant text = %q, want %q", got, "let me check")
 				}
-				tool := m.committed[1]
+				tool := m.testCommitted()[1]
 				if tool.Kind != kindTool {
 					t.Fatalf("committed[1].Kind = %v, want kindTool", tool.Kind)
 				}
@@ -970,11 +970,11 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 					t.Errorf("tool result = %#v, want [match another] (from the stored ToolResultMessage)", c.Result)
 				}
 				// IDs strictly increasing in commit order.
-				if !(m.committed[0].ID < m.committed[1].ID) {
-					t.Errorf("IDs not increasing: %d, %d", m.committed[0].ID, m.committed[1].ID)
+				if !(m.testCommitted()[0].ID < m.testCommitted()[1].ID) {
+					t.Errorf("IDs not increasing: %d, %d", m.testCommitted()[0].ID, m.testCommitted()[1].ID)
 				}
-				if !m.live.empty() {
-					t.Errorf("live not reset after StepDone: %+v", m.live)
+				if !m.testLive().empty() {
+					t.Errorf("live not reset after StepDone: %+v", m.testLive())
 				}
 			},
 		},
@@ -988,14 +988,14 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 				),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card, no umbrella)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (promoted card, no umbrella)", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindTool || !m.committed[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.committed[0])
+				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
+					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
 				}
-				if m.committed[0].Calls[0].ToolName != "ReadFile" {
-					t.Errorf("tool name = %q, want ReadFile", m.committed[0].Calls[0].ToolName)
+				if m.testCommitted()[0].Calls[0].ToolName != "ReadFile" {
+					t.Errorf("tool name = %q, want ReadFile", m.testCommitted()[0].Calls[0].ToolName)
 				}
 			},
 		},
@@ -1036,30 +1036,30 @@ func TestTranscriptMultiStepSeparateEntries(t *testing.T) {
 		m = m.ApplyEvent(ev)
 	}
 
-	if len(m.committed) != 3 {
-		t.Fatalf("committed = %d, want 3 (step1 assistant, step1 tool, step2 assistant) — NOT merged", len(m.committed))
+	if len(m.testCommitted()) != 3 {
+		t.Fatalf("committed = %d, want 3 (step1 assistant, step1 tool, step2 assistant) — NOT merged", len(m.testCommitted()))
 	}
 	wantKinds := []entryKind{kindAssistant, kindTool, kindAssistant}
 	for i, want := range wantKinds {
-		if m.committed[i].Kind != want {
-			t.Errorf("committed[%d].Kind = %v, want %v", i, m.committed[i].Kind, want)
+		if m.testCommitted()[i].Kind != want {
+			t.Errorf("committed[%d].Kind = %v, want %v", i, m.testCommitted()[i].Kind, want)
 		}
 	}
-	if got := assistantText(m.committed[0].Blocks); got != "checking" {
+	if got := assistantText(m.testCommitted()[0].Blocks); got != "checking" {
 		t.Errorf("step1 assistant text = %q, want %q", got, "checking")
 	}
-	if c := m.committed[1].Calls[0]; c.ToolName != "Bash" {
+	if c := m.testCommitted()[1].Calls[0]; c.ToolName != "Bash" {
 		t.Errorf("step1 tool name = %q, want Bash", c.ToolName)
 	}
-	if got := assistantText(m.committed[2].Blocks); got != "all done" {
+	if got := assistantText(m.testCommitted()[2].Blocks); got != "all done" {
 		t.Errorf("step2 assistant text = %q, want %q", got, "all done")
 	}
 	// IDs strictly increasing in commit order across both steps.
-	if !(m.committed[0].ID < m.committed[1].ID && m.committed[1].ID < m.committed[2].ID) {
-		t.Errorf("IDs not strictly increasing: %d,%d,%d", m.committed[0].ID, m.committed[1].ID, m.committed[2].ID)
+	if !(m.testCommitted()[0].ID < m.testCommitted()[1].ID && m.testCommitted()[1].ID < m.testCommitted()[2].ID) {
+		t.Errorf("IDs not strictly increasing: %d,%d,%d", m.testCommitted()[0].ID, m.testCommitted()[1].ID, m.testCommitted()[2].ID)
 	}
-	if !m.live.empty() || m.live.active {
-		t.Errorf("live not reset after the turn: %+v", m.live)
+	if !m.testLive().empty() || m.testLive().active {
+		t.Errorf("live not reset after the turn: %+v", m.testLive())
 	}
 }
 
@@ -1082,10 +1082,10 @@ func TestCommitUser(t *testing.T) {
 			name:   "single user message commits one entry with a nonzero ID",
 			blocks: [][]content.Block{{&content.TextBlock{Text: "hello there"}}},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1", len(m.testCommitted()))
 				}
-				e := m.committed[0]
+				e := m.testCommitted()[0]
 				if e.Kind != kindUser {
 					t.Errorf("Kind = %v, want kindUser", e.Kind)
 				}
@@ -1104,14 +1104,14 @@ func TestCommitUser(t *testing.T) {
 				{&content.TextBlock{Text: "second"}},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d, want 2", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2", len(m.testCommitted()))
 				}
-				if m.committed[0].ID == m.committed[1].ID {
-					t.Errorf("user entry IDs not distinct: both %d", m.committed[0].ID)
+				if m.testCommitted()[0].ID == m.testCommitted()[1].ID {
+					t.Errorf("user entry IDs not distinct: both %d", m.testCommitted()[0].ID)
 				}
-				if m.committed[0].ID == 0 || m.committed[1].ID == 0 {
-					t.Errorf("user entry IDs must be nonzero: %d, %d", m.committed[0].ID, m.committed[1].ID)
+				if m.testCommitted()[0].ID == 0 || m.testCommitted()[1].ID == 0 {
+					t.Errorf("user entry IDs must be nonzero: %d, %d", m.testCommitted()[0].ID, m.testCommitted()[1].ID)
 				}
 			},
 		},
@@ -1119,13 +1119,13 @@ func TestCommitUser(t *testing.T) {
 			name:   "empty blocks still commit a single user entry",
 			blocks: [][]content.Block{{}},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1", len(m.testCommitted()))
 				}
-				if m.committed[0].Kind != kindUser {
-					t.Errorf("Kind = %v, want kindUser", m.committed[0].Kind)
+				if m.testCommitted()[0].Kind != kindUser {
+					t.Errorf("Kind = %v, want kindUser", m.testCommitted()[0].Kind)
 				}
-				if m.committed[0].ID == 0 {
+				if m.testCommitted()[0].ID == 0 {
 					t.Errorf("entry ID = 0, want nonzero stable ID")
 				}
 			},
@@ -1152,14 +1152,14 @@ func TestCommitUserDoesNotDisturbLive(t *testing.T) {
 	m = m.ApplyEvent(event.TurnStarted{})
 	m = m.ApplyEvent(textChunk("streaming so far"))
 	m = m.CommitUser([]content.Block{&content.TextBlock{Text: "queued msg"}})
-	if m.live.Text != "streaming so far" {
-		t.Errorf("live.Text = %q, want preserved %q", m.live.Text, "streaming so far")
+	if m.testLive().Text != "streaming so far" {
+		t.Errorf("live.Text = %q, want preserved %q", m.testLive().Text, "streaming so far")
 	}
-	if !m.live.active {
+	if !m.testLive().active {
 		t.Errorf("live.active = false, want true (CommitUser must not end the turn)")
 	}
-	if len(m.committed) != 1 || m.committed[0].Kind != kindUser {
-		t.Fatalf("committed = %#v, want one kindUser entry", m.committed)
+	if len(m.testCommitted()) != 1 || m.testCommitted()[0].Kind != kindUser {
+		t.Fatalf("committed = %#v, want one kindUser entry", m.testCommitted())
 	}
 }
 
@@ -1187,16 +1187,16 @@ func TestTranscriptGatePrompts(t *testing.T) {
 				},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 0 {
-					t.Fatalf("committed = %d, want 0 (the gate must not commit)", len(m.committed))
+				if len(m.testCommitted()) != 0 {
+					t.Fatalf("committed = %d, want 0 (the gate must not commit)", len(m.testCommitted()))
 				}
-				if m.live.Thinking != "planning the command" {
-					t.Errorf("live.Thinking = %q, want the provisional thinking preserved (uncommitted)", m.live.Thinking)
+				if m.testLive().Thinking != "planning the command" {
+					t.Errorf("live.Thinking = %q, want the provisional thinking preserved (uncommitted)", m.testLive().Thinking)
 				}
-				if m.live.Text != "I'll run a command." {
-					t.Errorf("live.Text = %q, want the provisional prose preserved (uncommitted)", m.live.Text)
+				if m.testLive().Text != "I'll run a command." {
+					t.Errorf("live.Text = %q, want the provisional prose preserved (uncommitted)", m.testLive().Text)
 				}
-				if !m.live.active {
+				if !m.testLive().active {
 					t.Errorf("live.active = false, want true (the gate does not end the turn)")
 				}
 			},
@@ -1213,13 +1213,13 @@ func TestTranscriptGatePrompts(t *testing.T) {
 				},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (the AskUser record only — no prose commit)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (the AskUser record only — no prose commit)", len(m.testCommitted()))
 				}
-				if m.live.Text != "Need a decision." {
-					t.Errorf("live.Text = %q, want the provisional prose preserved (uncommitted)", m.live.Text)
+				if m.testLive().Text != "Need a decision." {
+					t.Errorf("live.Text = %q, want the provisional prose preserved (uncommitted)", m.testLive().Text)
 				}
-				rec := m.committed[0]
+				rec := m.testCommitted()[0]
 				if rec.Kind != kindPromptRecord || rec.Prompt == nil {
 					t.Fatalf("committed[0] = %+v, want a kindPromptRecord with Prompt context", rec)
 				}
@@ -1236,7 +1236,7 @@ func TestTranscriptGatePrompts(t *testing.T) {
 						t.Errorf("rendered AskUser record = %q, want it to contain %q", out, c)
 					}
 				}
-				if !m.live.active {
+				if !m.testLive().active {
 					t.Errorf("live.active = false, want true (the gate does not end the turn)")
 				}
 			},
@@ -1248,10 +1248,10 @@ func TestTranscriptGatePrompts(t *testing.T) {
 				event.UserInputRequested{ToolExecutionID: callID(5), Question: "free answer?", Choices: nil},
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1", len(m.testCommitted()))
 				}
-				rec := m.committed[0]
+				rec := m.testCommitted()[0]
 				if rec.Kind != kindPromptRecord || rec.Prompt == nil {
 					t.Fatalf("committed[0] = %+v, want a kindPromptRecord", rec)
 				}
@@ -1292,10 +1292,10 @@ func TestStepDoneHeadlineAndPromotion(t *testing.T) {
 				stepDone(aiMessage("", "", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 1 {
-					t.Fatalf("committed = %d, want 1 (just the promoted card)", len(m.committed))
+				if len(m.testCommitted()) != 1 {
+					t.Fatalf("committed = %d, want 1 (just the promoted card)", len(m.testCommitted()))
 				}
-				if e := m.committed[0]; e.Kind != kindTool || !e.promoted {
+				if e := m.testCommitted()[0]; e.Kind != kindTool || !e.promoted {
 					t.Errorf("committed[0] = {kind %v, promoted %v}, want {kindTool, true}", e.Kind, e.promoted)
 				}
 			},
@@ -1307,13 +1307,13 @@ func TestStepDoneHeadlineAndPromotion(t *testing.T) {
 				stepDone(aiMessage("plan it", "", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d, want 2 (thinking entry, promoted card)", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (thinking entry, promoted card)", len(m.testCommitted()))
 				}
-				if e := m.committed[0]; e.Kind != kindAssistant || e.headline != "" || thinkingText(e.Blocks) == "" {
+				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != "" || thinkingText(e.Blocks) == "" {
 					t.Errorf("committed[0] = %+v, want a thinking-only kindAssistant (no headline)", e)
 				}
-				if e := m.committed[1]; e.Kind != kindTool || !e.promoted {
+				if e := m.testCommitted()[1]; e.Kind != kindTool || !e.promoted {
 					t.Errorf("committed[1] = %+v, want the promoted kindTool card", e)
 				}
 			},
@@ -1326,14 +1326,14 @@ func TestStepDoneHeadlineAndPromotion(t *testing.T) {
 					toolResult("tu-1", "a"), toolResult("tu-2", "b")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 3 {
-					t.Fatalf("committed = %d, want 3 (umbrella + 2 cards)", len(m.committed))
+				if len(m.testCommitted()) != 3 {
+					t.Fatalf("committed = %d, want 3 (umbrella + 2 cards)", len(m.testCommitted()))
 				}
-				if e := m.committed[0]; e.Kind != kindAssistant || e.headline != multipleActionsHeadline {
+				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != multipleActionsHeadline {
 					t.Errorf("committed[0] = %+v, want kindAssistant headline %q", e, multipleActionsHeadline)
 				}
 				for i := 1; i <= 2; i++ {
-					if e := m.committed[i]; e.Kind != kindTool || e.promoted {
+					if e := m.testCommitted()[i]; e.Kind != kindTool || e.promoted {
 						t.Errorf("committed[%d] = %+v, want a plain (non-promoted) kindTool card", i, e)
 					}
 				}
@@ -1346,13 +1346,13 @@ func TestStepDoneHeadlineAndPromotion(t *testing.T) {
 				stepDone(aiMessage("", "reading config", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
-				if len(m.committed) != 2 {
-					t.Fatalf("committed = %d, want 2 (narration, card)", len(m.committed))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (narration, card)", len(m.testCommitted()))
 				}
-				if e := m.committed[0]; e.Kind != kindAssistant || e.headline != "" || textOnly(e.Blocks) == "" {
+				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != "" || textOnly(e.Blocks) == "" {
 					t.Errorf("committed[0] = %+v, want a narration kindAssistant (no headline)", e)
 				}
-				if e := m.committed[1]; e.Kind != kindTool || e.promoted {
+				if e := m.testCommitted()[1]; e.Kind != kindTool || e.promoted {
 					t.Errorf("committed[1] = %+v, want a plain (non-promoted) kindTool card", e)
 				}
 			},
@@ -1389,7 +1389,7 @@ func userBlocks(text string) []content.Block {
 // kindUserCount counts the committed kindUser rows in m.
 func kindUserCount(m transcriptModel) int {
 	n := 0
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind == kindUser {
 			n++
 		}
@@ -1459,7 +1459,7 @@ func TestTranscriptUserRowFromTurnEvent(t *testing.T) {
 				t.Fatalf("kindUser rows = %d, want %d", got, tt.wantRows)
 			}
 			if tt.wantRows == 1 {
-				e := m.committed[len(m.committed)-1]
+				e := m.testCommitted()[len(m.testCommitted())-1]
 				if got := blockText(e.Blocks[0]); got != tt.wantText {
 					t.Errorf("committed user row text = %q, want %q", got, tt.wantText)
 				}
@@ -1695,7 +1695,7 @@ func TestTranscriptTurnRejected(t *testing.T) {
 			if got := kindUserCount(m); got != 0 {
 				t.Errorf("kindUser rows = %d, want 0 (a rejected message is surfaced as a notice, not a user row)", got)
 			}
-			rec := m.committed[len(m.committed)-1]
+			rec := m.testCommitted()[len(m.testCommitted())-1]
 			if rec.Kind != kindNotice || rec.Level != noticeError {
 				t.Fatalf("last committed = (kind %d, level %d), want (kindNotice, noticeError)", rec.Kind, rec.Level)
 			}
@@ -1772,8 +1772,8 @@ func TestGateDecisionFlow(t *testing.T) {
 			m = m.ApplyEvent(thinkingChunk("let me run it"))
 			m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(1), Request: tt.request})
 			// The gate commits nothing; the thinking stays live (uncommitted).
-			if len(m.committed) != 0 {
-				t.Fatalf("committed after gate = %d, want 0", len(m.committed))
+			if len(m.testCommitted()) != 0 {
+				t.Fatalf("committed after gate = %d, want 0", len(m.testCommitted()))
 			}
 			// Screen records the keypress decision, then the loop runs the tool.
 			m = m.ResolveGate(callID(1), tt.decision)
@@ -1782,11 +1782,11 @@ func TestGateDecisionFlow(t *testing.T) {
 			m = m.ApplyEvent(stepDone(aiMessage("let me run it", "", toolUse("tu-1", tt.toolName, `{}`)), toolResult("tu-1", "out")))
 
 			// committed: a thinking-only entry then the promoted card carrying the decision.
-			if len(m.committed) != 2 {
-				t.Fatalf("committed = %d, want 2 (thinking, promoted card)", len(m.committed))
+			if len(m.testCommitted()) != 2 {
+				t.Fatalf("committed = %d, want 2 (thinking, promoted card)", len(m.testCommitted()))
 			}
 			thinkCount := 0
-			for _, e := range m.committed {
+			for _, e := range m.testCommitted() {
 				if e.Kind == kindAssistant && thinkingText(e.Blocks) != "" {
 					thinkCount++
 				}
@@ -1794,7 +1794,7 @@ func TestGateDecisionFlow(t *testing.T) {
 			if thinkCount != 1 {
 				t.Errorf("committed thinking entries = %d, want exactly 1 (no gate duplicate)", thinkCount)
 			}
-			card := m.committed[1]
+			card := m.testCommitted()[1]
 			if card.Kind != kindTool || !card.promoted {
 				t.Fatalf("committed[1] = %+v, want the promoted card", card)
 			}
@@ -1865,14 +1865,6 @@ func TestStoredStepToolCardSummarizesInput(t *testing.T) {
 	}
 }
 
-// TestSubagentStepDoneAttribution covers P4 Phase 2: a SUBAGENT loop's StepDone
-// renders as ONE compact "▸ <agent>: done" collapsed line attributed by the agent
-// name learned from its LoopStarted, never as the full assistant + tool group (that
-// would interleave the subagent's narration into the root transcript). The PRIMARY
-// loop's StepDone is unchanged (it is the main narration, not a subagent line), and a
-// subagent whose agent name is unknown/empty falls back to the loopID short form — no
-// empty label, no panic.
-
 // TestLoopShortForm covers the loopID fallback label (the 8-hex first group of the
 // uuid string), used when a subagent has no/empty agent name.
 func TestLoopShortForm(t *testing.T) {
@@ -1936,7 +1928,7 @@ func orchestratorStepDone(primaryLoop, turn, step uuid.UUID, msgs ...content.Con
 func findSubagentCard(t *testing.T, m transcriptModel) ToolCallView {
 	t.Helper()
 	var found []ToolCallView
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -1947,7 +1939,7 @@ func findSubagentCard(t *testing.T, m transcriptModel) ToolCallView {
 		}
 	}
 	if len(found) != 1 {
-		t.Fatalf("found %d Subagent cards, want exactly 1; committed=%+v", len(found), m.committed)
+		t.Fatalf("found %d Subagent cards, want exactly 1; committed=%+v", len(found), m.testCommitted())
 	}
 	return found[0]
 }
@@ -2013,7 +2005,7 @@ func TestSubagentNestedFromEnduring(t *testing.T) {
 		t.Errorf("done summary (card.Result) = %q, want %q", got, "result text")
 	}
 	// No stray ▸ subagent line for a parented child.
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind == kindSubagent {
 			t.Errorf("committed a kindSubagent fallback line for a parented child: %+v", e)
 		}
@@ -2022,9 +2014,9 @@ func TestSubagentNestedFromEnduring(t *testing.T) {
 
 // TestSubagentMixedBatchSameIndexIsolation (Task 6, test 2 / design test 13): the
 // parent step is Bash(idx0)+Subagent(idx1) and the child's FIRST tool is ALSO Bash
-// with a DIFFERENT result, while the parent's live Bash sits in m.live.Calls[0]. The
+// with a DIFFERENT result, while the parent's live Bash sits in m.testLive().Calls[0]. The
 // nested child Bash card MUST carry the CHILD's durable result, never the parent's
-// live card — proving child reconstruction uses storedStepToolCard (no m.live.Calls).
+// live card — proving child reconstruction uses storedStepToolCard (no m.testLive().Calls).
 func TestSubagentMixedBatchSameIndexIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -2074,15 +2066,15 @@ func TestSubagentMixedBatchSameIndexIsolation(t *testing.T) {
 	}
 
 	var parentBash *entry
-	for i := range m.committed {
-		e := &m.committed[i]
+	for i := range m.testCommitted() {
+		e := &m.testCommitted()[i]
 		if e.Kind == kindTool && len(e.Calls) == 1 && e.Calls[0].ToolName == "Bash" && strings.Join(e.Calls[0].Result, "\n") == "PARENT bash output" {
 			parentBash = e
 			break
 		}
 	}
 	if parentBash == nil {
-		t.Fatalf("missing committed parent Bash card; committed=%+v", m.committed)
+		t.Fatalf("missing committed parent Bash card; committed=%+v", m.testCommitted())
 	}
 	renderedParent := stripANSI(strings.Join(renderEntry(*parentBash, false, 120), "\n"))
 	if !strings.Contains(renderedParent, "Bash(make)") {
@@ -2128,7 +2120,7 @@ func TestSubagentConcurrent(t *testing.T) {
 	))
 
 	var cardA, cardB *ToolCallView
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -2145,7 +2137,7 @@ func TestSubagentConcurrent(t *testing.T) {
 		}
 	}
 	if cardA == nil || cardB == nil {
-		t.Fatalf("missing a Subagent card: explorer=%v builder=%v; committed=%+v", cardA, cardB, m.committed)
+		t.Fatalf("missing a Subagent card: explorer=%v builder=%v; committed=%+v", cardA, cardB, m.testCommitted())
 	}
 	if len(cardA.Children) != 1 || cardA.Children[0].ToolName != "Grep" {
 		t.Errorf("explorer card children = %+v, want exactly the Grep row", cardA.Children)
@@ -2195,13 +2187,13 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 
 	for _, h := range committedHeadlines(m) {
 		if h == multipleActionsHeadline {
-			t.Errorf("all-subagent step committed a %q umbrella, want none; committed=%+v", multipleActionsHeadline, m.committed)
+			t.Errorf("all-subagent step committed a %q umbrella, want none; committed=%+v", multipleActionsHeadline, m.testCommitted())
 		}
 	}
 	// Two Subagent cards committed as their own kindTool entries, neither promoted (each
 	// renders as a "●" Subagent card via Agent != "").
 	subCards := 0
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -2215,7 +2207,7 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 		}
 	}
 	if subCards != 2 {
-		t.Fatalf("committed %d Subagent cards, want 2; committed=%+v", subCards, m.committed)
+		t.Fatalf("committed %d Subagent cards, want 2; committed=%+v", subCards, m.testCommitted())
 	}
 }
 
@@ -2248,7 +2240,7 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 
 	// Narration bullet, no umbrella.
 	sawNarration := false
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind == kindAssistant {
 			if e.headline == multipleActionsHeadline {
 				t.Errorf("mixed step committed a %q umbrella, want none", multipleActionsHeadline)
@@ -2259,12 +2251,12 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 		}
 	}
 	if !sawNarration {
-		t.Errorf("mixed step did not commit the narration bullet; committed=%+v", m.committed)
+		t.Errorf("mixed step did not commit the narration bullet; committed=%+v", m.testCommitted())
 	}
 
 	// The ordinary Bash card: a non-promoted kindTool with no Agent.
 	sawBash, sawSub := false, false
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -2284,10 +2276,10 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 		}
 	}
 	if !sawBash {
-		t.Errorf("mixed step missing the ordinary Bash ⎿ card; committed=%+v", m.committed)
+		t.Errorf("mixed step missing the ordinary Bash ⎿ card; committed=%+v", m.testCommitted())
 	}
 	if !sawSub {
-		t.Errorf("mixed step missing the Subagent ● card; committed=%+v", m.committed)
+		t.Errorf("mixed step missing the Subagent ● card; committed=%+v", m.testCommitted())
 	}
 }
 
@@ -2352,7 +2344,7 @@ func TestSubagentDepth2Nested(t *testing.T) {
 func renderSubagentCardEntry(t *testing.T, m transcriptModel, width int) string {
 	t.Helper()
 	var rendered []string
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -2364,7 +2356,7 @@ func renderSubagentCardEntry(t *testing.T, m transcriptModel, width int) string 
 		}
 	}
 	if len(rendered) != 1 {
-		t.Fatalf("found %d rendered Subagent cards, want exactly 1; committed=%+v", len(rendered), m.committed)
+		t.Fatalf("found %d rendered Subagent cards, want exactly 1; committed=%+v", len(rendered), m.testCommitted())
 	}
 	return rendered[0]
 }
@@ -2450,7 +2442,7 @@ func TestSubagentRestoreEquivalence(t *testing.T) {
 	// HEADLINE: the restored transcript EqualTranscript the live transcript.
 	if !restored.EqualTranscript(live) {
 		t.Errorf("restore != live for a populated Subagent card\n live committed = %+v\n restored committed = %+v",
-			live.transcript.committed, restored.transcript.committed)
+			live.transcript.testCommitted(), restored.transcript.testCommitted())
 	}
 
 	// The committed card must be FROZEN — never aliasing the live subagentAccum backing
@@ -2498,7 +2490,7 @@ func TestSubagentFailureBeforeChildLoop(t *testing.T) {
 	))
 
 	// No populated Subagent card (Agent never set) — confirm there is none.
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		for _, c := range e.Calls {
 			if c.Agent != "" {
 				t.Fatalf("spawn failure produced a populated Subagent card, want a plain error tool card: %+v", c)
@@ -2508,7 +2500,7 @@ func TestSubagentFailureBeforeChildLoop(t *testing.T) {
 
 	// The Subagent tool-use commits as an ordinary tool card whose body is the error text.
 	var found *ToolCallView
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
 			continue
 		}
@@ -2520,7 +2512,7 @@ func TestSubagentFailureBeforeChildLoop(t *testing.T) {
 		}
 	}
 	if found == nil {
-		t.Fatalf("no Subagent tool card committed; committed=%+v", m.committed)
+		t.Fatalf("no Subagent tool card committed; committed=%+v", m.testCommitted())
 	}
 	if found.Agent != "" {
 		t.Errorf("error card Agent = %q, want empty (a plain tool card, not a nested ● card)", found.Agent)
@@ -2533,7 +2525,7 @@ func TestSubagentFailureBeforeChildLoop(t *testing.T) {
 	}
 	// The rendered card must show the error text as an ordinary tool-card body, NOT a
 	// Subagent "done · N steps" done child or a "Subagent(<agent>)" header.
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		got := stripANSI(strings.Join(renderEntry(e, true, 80), "\n"))
 		if strings.Contains(got, " steps") || strings.Contains(got, "Subagent(") {
 			t.Errorf("error card rendered as a Subagent card: %q", got)
@@ -2897,7 +2889,7 @@ func TestProjectionGloballyUniqueIDs(t *testing.T) {
 // TestProjectionStoredCardNoSteal is the §3a guard: a concurrent subagent step whose
 // first tool shares index 0 with the primary's OWN live tool card must rebuild its nested
 // card via storedStepToolCard (the child's durable result), NEVER stealing the primary's
-// same-index live card. The projection fold also never reads or mutates m.live.Calls, so
+// same-index live card. The projection fold also never reads or mutates m.testLive().Calls, so
 // the primary's live card is left untouched.
 // TestTranscriptLoopLiveness covers the bi-state (live | idle) liveness the loop table
 // tracks: LoopStarted / TurnStarted mark a loop live, LoopIdle marks it idle, the state
@@ -3078,7 +3070,7 @@ func TestTranscriptLoopLivenessFoldDeterministic(t *testing.T) {
 // that carries a ThinkingBlock, and whether such an entry exists — the seam the
 // thinking-duration tests assert the captured span through.
 func firstThinkingAssistant(m transcriptModel) (time.Duration, bool) {
-	for _, e := range m.committed {
+	for _, e := range m.testCommitted() {
 		if e.Kind != kindAssistant {
 			continue
 		}
@@ -3194,7 +3186,7 @@ func TestThinkingDurationCapture(t *testing.T) {
 			}
 			gotDur, gotThinking := firstThinkingAssistant(m)
 			if gotThinking != tt.wantThinking {
-				t.Fatalf("committed thinking entry present = %v, want %v (committed=%+v)", gotThinking, tt.wantThinking, m.committed)
+				t.Fatalf("committed thinking entry present = %v, want %v (committed=%+v)", gotThinking, tt.wantThinking, m.testCommitted())
 			}
 			if tt.wantThinking && gotDur != tt.wantDur {
 				t.Errorf("captured thinkDur = %v, want %v", gotDur, tt.wantDur)
@@ -3234,7 +3226,7 @@ func TestInterruptedProseCarriesThinkDuration(t *testing.T) {
 
 	gotDur, gotThinking := firstThinkingAssistant(m)
 	if !gotThinking {
-		t.Fatalf("interrupt path committed no thinking entry; committed=%+v", m.committed)
+		t.Fatalf("interrupt path committed no thinking entry; committed=%+v", m.testCommitted())
 	}
 	if gotDur != 10*time.Second {
 		t.Errorf("interrupted prose thinkDur = %v, want 10s (the real span it spent)", gotDur)
@@ -3310,30 +3302,16 @@ func loopToolStarted(loopID, id uuid.UUID, name, summary string) event.Event {
 	return event.ToolCallStarted{Header: hdr(loopID), ToolExecutionID: id, ToolName: name, Summary: summary}
 }
 
-// TestTranscriptRootFoldGuardedToPrimary is the regression guard for the CRITICAL
-// subagent-Ephemeral leak: under the modern AllLoopsEventFilter, EVERY loop's live
-// Ephemeral stream (TokenDelta / ToolCall* / permission gate) is delivered, so a
-// CONCURRENT subagent loop's live tokens and tool cards must NOT fold into the PRIMARY
-// root live segment (m.live). That segment is aliased by projectionFor(primary) and
-// rendered by the default primary-focused viewport, so a leak splices the subagent's
-// narration/thinking/tool cards into the orchestrator's live output. The guard folds a
-// TokenDelta / ToolCall* into m.live ONLY when its producing loop is the primary (or the
-// zero loop id); a non-primary Ephemeral event reaches its OWN projection via
-// routeProjection and never touches m.live.
-// TestTranscriptRootFoldPrimaryUnchanged locks the no-op half of the guard: a PRIMARY
-// (and a zero-LoopID) Ephemeral stream still folds into m.live exactly as before — the
-// guard must not regress the single-loop path, which only ever delivers primary/zero-loop
-// Ephemeral.
-func TestTranscriptRootFoldPrimaryUnchanged(t *testing.T) {
+// TestTranscriptProjectionFoldsEphemeral covers both non-zero and legacy zero LoopID keys.
+func TestTranscriptProjectionFoldsEphemeral(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		activeLoopID uuid.UUID
-		loopID       uuid.UUID
+		name   string
+		loopID uuid.UUID
 	}{
-		{name: "active loop folds into m.live", activeLoopID: callID(0xA1), loopID: callID(0xA1)},
-		{name: "zero loop id (single-loop default) folds into m.live", activeLoopID: uuid.UUID{}, loopID: uuid.UUID{}},
+		{name: "non-zero loop", loopID: callID(0xA1)},
+		{name: "zero loop id", loopID: uuid.UUID{}},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -3345,25 +3323,18 @@ func TestTranscriptRootFoldPrimaryUnchanged(t *testing.T) {
 			m = m.ApplyEvent(loopTextChunk(tt.loopID, "narration"))
 			m = m.ApplyEvent(loopToolStarted(tt.loopID, callID(0x21), "Bash", "cmd"))
 
-			if m.live.Text != "narration" {
-				t.Errorf("live.Text = %q, want %q (primary Ephemeral must still fold)", m.live.Text, "narration")
+			if m.testLive().Text != "narration" {
+				t.Errorf("live.Text = %q, want %q", m.testLive().Text, "narration")
 			}
-			if m.live.Thinking != "reason" {
-				t.Errorf("live.Thinking = %q, want %q", m.live.Thinking, "reason")
+			if m.testLive().Thinking != "reason" {
+				t.Errorf("live.Thinking = %q, want %q", m.testLive().Thinking, "reason")
 			}
-			if len(m.live.Calls) != 1 {
-				t.Fatalf("live.Calls = %d, want 1 (primary ToolCallStarted must still fold)", len(m.live.Calls))
+			if len(m.testLive().Calls) != 1 {
+				t.Fatalf("live.Calls = %d, want 1", len(m.testLive().Calls))
 			}
-			if m.live.Calls[0].ToolName != "Bash" {
-				t.Errorf("live card ToolName = %q, want Bash", m.live.Calls[0].ToolName)
+			if m.testLive().Calls[0].ToolName != "Bash" {
+				t.Errorf("live card ToolName = %q, want Bash", m.testLive().Calls[0].ToolName)
 			}
 		})
 	}
 }
-
-// TestTranscriptPermissionGateGuardedToPrimary locks that ONLY a PRIMARY-loop
-// PermissionRequested records a gate affordance into the root m.live segment; a subagent's
-// PermissionRequested (delivered under the modern all-loops filter) must NOT touch m.live's
-// gate decisions/descriptions (that would bake a subagent's permission into the primary's
-// next live tool card). The interaction model's enqueue-for-all-loops behavior is separate
-// (interaction.ApplyEvent) and is not exercised here.

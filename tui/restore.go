@@ -11,7 +11,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 )
 
-// DisplayProjection is the committed TUI projection of a fold over the selected loop's
+// DisplayProjection is the committed TUI projection of a fold over all delivered
 // Enduring events — the "displayed" transcript the event-persistence design's headline
 // property compares (displayed == stored == restored). It bundles the two pure reducer
 // states (the scrollback transcript and the pending-gate interaction surface) so the
@@ -76,8 +76,8 @@ func (p DisplayProjection) EqualTranscript(other DisplayProjection) bool {
 // are rebuilt fresh, so the input model's state is untouched. Only the duration is
 // normalized; every other field is carried through unchanged for the DeepEqual.
 func normalizeThinkTiming(m transcriptModel) transcriptModel {
-	m.committed = zeroThinkDur(m.committed)
-	m.live = zeroLiveThinkTiming(m.live)
+	m.global = zeroThinkDur(m.global)
+	m.fold = nil
 	if m.projections != nil {
 		next := make(map[uuid.UUID]*loopProjection, len(m.projections))
 		for k, p := range m.projections {
@@ -119,9 +119,9 @@ func zeroLiveThinkTiming(s liveSeg) liveSeg {
 	return s
 }
 
-// CommittedLen is the number of committed (finalized) transcript entries — the rows the
-// repaint flushes to scrollback.
-func (p DisplayProjection) CommittedLen() int { return len(p.transcript.committed) }
+// CommittedLen is the number of finalized transcript entries across the global stream
+// and every loop projection.
+func (p DisplayProjection) CommittedLen() int { return p.transcript.committedLen() }
 
 // PendingPrompts is the number of pending prompts (permission gates + AskUser requests)
 // the projection's interaction surface holds — the gate dimension a transcript deep-
@@ -169,10 +169,6 @@ type restoredMsg struct {
 // Subscribe 256-buffer and not folded per event on the update loop. A read failure
 // returns a restoredMsg carrying a typed *RestoreBacklogError (non-fatal). A new session
 // (empty backlog) folds to an empty transcript, which the Screen installs as a no-op.
-//
-// loopID scopes the rebuilt transcript's committed user rows to the selected loop
-// exactly as the live path does (transcriptModel.loopID) — a subagent loop's
-// turns in the backlog surface collapsed via StepDone, never as a human user row.
 func restoreBacklogCmd(ctx context.Context, agent Agent) tea.Cmd {
 	return func() tea.Msg {
 		backlog, err := agent.ReplayBacklog(ctx)
