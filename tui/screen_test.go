@@ -897,6 +897,162 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	}
 }
 
+// TestFocusedStatusReflectsFocusedLoopNotActive pins the corrected §Status-line rule: the
+// status line follows the FOCUSED loop's own turn liveness, independent of which primer is
+// active — while STILL surfacing the session-global Interrupting/Resetting transitions ONLY
+// for the root focus (never a subagent's). The headline case is the regression: focus on an
+// IDLE root while a DIFFERENT active primer is Running must read idle, not the active loop's
+// running state (which m.status now follows).
+func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
+	t.Parallel()
+
+	root := callID(1)
+	other := callID(2)
+	sub := callID(3)
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) Screen
+		want  Status
+	}{
+		{
+			name: "root focus idle while a different active primer runs → idle",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root // authoritative post-subscribe baseline
+				m = feed(t, m, event.TurnStarted{Header: hdr(root), Message: userMsg("q")})
+				m = feed(t, m, event.TurnDone{Header: hdr(root)}) // root parks idle
+				m = feed(t, m, loopStarted(other, "worker"))
+				m = feed(t, m, event.TurnStarted{Header: hdr(other), Message: userMsg("bg")})
+				m = feed(t, m, selectionEvent(callID(9), event.ActiveLoopChanged{PreviousLoopID: root, ActiveLoopID: other}))
+				// Real precondition: focus sits on the IDLE root (loopRunning[root] false), the
+				// OTHER primer is mid-turn (loopRunning[other] true), and the core status now
+				// follows that RUNNING active primer — the value the fix must NOT reuse for the
+				// root focus. (The transcript root live segment is also active here — a sibling
+				// primer's TurnStarted marks the shared root fold live — so it cannot be the
+				// running/idle source; the per-loop loopRunning bit is.)
+				if m.focusedLoopID != root {
+					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				}
+				if m.activeLoopID != other {
+					t.Fatalf("activeLoopID = %v, want other %v", m.activeLoopID, other)
+				}
+				if m.status != StatusRunning {
+					t.Fatalf("core status = %d, want StatusRunning (follows active loop)", m.status)
+				}
+				if m.loopRunning[root] {
+					t.Fatal("loopRunning[root] = true, want false (root turn is idle)")
+				}
+				if !m.loopRunning[other] {
+					t.Fatal("loopRunning[other] = false, want true (the active primer is mid-turn)")
+				}
+				return m
+			},
+			want: StatusIdle,
+		},
+		{
+			name: "root focus while its own turn runs → running",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root
+				m = feed(t, m, event.TurnStarted{Header: hdr(root), Message: userMsg("q")})
+				if m.focusedLoopID != root {
+					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				}
+				if _, live := m.transcript.projectionFor(root); !live.active {
+					t.Fatal("root projection live segment is idle, want active")
+				}
+				return m
+			},
+			want: StatusRunning,
+		},
+		{
+			name: "root focus surfaces session-global Interrupting even while idle",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root
+				m.status = StatusInterrupting
+				if m.focusedLoopID != root {
+					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				}
+				if _, live := m.transcript.projectionFor(root); live.active {
+					t.Fatal("root projection live segment is active, want idle")
+				}
+				return m
+			},
+			want: StatusInterrupting,
+		},
+		{
+			name: "root focus surfaces session-global Resetting even while idle",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root
+				m.status = StatusResetting
+				if m.focusedLoopID != root {
+					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				}
+				return m
+			},
+			want: StatusResetting,
+		},
+		{
+			name: "subagent focus running → running",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root
+				m = feed(t, m, loopStarted(sub, "reviewer"))
+				m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+				m.focusLoop(sub)
+				if m.focusedLoopID != sub {
+					t.Fatalf("focusedLoopID = %v, want sub %v", m.focusedLoopID, sub)
+				}
+				if _, live := m.transcript.projectionFor(sub); !live.active {
+					t.Fatal("sub projection live segment is idle, want active")
+				}
+				return m
+			},
+			want: StatusRunning,
+		},
+		{
+			name: "subagent focus never shows Interrupting even while core is interrupting",
+			setup: func(t *testing.T) Screen {
+				agent := &fakeAgent{rootLoopID: root}
+				m := newScreenSized(t, agent, 80, 24)
+				m.sessionCore.activeLoopID = root
+				m = feed(t, m, loopStarted(sub, "reviewer"))
+				m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
+				m.focusLoop(sub)
+				m.status = StatusInterrupting // a session-global transition the subagent must NOT show
+				if m.focusedLoopID != sub {
+					t.Fatalf("focusedLoopID = %v, want sub %v", m.focusedLoopID, sub)
+				}
+				if m.status != StatusInterrupting {
+					t.Fatalf("core status = %d, want StatusInterrupting", m.status)
+				}
+				if _, live := m.transcript.projectionFor(sub); !live.active {
+					t.Fatal("sub projection live segment is idle, want active")
+				}
+				return m
+			},
+			want: StatusRunning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := tt.setup(t)
+			if got := m.focusedStatus(); got != tt.want {
+				t.Errorf("focusedStatus() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 // runningScreen returns a Screen wired for a live turn: sized (ready), a non-nil
 // session subscription (subNext targets must be non-nil), and StatusRunning. It mirrors
 // runningScreen so the prompt/interrupt/queued-input parity tests exercise a mid-turn model.

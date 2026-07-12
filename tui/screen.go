@@ -1124,21 +1124,34 @@ func (m Screen) surfaceInputs() surfaceInputs {
 }
 
 // focusedStatus is the turn-lifecycle Status the status line reflects for the FOCUSED loop
-// (design §Status line). For the ROOT loop — and the zero id (the single-loop default) —
-// it is the shared session/turn status the core derives (m.status), preserving idle/running
-// PLUS the interrupt/clear transitions the core owns. For a NON-ROOT focused loop the core
-// status (which tracks ONLY the root) does not apply, so it is derived from that loop's own
-// projection: its live segment being active — set on the loop's TurnStarted, cleared on the
-// loop's terminal — reads Running, else Idle. statusInputs() then refines a Running label into
-// thinking…/streaming… from the same projection's live signals. This is a deliberately MINIMAL
+// (design §Status line). It follows the FOCUSED loop's OWN turn liveness, independent of which
+// primer is currently active. This matters because the core status (m.status) now tracks the
+// ACTIVE loop, not the root: reusing it for a root focus would wrongly read "running" when the
+// root is idle but a DIFFERENT active primer is mid-turn. The only exception is the two
+// session-global transitions the core owns — StatusInterrupting (an interrupt in flight) and
+// StatusResetting (a /clear reopen) — which surface on the ROOT focus's status line only (never a
+// subagent's), preserving the prior "Interrupting/Resetting are never shown for a subagent focus"
+// behavior. The ordinary Running/Idle is read from the focused loop's per-loop turn bit
+// (sessionCore.loopRunning, folded from EVERY loop's TurnStarted/terminal, keyed by loop id).
+// That map — not the root live segment — is the accurate per-loop signal: a sibling primer's
+// TurnStarted marks the SHARED root live segment active (transcript root fold), so the root
+// projection cannot distinguish an idle root from a running sibling. The zero id (the single-loop
+// default) maps to the root loop. statusInputs() then refines a Running label into
+// thinking…/streaming… from the focused loop's live signals. This is a deliberately MINIMAL
 // "you are viewing loop X, and whether it is live" indication, NOT a full per-loop status
 // machine: Interrupting/Resetting are root-only concerns and are never shown for a subagent.
 func (m Screen) focusedStatus() Status {
-	if m.focusedLoopID == m.transcript.rootLoopID || m.focusedLoopID.IsZero() {
+	rootFocus := m.focusedLoopID == m.transcript.rootLoopID || m.focusedLoopID.IsZero()
+	// Interrupt-in-flight and /clear-reset are session-global transitions the core owns; they
+	// surface on the root focus's status line (never a subagent's), as before.
+	if rootFocus && (m.status == StatusInterrupting || m.status == StatusResetting) {
 		return m.status
 	}
-	_, live := m.transcript.projectionFor(m.focusedLoopID)
-	if live.active {
+	focus := m.focusedLoopID
+	if focus.IsZero() {
+		focus = m.transcript.rootLoopID
+	}
+	if m.loopRunning[focus] {
 		return StatusRunning
 	}
 	return StatusIdle
