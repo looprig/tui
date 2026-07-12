@@ -53,9 +53,16 @@ type fakeAgent struct {
 	interruptCancelled bool
 	interruptErr       error
 
-	closeCalled  bool
-	closeErr     error
-	acceptsImage bool
+	closeCalled bool
+	closeErr    error
+
+	// acceptsImages is the per-loop image capability the widened AcceptsImages(loopID)
+	// query reads: a loop absent from the map (or a nil map) reports false, modeling the
+	// fail-closed contract for an unknown target. lastAcceptsImagesLoopID records the loop
+	// the last query asked about, so a test can assert WHICH loop the submit path targeted
+	// (the reconciled active loop for submit, the explicit focused loop for submitToLoop).
+	acceptsImages           map[uuid.UUID]bool
+	lastAcceptsImagesLoopID uuid.UUID
 
 	// subscribe recorder: the configured stream/error is returned, the last filter
 	// is captured so a test can assert the wrapper forwarded it, and subscribeCount
@@ -142,7 +149,12 @@ func (f *fakeAgent) Close(_ context.Context) error {
 	return f.closeErr
 }
 
-func (f *fakeAgent) AcceptsImages() bool { return f.acceptsImage }
+// AcceptsImages records the queried loop and reports its configured capability, failing
+// closed (false) for a loop absent from the map or a nil map — the unknown-target contract.
+func (f *fakeAgent) AcceptsImages(loopID uuid.UUID) bool {
+	f.lastAcceptsImagesLoopID = loopID
+	return f.acceptsImages[loopID]
+}
 
 func (f *fakeAgent) Subscribe(filter event.EventFilter) (EventStream, error) {
 	f.subscribeCount++

@@ -1516,7 +1516,7 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 func TestModernImageRejectedAtBoundary(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{rootLoopID: callID(1), acceptsImage: false}
+	agent := &fakeAgent{rootLoopID: callID(1)} // text-only: nil acceptsImages map → AcceptsImages false
 	m := newScreenSized(t, agent, 80, 24)
 	m.interaction.input.SetValue("@photo.png") // an image on a text-only model → ImageUnsupportedError
 

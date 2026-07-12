@@ -38,9 +38,13 @@ type Agent interface {
 	ActiveLoopID() uuid.UUID
 	Interrupt(ctx context.Context) (bool, error)
 	Close(ctx context.Context) error
-	// AcceptsImages reports whether the model accepts image blocks, so buildBlocks
-	// can reject image @path tokens at the boundary instead of failing mid-turn.
-	AcceptsImages() bool
+	// AcceptsImages reports the current model capability for loopID — whether the model
+	// bound to that loop accepts image blocks — so buildBlocks can reject image @path
+	// tokens at the boundary instead of failing mid-turn. It is keyed on the loop because
+	// a multi-loop session runs heterogeneous models: the focused subagent's model, not
+	// the session's, governs a submission to that loop. Query it per submission (the loop's
+	// model can change) and fail closed for an unknown loop.
+	AcceptsImages(loopID uuid.UUID) bool
 
 	// Subscribe attaches a whole-session event consumer to the agent's session
 	// fan-in with the given filter and returns its EventStream. It is the seam the

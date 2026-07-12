@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
@@ -557,6 +559,179 @@ func TestSessionCoreActiveRunningStatus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSessionCoreTargetImageCapability pins that the image-capability query is keyed on the
+// SUBMISSION TARGET, not the session as a whole: submit queries the reconciled active loop
+// (effectiveActiveLoopID) and submitToLoop queries its explicit focused target. A capable
+// target accepts an image @path; a text-only or unknown target rejects it at the build
+// boundary (fail closed) — committing the message plus a faint error and sending nothing.
+func TestSessionCoreTargetImageCapability(t *testing.T) {
+	t.Parallel()
+
+	root := loopID(0xF0)
+	planner, builder, unknown := loopID(0xA1), loopID(0xB2), loopID(0xC3)
+
+	// A PNG fixture routed through the real attachment helpers, so the capability gate is
+	// exercised on a genuine image classification rather than a synthetic block. The byte
+	// contents are irrelevant: classification is by the .png extension, decided BEFORE any
+	// file read, so the capability gate never inspects them.
+	dir := t.TempDir()
+	png := writeFile(t, dir, "image.png", []byte{0x89, 'P', 'N', 'G'})
+	text := "look @" + png
+
+	tests := []struct {
+		name         string
+		caps         map[uuid.UUID]bool
+		activeLoopID uuid.UUID // the core's reconciled active loop (submit's effective target)
+		useToLoop    bool      // true → submitToLoop(target); false → generic submit
+		target       uuid.UUID // submitToLoop's explicit focused target (ignored for submit)
+		wantAccepted bool
+		wantQueried  uuid.UUID // the loop the capability query must have asked about
+	}{
+		{
+			name:         "focused image-capable builder accepts the image",
+			caps:         map[uuid.UUID]bool{builder: true},
+			useToLoop:    true,
+			target:       builder,
+			wantAccepted: true,
+			wantQueried:  builder,
+		},
+		{
+			name:         "focused text-only planner rejects the same image",
+			caps:         map[uuid.UUID]bool{planner: false, builder: true},
+			useToLoop:    true,
+			target:       planner,
+			wantAccepted: false,
+			wantQueried:  planner,
+		},
+		{
+			name:         "unknown focused loop fails closed",
+			caps:         map[uuid.UUID]bool{builder: true},
+			useToLoop:    true,
+			target:       unknown,
+			wantAccepted: false,
+			wantQueried:  unknown,
+		},
+		{
+			name:         "generic submit queries the reconciled active loop",
+			caps:         map[uuid.UUID]bool{builder: true},
+			activeLoopID: builder,
+			useToLoop:    false,
+			wantAccepted: true,
+			wantQueried:  builder,
+		},
+		{
+			// Zero-baseline boundary: activeLoopID unestablished (pre-first-subscribe),
+			// so effectiveActiveLoopID falls back to the ROOT — the exact window the
+			// effectiveActiveLoopID deviation exists to serve. A root that supports images
+			// must accept, and the query must target the root, not the zero loop.
+			name:         "generic submit pre-baseline falls back to the root loop",
+			caps:         map[uuid.UUID]bool{root: true},
+			activeLoopID: uuid.UUID{}, // zero: no authoritative baseline yet
+			useToLoop:    false,
+			wantAccepted: true,
+			wantQueried:  root,
+		},
+		{
+			name:         "generic submit fails closed on a text-only active loop",
+			caps:         map[uuid.UUID]bool{planner: false},
+			activeLoopID: planner,
+			useToLoop:    false,
+			wantAccepted: false,
+			wantQueried:  planner,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agent := &fakeAgent{rootLoopID: root, acceptsImages: tt.caps}
+			c := newTestCore(agent)
+			c.activeLoopID = tt.activeLoopID
+
+			var (
+				cmd     tea.Cmd
+				present bool
+			)
+			if tt.useToLoop {
+				cmd, present = c.submitToLoop(tt.target, text)
+			} else {
+				cmd, present = c.submit(text)
+			}
+
+			if agent.lastAcceptsImagesLoopID != tt.wantQueried {
+				t.Errorf("queried loop = %v, want %v", agent.lastAcceptsImagesLoopID, tt.wantQueried)
+			}
+
+			if tt.wantAccepted {
+				if present {
+					t.Errorf("present = true, want false (accepted image commits nothing out-of-band)")
+				}
+				drainCmd(t, cmd)
+				if tt.useToLoop && !agent.submitToLoopCalled {
+					t.Error("SubmitToLoop not called for an accepted image")
+				}
+				if !tt.useToLoop && !agent.submitCalled {
+					t.Error("Submit not called for an accepted image")
+				}
+				return
+			}
+
+			if !present {
+				t.Errorf("present = false, want true (a rejected image commits a faint error)")
+			}
+			if cmd != nil {
+				t.Errorf("cmd = non-nil, want nil (a rejected image sends nothing)")
+			}
+			if agent.submitCalled || agent.submitToLoopCalled {
+				t.Error("Submit/SubmitToLoop called on a rejected image, want no send")
+			}
+		})
+	}
+}
+
+// TestSessionCoreTargetImageCapabilityDynamic pins that the capability is re-queried on EACH
+// submission against the LIVE agent: flipping the focused loop from image-capable to text-only
+// between two submissions flips the second result, with no Agent rebuild in between.
+func TestSessionCoreTargetImageCapabilityDynamic(t *testing.T) {
+	t.Parallel()
+
+	root, builder := loopID(0xF0), loopID(0xB2)
+	dir := t.TempDir()
+	png := writeFile(t, dir, "image.png", []byte{0x89, 'P', 'N', 'G'})
+	text := "look @" + png
+
+	agent := &fakeAgent{rootLoopID: root, acceptsImages: map[uuid.UUID]bool{builder: true}}
+	c := newTestCore(agent)
+
+	// First submission: builder is image-capable → accepted and sent.
+	cmd, present := c.submitToLoop(builder, text)
+	if present {
+		t.Fatal("first submit rejected the image, want accepted")
+	}
+	drainCmd(t, cmd)
+	if !agent.submitToLoopCalled {
+		t.Fatal("first submit did not call SubmitToLoop")
+	}
+
+	// Flip the SAME agent to text-only and reset the send recorder.
+	agent.acceptsImages[builder] = false
+	agent.submitToLoopCalled = false
+
+	// Second submission on the SAME core+agent must now reject at the boundary.
+	cmd, present = c.submitToLoop(builder, text)
+	if !present {
+		t.Error("second submit accepted the image after builder went text-only, want rejected")
+	}
+	if cmd != nil {
+		t.Error("second submit produced a command, want nil (nothing sent)")
+	}
+	if agent.submitToLoopCalled {
+		t.Error("SubmitToLoop called on the rejected second submit")
 	}
 }
 

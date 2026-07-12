@@ -34,7 +34,7 @@ func (a *fakeAgent) SubmitToLoop(context.Context, uuid.UUID, []content.Block) (u
 func (a *fakeAgent) RootLoopID() uuid.UUID                   { return a.loopID }
 func (a *fakeAgent) ActiveLoopID() uuid.UUID                 { return a.loopID }
 func (a *fakeAgent) Interrupt(context.Context) (bool, error) { return false, nil }
-func (a *fakeAgent) AcceptsImages() bool                     { return false }
+func (a *fakeAgent) AcceptsImages(uuid.UUID) bool            { return false }
 func (a *fakeAgent) ReplayBacklog(context.Context) ([]event.Event, error) {
 	return nil, nil
 }

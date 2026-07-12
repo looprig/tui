@@ -372,7 +372,12 @@ func (c *sessionCore) mapAction(a uiAction) (tea.Cmd, bool) {
 // error commits a faint error entry (and a plain user row so the message is preserved in
 // scrollback) and sends nothing — the returned bool is true so the shell presents it.
 func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
-	blocks, err := buildBlocks(text, c.agent.AcceptsImages())
+	// Query the capability of the loop this submission actually runs on: agent.Submit
+	// targets the session's ACTIVE loop, so effectiveActiveLoopID (activeLoopID when set,
+	// else the root fallback) is the right image-capability target — and it avoids a
+	// spurious zero-loop fail-closed rejection in the pre-baseline startup window.
+	target := c.effectiveActiveLoopID()
+	blocks, err := buildBlocks(text, c.agent.AcceptsImages(target))
 	if err != nil {
 		// A build error (e.g. an unsupported image on a text-only model) commits the
 		// message as a plain user row FIRST, then the error beneath it — the message is
@@ -393,7 +398,7 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 // route a composer submit to the focused loop while reusing the one buildBlocks +
 // error-commit path — Screen never calls it (its submit stays the root-loop submit).
 func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool) {
-	blocks, err := buildBlocks(text, c.agent.AcceptsImages())
+	blocks, err := buildBlocks(text, c.agent.AcceptsImages(loopID))
 	if err != nil {
 		c.transcript = c.transcript.CommitUserText(text)
 		c.transcript = c.transcript.CommitError(err)
