@@ -16,6 +16,8 @@ require (
 	github.com/looprig/harness v0.5.2
 )
 
+require github.com/looprig/inference v0.1.0 // indirect
+
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.19.0 // indirect
