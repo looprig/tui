@@ -213,6 +213,11 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 	final, runErr := prog.Run()
 	close(done)
 	_ = restoreStdio()
+	if h, ok := final.(tui.HandoffFinalizer); ok {
+		if err := h.FinalizeHandoff(); runErr == nil {
+			runErr = err
+		}
+	}
 
 	// Backstop bounded Close of the *current* agent (which /clear may have swapped),
 	// even on a Run error: prefer the live agent read off the final model through the

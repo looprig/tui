@@ -105,7 +105,8 @@ type Screen struct {
 
 	// quitting latches on ctrl+c so the continuous anim tick chain self-terminates instead of
 	// leaking a reschedule past tea.Quit: handleAnim stops re-arming once it is set.
-	quitting bool
+	quitting        bool
+	quitAfterReopen bool // ctrl+c during /clear waits until the handoff result is consumed
 }
 
 // tickInterval is the status-line timer's cadence: one tick per second while a turn
@@ -579,6 +580,11 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	m.startupPending = false
 	m.startupCommitted = false
 	m.rerender()
+	if m.quitAfterReopen {
+		live := m.agent
+		m.agent = nil
+		return closeAgentThenQuit(live)
+	}
 	return cmd
 }
 
@@ -593,6 +599,13 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
+		if m.status == StatusResetting {
+			// The async handoff owns the old/replacement lifecycle. Defer quitting until its
+			// result is consumed so no replacement can escape the model unclaimed.
+			m.quitting = true
+			m.quitAfterReopen = true
+			return m, nil
+		}
 		// Latch quitting so the continuous anim tick chain self-terminates (handleAnim stops
 		// re-arming) rather than leaking a reschedule past tea.Quit. Then close the subscription
 		// best-effort so it does not leak past quit (a synchronous, idempotent teardown), close

@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -77,6 +78,7 @@ func (p *fakeProgram) Quit() {}
 type fakeHolder struct {
 	agent       tui.Agent
 	terminalErr error
+	finalize    func() error
 }
 
 func (f fakeHolder) Init() tea.Cmd                       { return nil }
@@ -84,13 +86,73 @@ func (f fakeHolder) Update(tea.Msg) (tea.Model, tea.Cmd) { return f, nil }
 func (f fakeHolder) View() tea.View                      { return tea.NewView("") }
 func (f fakeHolder) Agent() tui.Agent                    { return f.agent }
 func (f fakeHolder) TerminalError() error                { return f.terminalErr }
+func (f fakeHolder) FinalizeHandoff() error {
+	if f.finalize != nil {
+		return f.finalize()
+	}
+	return nil
+}
 
 // Compile-time proof fakeHolder satisfies the final-model contracts Run consumes.
 var (
 	_ tea.Model               = fakeHolder{}
 	_ tui.AgentHolder         = fakeHolder{}
 	_ tui.TerminalErrorHolder = fakeHolder{}
+	_ tui.HandoffFinalizer    = fakeHolder{}
 )
+
+// TestRunWaitsForInFlightHandoffBeforeReturn models Program.Run ending while the asynchronous
+// /clear command is still opening a replacement. Run must finalize that ownership transfer
+// before returning to the composition root, which may close the shared store immediately.
+func TestRunWaitsForInFlightHandoffBeforeReturn(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	runDone := make(chan int, 1)
+	swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
+		return &fakeProgram{final: fakeHolder{agent: nil, finalize: func() error {
+			close(entered)
+			<-release
+			return nil
+		}}}
+	})
+
+	go func() {
+		runDone <- Run(context.Background(), func(context.Context) (tui.Agent, error) {
+			return &fakeAgent{loopID: newLoopID(t)}, nil
+		}, Banner{Name: "SWE"})
+	}()
+
+	select {
+	case <-entered:
+	case exit := <-runDone:
+		t.Fatalf("Run returned %d before handoff finalization began", exit)
+	case <-time.After(time.Second):
+		t.Fatal("Run did not begin handoff finalization")
+	}
+	select {
+	case exit := <-runDone:
+		t.Fatalf("Run returned %d while handoff finalization was blocked", exit)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if exit := <-runDone; exit != exitOK {
+		t.Fatalf("Run exit = %d, want %d", exit, exitOK)
+	}
+}
+
+// TestRunReportsHandoffFinalizationError maps signal-cancelled or timed-out handoff
+// finalization onto the existing runtime failure exit.
+func TestRunReportsHandoffFinalizationError(t *testing.T) {
+	handoffErr := context.Canceled
+	swapNewProgram(t, func(_ tea.Model, _ ...tea.ProgramOption) program {
+		return &fakeProgram{final: fakeHolder{agent: nil, finalize: func() error { return handoffErr }}}
+	})
+	if exit := Run(context.Background(), func(context.Context) (tui.Agent, error) {
+		return &fakeAgent{loopID: newLoopID(t)}, nil
+	}, Banner{Name: "SWE"}); exit != exitAgentError {
+		t.Fatalf("Run exit = %d, want %d", exit, exitAgentError)
+	}
+}
 
 type failingWriter struct {
 	err error

@@ -22,6 +22,12 @@ type TerminalErrorHolder interface {
 	TerminalError() error
 }
 
+// HandoffFinalizer is the final-model lifecycle barrier cli.Run crosses before returning to
+// a composition root that may close stores used by an asynchronous /clear opener.
+type HandoffFinalizer interface {
+	FinalizeHandoff() error
+}
+
 // Compile-time assertion that the presentation shell satisfies AgentHolder, so cli/run.go's
 // teardown assertion resolves for the wired shell (Screen). Agent() is a value receiver
 // on the embedded sessionCore, so the zero-value struct literal satisfies the interface — no
@@ -29,4 +35,5 @@ type TerminalErrorHolder interface {
 var (
 	_ AgentHolder         = Screen{}
 	_ TerminalErrorHolder = Screen{}
+	_ HandoffFinalizer    = Screen{}
 )

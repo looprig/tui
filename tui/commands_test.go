@@ -282,7 +282,7 @@ func TestReopenAgent(t *testing.T) {
 			t.Parallel()
 
 			old := &fakeAgent{}
-			msg := reopenAgent(context.Background(), old, tt.open)()
+			msg := reopenAgent(context.Background(), old, tt.open, newReopenHandoff())()
 			res, ok := msg.(reopenResultMsg)
 			if !ok {
 				t.Fatalf("msg = %T, want reopenResultMsg", msg)
@@ -315,7 +315,7 @@ func TestReopenAgentClosesOldBeforeOpeningReplacement(t *testing.T) {
 		return fresh, nil
 	}
 
-	msg := reopenAgent(context.Background(), old, open)()
+	msg := reopenAgent(context.Background(), old, open, newReopenHandoff())()
 	res, ok := msg.(reopenResultMsg)
 	if !ok {
 		t.Fatalf("msg = %T, want reopenResultMsg", msg)
@@ -338,13 +338,17 @@ func TestReopenAgentClosesPartialReplacementOnError(t *testing.T) {
 	t.Parallel()
 
 	old := &fakeAgent{}
-	partial := &fakeAgent{}
+	partialCloseErr := errors.New("partial close failed")
+	partial := &fakeAgent{closeErr: partialCloseErr}
 	openErr := errors.New("partial open failed")
 	open := func(context.Context) (Agent, error) { return partial, openErr }
 
-	res := reopenAgent(context.Background(), old, open)().(reopenResultMsg)
+	res := reopenAgent(context.Background(), old, open, newReopenHandoff())().(reopenResultMsg)
 	if !errors.Is(res.err, openErr) {
 		t.Fatalf("reopen error = %v, want %v", res.err, openErr)
+	}
+	if !errors.Is(res.err, partialCloseErr) {
+		t.Fatalf("reopen error = %v, want partial cleanup error %v", res.err, partialCloseErr)
 	}
 	if partial.closeCalls != 1 {
 		t.Fatalf("partial replacement Close calls = %d, want exactly 1", partial.closeCalls)
@@ -364,7 +368,7 @@ func TestReopenAgentCloseFailureStopsBeforeOpen(t *testing.T) {
 		return &fakeAgent{}, nil
 	}
 
-	res := reopenAgent(context.Background(), old, open)().(reopenResultMsg)
+	res := reopenAgent(context.Background(), old, open, newReopenHandoff())().(reopenResultMsg)
 	if !errors.Is(res.err, closeErr) {
 		t.Fatalf("reopen error = %v, want wrapped %v", res.err, closeErr)
 	}

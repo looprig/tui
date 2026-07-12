@@ -1629,6 +1629,47 @@ func TestModernInterruptAndQuit(t *testing.T) {
 			t.Error("ctrl+c did not close the subscription")
 		}
 	})
+
+	t.Run("ctrl+c during clear waits for handoff then closes replacement", func(t *testing.T) {
+		old := &fakeAgent{rootLoopID: callID(1)}
+		fresh := &fakeAgent{rootLoopID: callID(2)}
+		openEntered := make(chan struct{})
+		releaseOpen := make(chan struct{})
+		m := newScreenSized(t, old, 80, 24)
+		m.openAgent = func(ctx context.Context) (Agent, error) {
+			close(openEntered)
+			select {
+			case <-releaseOpen:
+				return fresh, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		reopen, _ := m.runSlash("/clear")
+		result := make(chan tea.Msg, 1)
+		go func() { result <- reopen() }()
+		<-openEntered
+
+		m, quit := updateScreen(t, m, ctrlKey('c'))
+		if quit != nil {
+			t.Fatal("ctrl+c quit before in-flight /clear result was consumed")
+		}
+		close(releaseOpen)
+		m, quit = updateScreen(t, m, <-result)
+		if quit == nil {
+			t.Fatal("reopen result did not resume deferred quit")
+		}
+		drainCmd(t, quit)
+		if old.closeCalls != 1 {
+			t.Errorf("old Close calls = %d, want 1", old.closeCalls)
+		}
+		if fresh.closeCalls != 1 {
+			t.Errorf("replacement Close calls = %d, want 1", fresh.closeCalls)
+		}
+		if m.Agent() != nil {
+			t.Error("live agent remains after deferred quit")
+		}
+	})
 }
 
 // TestModernQueuedInputWhileRunning pins queued-input parity: submitting while a turn RUNS does

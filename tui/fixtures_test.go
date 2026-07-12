@@ -53,9 +53,11 @@ type fakeAgent struct {
 	interruptCancelled bool
 	interruptErr       error
 
-	closeCalled bool
-	closeCalls  int
-	closeErr    error
+	closeCalled  bool
+	closeCalls   int
+	closeErr     error
+	closeEntered chan struct{}
+	closeRelease <-chan struct{}
 
 	// acceptsImages is the per-loop image capability the widened AcceptsImages(loopID)
 	// query reads: a loop absent from the map (or a nil map) reports false, modeling the
@@ -148,6 +150,13 @@ func (f *fakeAgent) Interrupt(_ context.Context) (bool, error) {
 func (f *fakeAgent) Close(_ context.Context) error {
 	f.closeCalled = true
 	f.closeCalls++
+	if f.closeEntered != nil {
+		close(f.closeEntered)
+		f.closeEntered = nil
+	}
+	if f.closeRelease != nil {
+		<-f.closeRelease
+	}
 	return f.closeErr
 }
 

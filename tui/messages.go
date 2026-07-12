@@ -46,8 +46,9 @@ type interruptResultMsg struct {
 // reopenResultMsg carries the freshly opened replacement agent (nil on err) from a /clear
 // handoff. The old agent has already been closed before this message is produced.
 type reopenResultMsg struct {
-	agent Agent
-	err   error
+	agent   Agent
+	err     error
+	handoff *reopenHandoff
 }
 
 // systemReadyMsg triggers the initial system "session ready" entry at startup.

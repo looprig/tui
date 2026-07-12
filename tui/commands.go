@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -157,24 +158,30 @@ func provideAnswerCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID
 // exclusive resources (notably a workspace root lease) are released before open constructs
 // the replacement. Once close starts there is no rollback: a close/open error is terminal and
 // the Update loop exits instead of pretending the old session remains live.
-func reopenAgent(ctx context.Context, old Agent, open OpenAgent) tea.Cmd {
+func reopenAgent(ctx context.Context, old Agent, open OpenAgent, handoff *reopenHandoff) tea.Cmd {
 	return func() tea.Msg {
+		result := reopenResultMsg{handoff: handoff}
+		defer func() { handoff.complete(result) }()
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), closeTimeout)
 		err := old.Close(closeCtx)
 		closeCancel()
 		if err != nil {
-			return reopenResultMsg{err: fmt.Errorf("close current session: %w", err)}
+			result.err = fmt.Errorf("close current session: %w", err)
+			return result
 		}
 		rctx, cancel := context.WithTimeout(ctx, reopenTimeout)
 		defer cancel()
 		a, err := open(rctx)
 		if err != nil && a != nil {
 			partialCloseCtx, partialCloseCancel := context.WithTimeout(context.Background(), closeTimeout)
-			_ = a.Close(partialCloseCtx)
+			if closeErr := a.Close(partialCloseCtx); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close partial replacement: %w", closeErr))
+			}
 			partialCloseCancel()
 			a = nil
 		}
-		return reopenResultMsg{agent: a, err: err}
+		result.agent, result.err = a, err
+		return result
 	}
 }
 
@@ -187,5 +194,14 @@ func closeAgent(agent Agent) tea.Cmd {
 		defer cancel()
 		_ = agent.Close(ctx) // best-effort; Close is idempotent, nothing actionable at the UI
 		return nil
+	}
+}
+
+// closeAgentThenQuit keeps the deferred-/clear quit ordered inside one command: the
+// replacement is closed before Bubble Tea receives the quit message.
+func closeAgentThenQuit(agent Agent) tea.Cmd {
+	return func() tea.Msg {
+		_ = closeAgent(agent)()
+		return tea.Quit()
 	}
 }

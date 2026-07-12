@@ -109,5 +109,7 @@ func AllLoopsEventFilter() event.EventFilter {
 // OpenAgent constructs a fresh Agent. The composition root binds it to its session factory.
 // On /clear the TUI closes the current Agent before invoking OpenAgent, allowing exclusive
 // resources to transfer to the replacement. A failed open is terminal because the closed
-// current Agent cannot be resumed.
+// current Agent cannot be resumed. Implementations MUST honor context cancellation: runtime
+// shutdown waits a bounded interval for an in-flight handoff, after which it returns fatal and
+// the coordinator closes any replacement that arrives late.
 type OpenAgent func(context.Context) (Agent, error)

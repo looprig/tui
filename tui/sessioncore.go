@@ -48,6 +48,9 @@ type sessionCore struct {
 	// cannot install a replacement. Bubble Tea exits cleanly; cli.Run reads this error from
 	// the final model to return a process failure instead of exit success.
 	terminalErr error
+	// handoff is non-nil while an asynchronous /clear command owns the old/replacement
+	// lifecycle. Agent reports nil in this state so forced runtime teardown cannot double-close.
+	handoff *reopenHandoff
 
 	// activeLoopID is the session's AUTHORITATIVE selected loop — the post-subscription
 	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
@@ -93,11 +96,26 @@ func (c sessionCore) subscribe() tea.Cmd {
 // whichever agent /clear may have swapped in. It is a value receiver so it promotes
 // into every embedding shell's method set — both Screen and Screen satisfy the
 // composition root's agentHolder through this one definition.
-func (c sessionCore) Agent() Agent { return c.agent }
+func (c sessionCore) Agent() Agent {
+	if c.handoff != nil {
+		return nil
+	}
+	return c.agent
+}
 
 // TerminalError reports a fatal transport ownership failure that caused the TUI to quit.
 // Ordinary user-visible command errors remain in the transcript and return nil here.
 func (c sessionCore) TerminalError() error { return c.terminalErr }
+
+// FinalizeHandoff waits boundedly for an in-flight /clear command and closes an unconsumed
+// replacement. It is called by cli.Run before returning to a composition root that may close
+// stores; OpenAgent's cancellation contract makes the bounded wait sufficient in production.
+func (c sessionCore) FinalizeHandoff() error {
+	if c.handoff == nil {
+		return nil
+	}
+	return c.handoff.finalize()
+}
 
 // turnPhase is the ACTIVE-loop turn-status transition applyTurnStatus reports so a
 // presentation shell can react to it (Screen arms the live-tail blink on turnStarted
@@ -300,6 +318,10 @@ func (c *sessionCore) applyInterruptResult(msg interruptResultMsg) bool {
 // c.sub was closed and cleared when /clear began, so a late subClosedMsg from the old stream
 // (nil err — an intentional Close) is a harmless no-op.
 func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
+	if msg.handoff != nil {
+		msg.handoff.claim()
+	}
+	c.handoff = nil
 	if msg.err != nil {
 		c.transcript = c.transcript.CommitError(msg.err)
 		c.agent = nil
@@ -423,7 +445,8 @@ func (c *sessionCore) runSlash(name string) (tea.Cmd, bool) {
 				_ = c.sub.Close()
 				c.sub = nil
 			}
-			return reopenAgent(c.appCtx, c.agent, c.openAgent), false
+			c.handoff = newReopenHandoff()
+			return reopenAgent(c.appCtx, c.agent, c.openAgent, c.handoff), false
 		}
 		return nil, false
 	default:
