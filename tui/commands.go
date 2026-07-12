@@ -197,11 +197,10 @@ func closeAgent(agent Agent) tea.Cmd {
 	}
 }
 
-// closeAgentThenQuit keeps the deferred-/clear quit ordered inside one command: the
-// replacement is closed before Bubble Tea receives the quit message.
-func closeAgentThenQuit(agent Agent) tea.Cmd {
+// closeAgentForQuit runs the deferred-/clear replacement close through its exactly-once
+// coordinator. Update consumes the result before clearing model ownership and quitting.
+func closeAgentForQuit(handoff *agentCloseHandoff) tea.Cmd {
 	return func() tea.Msg {
-		_ = closeAgent(agent)()
-		return tea.Quit()
+		return closeForQuitResultMsg{handoff: handoff, err: handoff.close()}
 	}
 }

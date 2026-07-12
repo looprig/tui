@@ -1670,6 +1670,52 @@ func TestModernInterruptAndQuit(t *testing.T) {
 			t.Error("live agent remains after deferred quit")
 		}
 	})
+
+	t.Run("program exit during deferred replacement close finalizes exactly once", func(t *testing.T) {
+		old := &fakeAgent{rootLoopID: callID(1)}
+		closeEntered := make(chan struct{})
+		releaseClose := make(chan struct{})
+		fresh := &fakeAgent{rootLoopID: callID(2), closeEntered: closeEntered, closeRelease: releaseClose}
+		m := newScreenSized(t, old, 80, 24)
+		m.status = StatusResetting
+		m.quitAfterReopen = true
+
+		m, closeCmd := updateScreen(t, m, reopenResultMsg{agent: fresh})
+		if closeCmd == nil {
+			t.Fatal("deferred quit close command = nil")
+		}
+		closeResult := make(chan tea.Msg, 1)
+		go func() { closeResult <- closeCmd() }()
+		<-closeEntered
+
+		finalized := make(chan error, 1)
+		go func() { finalized <- m.FinalizeHandoff() }()
+		select {
+		case err := <-finalized:
+			t.Fatalf("runtime finalization returned before replacement Close completed: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		close(releaseClose)
+		if err := <-finalized; err != nil {
+			t.Fatalf("FinalizeHandoff: %v", err)
+		}
+		if fresh.closeCalls != 1 {
+			t.Fatalf("replacement Close calls after runtime finalization = %d, want 1", fresh.closeCalls)
+		}
+
+		// The command may complete after Program.Run has already returned; consuming its result
+		// must clear model ownership without attempting a second close.
+		m, quit := updateScreen(t, m, <-closeResult)
+		if quit == nil {
+			t.Fatal("close result did not quit")
+		}
+		if fresh.closeCalls != 1 {
+			t.Fatalf("replacement Close calls after late result = %d, want 1", fresh.closeCalls)
+		}
+		if m.Agent() != nil {
+			t.Error("live agent remains after close result")
+		}
+	})
 }
 
 // TestModernQueuedInputWhileRunning pins queued-input parity: submitting while a turn RUNS does

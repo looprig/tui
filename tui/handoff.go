@@ -23,6 +23,31 @@ type reopenHandoff struct {
 	abandoned bool
 }
 
+// agentCloseHandoff coordinates the final replacement close for ctrl+c deferred through a
+// successful /clear. The Bubble Tea command and cli.Run finalizer may race to invoke close;
+// sync.Once makes the agent close exactly once and both wait for the same result.
+type agentCloseHandoff struct {
+	agent Agent
+	done  chan struct{}
+	once  sync.Once
+	err   error
+}
+
+func newAgentCloseHandoff(agent Agent) *agentCloseHandoff {
+	return &agentCloseHandoff{agent: agent, done: make(chan struct{})}
+}
+
+func (h *agentCloseHandoff) close() error {
+	h.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+		h.err = h.agent.Close(ctx)
+		cancel()
+		close(h.done)
+	})
+	<-h.done
+	return h.err
+}
+
 func newReopenHandoff() *reopenHandoff { return &reopenHandoff{done: make(chan struct{})} }
 
 func (h *reopenHandoff) complete(result reopenResultMsg) {

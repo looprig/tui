@@ -23,7 +23,8 @@ type TerminalErrorHolder interface {
 }
 
 // HandoffFinalizer is the final-model lifecycle barrier cli.Run crosses before returning to
-// a composition root that may close stores used by an asynchronous /clear opener.
+// a composition root that may close stores used by an asynchronous /clear open or deferred
+// replacement close.
 type HandoffFinalizer interface {
 	FinalizeHandoff() error
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -51,6 +52,9 @@ type sessionCore struct {
 	// handoff is non-nil while an asynchronous /clear command owns the old/replacement
 	// lifecycle. Agent reports nil in this state so forced runtime teardown cannot double-close.
 	handoff *reopenHandoff
+	// closing owns the replacement between a deferred ctrl+c and consumption of its close
+	// result. cli.Run finalization and the Bubble Tea command share its exactly-once Close.
+	closing *agentCloseHandoff
 
 	// activeLoopID is the session's AUTHORITATIVE selected loop — the post-subscription
 	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
@@ -97,7 +101,7 @@ func (c sessionCore) subscribe() tea.Cmd {
 // into every embedding shell's method set — both Screen and Screen satisfy the
 // composition root's agentHolder through this one definition.
 func (c sessionCore) Agent() Agent {
-	if c.handoff != nil {
+	if c.handoff != nil || c.closing != nil {
 		return nil
 	}
 	return c.agent
@@ -107,14 +111,18 @@ func (c sessionCore) Agent() Agent {
 // Ordinary user-visible command errors remain in the transcript and return nil here.
 func (c sessionCore) TerminalError() error { return c.terminalErr }
 
-// FinalizeHandoff waits boundedly for an in-flight /clear command and closes an unconsumed
-// replacement. It is called by cli.Run before returning to a composition root that may close
-// stores; OpenAgent's cancellation contract makes the bounded wait sufficient in production.
+// FinalizeHandoff waits boundedly for an in-flight /clear command, closes an unconsumed
+// replacement, and completes any deferred replacement close. cli.Run calls it before returning
+// to a composition root that may close stores; cancellation keeps the open phase bounded.
 func (c sessionCore) FinalizeHandoff() error {
-	if c.handoff == nil {
-		return nil
+	var err error
+	if c.handoff != nil {
+		err = c.handoff.finalize()
 	}
-	return c.handoff.finalize()
+	if c.closing != nil {
+		err = errors.Join(err, c.closing.close())
+	}
+	return err
 }
 
 // turnPhase is the ACTIVE-loop turn-status transition applyTurnStatus reports so a

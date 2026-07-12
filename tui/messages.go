@@ -51,5 +51,12 @@ type reopenResultMsg struct {
 	handoff *reopenHandoff
 }
 
+// closeForQuitResultMsg reports completion of the exactly-once replacement close deferred by
+// ctrl+c during /clear. Update clears model ownership only after consuming this message.
+type closeForQuitResultMsg struct {
+	handoff *agentCloseHandoff
+	err     error
+}
+
 // systemReadyMsg triggers the initial system "session ready" entry at startup.
 type systemReadyMsg struct{}

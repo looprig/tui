@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -251,6 +252,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case reopenResultMsg:
 		cmd := m.handleReopenResult(msg)
+		return m, cmd
+	case closeForQuitResultMsg:
+		cmd := m.handleCloseForQuitResult(msg)
 		return m, cmd
 	case promptResultMsg:
 		cmd := m.handlePromptResult(msg)
@@ -581,11 +585,25 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	m.startupCommitted = false
 	m.rerender()
 	if m.quitAfterReopen {
-		live := m.agent
-		m.agent = nil
-		return closeAgentThenQuit(live)
+		m.closing = newAgentCloseHandoff(m.agent)
+		return closeAgentForQuit(m.closing)
 	}
 	return cmd
+}
+
+// handleCloseForQuitResult consumes the deferred replacement close before clearing ownership.
+// A close failure is terminal and retained for cli.Run; either way the close is complete.
+func (m *Screen) handleCloseForQuitResult(msg closeForQuitResultMsg) tea.Cmd {
+	if msg.handoff != m.closing {
+		return nil
+	}
+	m.closing = nil
+	m.agent = nil
+	if msg.err != nil {
+		m.terminalErr = fmt.Errorf("close replacement on deferred quit: %w", msg.err)
+		m.transcript = m.transcript.CommitError(m.terminalErr)
+	}
+	return tea.Quit
 }
 
 // handleKey routes a key press in ACTUAL execution order: (1) the GLOBAL chords ctrl+c
