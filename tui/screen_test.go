@@ -85,7 +85,7 @@ func TestModernUpdateRoutesEventToTranscriptAndViewport(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	before := len(m.transcript.committed)
@@ -110,7 +110,7 @@ func TestModernRendersLiveSegment(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
@@ -145,7 +145,7 @@ func TestModernViewAltScreenAndMouse(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: callID(1)}
+			agent := &fakeAgent{rootLoopID: callID(1)}
 			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 			if tt.sized {
 				m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -183,7 +183,7 @@ func TestModernWindowSizeSizesViewport(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: callID(1)}
+			agent := &fakeAgent{rootLoopID: callID(1)}
 			m := newScreenSized(t, agent, tt.w, tt.h)
 			if m.width != tt.w || m.height != tt.h {
 				t.Fatalf("dims = %dx%d, want %dx%d", m.width, m.height, tt.w, tt.h)
@@ -205,7 +205,7 @@ func TestModernWheelScrolls(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 8)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
@@ -233,7 +233,7 @@ func TestModernCtrlTExpandsThinking(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
@@ -260,7 +260,7 @@ func TestModernPrintableGoesToComposer(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 10)
 
 	// Give the viewport scrollable content so a mis-routed key would be observable as a scroll.
@@ -286,7 +286,7 @@ func TestModernViewportNavGoesToViewport(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 8)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
@@ -311,7 +311,7 @@ func TestModernViewportNavGoesToViewport(t *testing.T) {
 func TestModernRegionAt(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{primaryLoopID: callID(1)}
+	agent := &fakeAgent{rootLoopID: callID(1)}
 	m := newScreenSized(t, agent, 80, 24)
 	lay := m.layout()
 	if lay.contentH <= 0 {
@@ -355,7 +355,7 @@ func TestModernMouseRoutesByRegion(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "some content here")))
@@ -421,7 +421,7 @@ func TestModernContentClickCollapse(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
 			m = feed(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason\nthird reason", "the answer")))
@@ -441,7 +441,7 @@ func TestModernContentClickCollapse(t *testing.T) {
 func TestModernAgentReachable(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{primaryLoopID: callID(7)}
+	agent := &fakeAgent{rootLoopID: callID(7)}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
 	if m.Agent() != agent {
@@ -453,16 +453,16 @@ func TestModernAgentReachable(t *testing.T) {
 	}
 }
 
-// TestModernSubscribeUsesAllLoopsFilter pins the filter injection: Screen subscribes
-// with the ALL-LOOPS scope (every loop's live Ephemeral stream), not the primary-only
-// default — a focused subagent projection must not starve.
+// TestModernSubscribeUsesAllLoopsFilter pins the subscription scope: Screen subscribes
+// with the ALL-LOOPS scope (every loop's live Ephemeral stream), not a primary-only
+// scope — a focused subagent projection must not starve.
 func TestModernSubscribeUsesAllLoopsFilter(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{primaryLoopID: callID(3)}
+	agent := &fakeAgent{rootLoopID: callID(3)}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
-	_ = m.subscribe()() // drive agent.Subscribe with the injected filter and capture it
+	_ = m.subscribe()() // drive agent.Subscribe and capture the forwarded filter
 
 	if !agent.subFilter.Ephemeral.All {
 		t.Errorf("modern Ephemeral scope = %+v, want All=true", agent.subFilter.Ephemeral)
@@ -501,7 +501,7 @@ func TestModernFocusRendersFocusedProjection(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("primary question")})
@@ -544,7 +544,7 @@ func TestModernCtrlNPCyclesFocusInLoopOrder(t *testing.T) {
 	primary := callID(1)
 	subA := callID(2)
 	subB := callID(3)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	// Establish the creation order [primary, subA, subB] in loops().
@@ -584,7 +584,7 @@ func TestModernSingleLoopCycleIsNoop(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	if got := len(m.transcript.loops()); got != 1 {
@@ -639,7 +639,7 @@ func TestModernBarClickFocuses(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 			m = feed(t, m, loopStarted(subA, "reviewer"))
@@ -676,7 +676,7 @@ func TestModernFocusResetsTailAndClearsSelection(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	// A short-but-nonzero content region (height leaves a few content rows above the taller
 	// modern bottom chrome — status + two gap rows + the padded box + the bar) so content still
 	// scrolls AND a Y:0 click lands in the content region.
@@ -726,7 +726,7 @@ func TestModernFocusIsViewOnly(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	m = feed(t, m, loopStarted(sub, "reviewer"))
@@ -759,7 +759,7 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
@@ -815,7 +815,7 @@ func TestModernInitTriggersRestore(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(0xAA)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 
 	cmd := m.Init()
@@ -888,7 +888,7 @@ func TestModernHandleRestored(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary, backlog: tt.backlog, replayErr: tt.replay}
+			agent := &fakeAgent{rootLoopID: primary, backlog: tt.backlog, replayErr: tt.replay}
 			m := newScreenSized(t, agent, 80, 24)
 			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
 			m = feedRestored(t, m, msg)
@@ -914,7 +914,7 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(0xAA)
-	agent := &fakeAgent{primaryLoopID: primary, backlog: nil}
+	agent := &fakeAgent{rootLoopID: primary, backlog: nil}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
@@ -960,7 +960,7 @@ func TestModernBarGateMarker(t *testing.T) {
 
 	primary := callID(1)
 	subA := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := runningScreen(t, agent)
 
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
@@ -1102,7 +1102,7 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 			m = feed(t, m, loopStarted(subA, "reviewer"))
@@ -1148,7 +1148,7 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 			t.Parallel()
 			primary := callID(1)
 			gateLoop := callID(9)
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := runningScreen(t, agent)
 			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 			m = feed(t, m, loopStarted(gateLoop, "reviewer"))
@@ -1209,7 +1209,7 @@ func TestModernAskUserDispatches(t *testing.T) {
 		t.Parallel()
 		primary := callID(1)
 		gateLoop := callID(9)
-		agent := &fakeAgent{primaryLoopID: primary}
+		agent := &fakeAgent{rootLoopID: primary}
 		m := runningScreen(t, agent)
 		m = feed(t, m, event.UserInputRequested{
 			Header:          hdr(gateLoop),
@@ -1244,7 +1244,7 @@ func TestModernAskUserDispatches(t *testing.T) {
 		t.Parallel()
 		primary := callID(1)
 		gateLoop := callID(9)
-		agent := &fakeAgent{primaryLoopID: primary}
+		agent := &fakeAgent{rootLoopID: primary}
 		m := runningScreen(t, agent)
 		m = feed(t, m, event.UserInputRequested{
 			Header:          hdr(gateLoop),
@@ -1278,8 +1278,8 @@ func TestModernAskUserDispatches(t *testing.T) {
 func TestModernClearReopensAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	old := &fakeAgent{primaryLoopID: callID(1)}
-	fresh := &fakeAgent{primaryLoopID: callID(2)}
+	old := &fakeAgent{rootLoopID: callID(1)}
+	fresh := &fakeAgent{rootLoopID: callID(2)}
 	m := newScreenSized(t, old, 80, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
 	m = feed(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
@@ -1300,8 +1300,8 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	if m.Agent() != fresh {
 		t.Errorf("agent = %p, want fresh %p", m.Agent(), fresh)
 	}
-	if m.focusedLoopID != fresh.PrimaryLoopID() {
-		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.PrimaryLoopID())
+	if m.focusedLoopID != fresh.RootLoopID() {
+		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.RootLoopID())
 	}
 	if len(m.transcript.committed) != 0 {
 		t.Errorf("committed = %d, want 0 (transcript reset)", len(m.transcript.committed))
@@ -1332,7 +1332,7 @@ func TestModernInterruptAndQuit(t *testing.T) {
 
 	t.Run("esc interrupts a running turn", func(t *testing.T) {
 		t.Parallel()
-		agent := &fakeAgent{primaryLoopID: callID(1), interruptCancelled: true}
+		agent := &fakeAgent{rootLoopID: callID(1), interruptCancelled: true}
 		m := runningScreen(t, agent)
 		m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 		if cmd == nil {
@@ -1345,7 +1345,7 @@ func TestModernInterruptAndQuit(t *testing.T) {
 
 	t.Run("ctrl+c closes the subscription and quits", func(t *testing.T) {
 		t.Parallel()
-		agent := &fakeAgent{primaryLoopID: callID(1)}
+		agent := &fakeAgent{rootLoopID: callID(1)}
 		m := runningScreen(t, agent)
 		sub := m.sub
 		m, cmd := updateScreen(t, m, ctrlKey('c'))
@@ -1370,7 +1370,7 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 
 	primary := callID(1)
 	subA := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := runningScreen(t, agent)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	m = feed(t, m, loopStarted(subA, "reviewer"))
@@ -1405,7 +1405,7 @@ func TestModernQueuedInputWhileRunning(t *testing.T) {
 func TestModernImageRejectedAtBoundary(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{primaryLoopID: callID(1), acceptsImage: false}
+	agent := &fakeAgent{rootLoopID: callID(1), acceptsImage: false}
 	m := newScreenSized(t, agent, 80, 24)
 	m.interaction.input.SetValue("@photo.png") // an image on a text-only model → ImageUnsupportedError
 
@@ -1514,7 +1514,7 @@ func TestModernStatusTimerSuffix(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 			status := plainFromStyled(m.statusLine())
@@ -1536,7 +1536,7 @@ func TestModernTickLifecycle(t *testing.T) {
 
 	primary := callID(1)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	if m.ticking {
@@ -1641,7 +1641,7 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 
@@ -1704,7 +1704,7 @@ func TestModernStatusGradientAnimates(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	// A live subagent streaming narration, focused, reads "streaming…" (mirrors
@@ -1743,7 +1743,7 @@ func TestModernAnimTick(t *testing.T) {
 
 	t.Run("advances the frame and re-arms while idle", func(t *testing.T) {
 		t.Parallel()
-		agent := &fakeAgent{primaryLoopID: callID(1)}
+		agent := &fakeAgent{rootLoopID: callID(1)}
 		m := newScreenSized(t, agent, 80, 24) // no turn active — idle still animates
 		if m.anim.frame != 0 {
 			t.Fatalf("fresh anim frame = %d, want 0", m.anim.frame)
@@ -1763,7 +1763,7 @@ func TestModernAnimTick(t *testing.T) {
 
 	t.Run("does not re-render the transcript", func(t *testing.T) {
 		t.Parallel()
-		agent := &fakeAgent{primaryLoopID: callID(1)}
+		agent := &fakeAgent{rootLoopID: callID(1)}
 		m := newScreenSized(t, agent, 80, 24)
 		// Commit an entry (the opening banner) so the viewport has a real buffer to guard.
 		m, _ = updateScreen(t, m, systemReadyMsg{})
@@ -1785,7 +1785,7 @@ func TestModernAnimTick(t *testing.T) {
 
 	t.Run("stops on quit", func(t *testing.T) {
 		t.Parallel()
-		agent := &fakeAgent{primaryLoopID: callID(1)}
+		agent := &fakeAgent{rootLoopID: callID(1)}
 		m := runningScreen(t, agent)
 		m, _ = updateScreen(t, m, ctrlKey('c'))
 		if !m.quitting {
@@ -1865,7 +1865,7 @@ func TestModernRealThinkingDurationFromModelClock(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 
 			// TurnStarted seeds the model clock (m.now = base). The thinking chunks stream with
@@ -1906,7 +1906,7 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 
 	primary := callID(1)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	if !m.collapse.globalCollapsed {
@@ -1951,7 +1951,7 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 	const width = 40
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, width, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("hi there")})
 
@@ -1999,7 +1999,7 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 func TestModernComposerDefaultsToTwoLines(t *testing.T) {
 	t.Parallel()
 
-	agent := &fakeAgent{primaryLoopID: callID(1)}
+	agent := &fakeAgent{rootLoopID: callID(1)}
 	m := newScreenSized(t, agent, 80, 24)
 
 	if got := m.interaction.input.Height(); got != composerMinLines {
@@ -2030,7 +2030,7 @@ func TestModernComposerVerticalPadding(t *testing.T) {
 	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) fill open
 	const accentBar = "▌"               // styles.AccentBar — the composer's left edge glyph
 
-	agent := &fakeAgent{primaryLoopID: callID(1)}
+	agent := &fakeAgent{rootLoopID: callID(1)}
 	m := newScreenSized(t, agent, 80, 24)
 
 	lines := strings.Split(m.interaction.input.View(), "\n")
@@ -2059,7 +2059,7 @@ func TestModernRenderFocusedPrimaryExcludesSubagentLeak(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	// The PRIMARY orchestrator streams its own live narration.
@@ -2168,7 +2168,7 @@ func TestModernBarActiveFilter(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{primaryLoopID: primary}
+			agent := &fakeAgent{rootLoopID: primary}
 			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 			bar := m.bar()
@@ -2195,7 +2195,7 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 
 	primary := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
 	m = feed(t, m, loopStarted(sub, "operator"))
@@ -2252,7 +2252,7 @@ func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
@@ -2350,7 +2350,7 @@ func TestModernRendersQueuedInputs(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
-	agent := &fakeAgent{primaryLoopID: primary}
+	agent := &fakeAgent{rootLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
 
 	// A turn is running on the primary loop (no user row — just an active turn).

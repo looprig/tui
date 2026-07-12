@@ -75,7 +75,7 @@ func TestReplayBacklogSeam(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			agent := &fakeAgent{primaryLoopID: primary, backlog: tt.backlog, replayErr: tt.err}
+			agent := &fakeAgent{rootLoopID: primary, backlog: tt.backlog, replayErr: tt.err}
 			got, err := agent.ReplayBacklog(context.Background())
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ReplayBacklog() err = %v, wantErr %v", err, tt.wantErr)
@@ -118,7 +118,7 @@ func TestRestoreBacklogFoldsOffLoopOnce(t *testing.T) {
 		)
 	}
 
-	agent := &fakeAgent{primaryLoopID: primary, backlog: backlog}
+	agent := &fakeAgent{rootLoopID: primary, backlog: backlog}
 
 	// The fold runs OFF the update loop in restoreBacklogCmd. Executing it once yields a
 	// SINGLE restoredMsg carrying the already-folded reducer state — no per-event message.
@@ -159,7 +159,7 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 		event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}},
 	}
 
-	agent := &fakeAgent{primaryLoopID: primary, backlog: backlog}
+	agent := &fakeAgent{rootLoopID: primary, backlog: backlog}
 
 	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent, primary))
 	if msg.err != nil {

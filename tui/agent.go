@@ -31,9 +31,11 @@ type Agent interface {
 	// Submit (same fire-and-forget InputID/Cause.CommandID contract, human agency); a
 	// loopID equal to the primary loop id behaves exactly like Submit.
 	SubmitToLoop(ctx context.Context, loopID uuid.UUID, blocks []content.Block) (uuid.UUID, error)
-	// PrimaryLoopID is the loop whose live Ephemeral stream the TUI watches; used to
-	// build the DefaultEventFilter for the session subscription.
-	PrimaryLoopID() uuid.UUID
+	// RootLoopID returns the stable root used for transcript attribution.
+	RootLoopID() uuid.UUID
+
+	// ActiveLoopID returns the current default input target.
+	ActiveLoopID() uuid.UUID
 	Interrupt(ctx context.Context) (bool, error)
 	Close(ctx context.Context) error
 	// AcceptsImages reports whether the model accepts image blocks, so buildBlocks
@@ -44,7 +46,7 @@ type Agent interface {
 	// fan-in with the given filter and returns its EventStream. It is the seam the
 	// TUI uses to observe events across the entire session (every loop): a session
 	// subscription spans turns and loops. The caller must Close the returned stream
-	// when done. Use DefaultEventFilter for the single-loop TUI default.
+	// when done. Use AllLoopsEventFilter for the whole-session all-loop delivery.
 	Subscribe(filter event.EventFilter) (EventStream, error)
 
 	// ReplayBacklog returns the RESTORED session's historical Enduring events for a
@@ -77,44 +79,22 @@ type Agent interface {
 	ProvideAnswer(ctx context.Context, loopID, callID uuid.UUID, answer string) error
 }
 
-// DefaultEventFilter is the single-loop TUI's declared interest for a session
-// subscription: live Ephemeral events (TokenDelta + tool lifecycle, i.e.
-// ToolCallStarted/Completed) from the PRIMARY loop only, and Enduring events
-// (StepDone, gates, terminals) from EVERY loop. This is the spec's example filter —
-// a TUI streams the primary loop's live progress (tokens AND tool spinners) while
-// still seeing the finalized output of any subagent loop at StepDone granularity
-// (those appear collapsed-but-present, attributed by Header.LoopID). Session-scoped
-// events (SessionStarted/Active/Idle/Stopped) bypass the loop filter and always
+// AllLoopsEventFilter is the TUI's declared interest for a session subscription: BOTH
+// classes deliver from EVERY loop — Ephemeral is All and Enduring is All. It takes no loop
+// id because neither scope discriminates by loop, and session-scoped events
+// (SessionStarted/Active/Idle/Stopped, ActiveLoopChanged) bypass the loop filter and always
 // deliver.
 //
-// primaryLoopID names the loop whose live firehose the TUI wants; a subagent's
-// tokens AND its tool-lifecycle chatter, excluded by the Ephemeral scope, never even
-// enter the subscriber's egress buffer — by design amendment 1 the subagent's tools
-// surface only via its Enduring StepDone, not a live per-call view.
-func DefaultEventFilter(primaryLoopID uuid.UUID) event.EventFilter {
-	return event.EventFilter{
-		Ephemeral: event.LoopScope{Loops: map[uuid.UUID]struct{}{primaryLoopID: {}}},
-		Enduring:  event.LoopScope{All: true},
-	}
-}
-
-// AllLoopsEventFilter is the MODERN TUI's declared interest for a session
-// subscription: it is DefaultEventFilter widened so BOTH classes deliver from EVERY
-// loop — Ephemeral is All (not primary-only) and Enduring is All (already the default).
-// It takes no primary loop id because neither scope discriminates by loop.
-//
-// Modern mode renders every loop's WHOLE live stream (a user can focus any subagent
-// loop and watch its live tokens stream), so it must actually RECEIVE every loop's live
-// Ephemeral firehose. (The widened scope also DELIVERS each loop's tool-lifecycle events;
-// rendering them as live tool spinners inside a focused subagent projection is deferred —
-// today a projection's live segment shows streamed text/thinking, and tool cards appear at
-// StepDone. See routeProjection.) The primary-only Ephemeral default (DefaultEventFilter)
-// would STARVE the per-loop projections of a subagent's live output, freezing a focused
-// subagent view at Enduring StepDone granularity. The whole-session hub buffer is bounded
-// and has no replay, so modern mode opens ONE all-loops subscription at startup and never
-// re-subscribes; focus is then a pure view filter over already-received, already-projected
-// state. The accepted cost is higher event volume than the primary-only default — modern
-// mode wants exactly that. Scrollback mode keeps DefaultEventFilter unchanged.
+// The TUI renders every loop's WHOLE live stream (a user can focus any subagent loop and
+// watch its live tokens stream), so it must actually RECEIVE every loop's live Ephemeral
+// firehose. (The widened scope also DELIVERS each loop's tool-lifecycle events; rendering
+// them as live tool spinners inside a focused subagent projection is deferred — today a
+// projection's live segment shows streamed text/thinking, and tool cards appear at StepDone.
+// See routeProjection.) A primary-only Ephemeral scope would STARVE the per-loop projections
+// of a subagent's live output, freezing a focused subagent view at Enduring StepDone
+// granularity. The whole-session hub buffer is bounded and has no replay, so the TUI opens
+// ONE all-loops subscription at startup and never re-subscribes; focus is then a pure view
+// filter over already-received, already-projected state.
 func AllLoopsEventFilter() event.EventFilter {
 	return event.EventFilter{
 		Ephemeral: event.LoopScope{All: true},

@@ -1391,7 +1391,7 @@ func TestTranscriptUserRowFromTurnEvent(t *testing.T) {
 // model's primaryLoopID commits NO kindUser row — even with Cause.LoopID == 0
 // and a non-nil Message. This is the subagent-own-turn case: a subagent's INITIAL
 // task arrives at its loop as a command.UserInput, so its emitted TurnStarted has
-// Cause.LoopID == 0 and LoopID == <the subagent loop>; the DefaultEventFilter
+// Cause.LoopID == 0 and LoopID == <the subagent loop>; the AllLoopsEventFilter
 // delivers it (Enduring from All loops), so it reaches ApplyEvent — but it must NOT
 // become a human user row (§5/§6: subagent loops' own turns surface only via
 // StepDone). A turn whose LoopID == primaryLoopID still commits the row.
@@ -3452,8 +3452,7 @@ func loopToolStarted(loopID, id uuid.UUID, name, summary string) event.Event {
 // narration/thinking/tool cards into the orchestrator's live output. The guard folds a
 // TokenDelta / ToolCall* into m.live ONLY when its producing loop is the primary (or the
 // zero loop id); a non-primary Ephemeral event reaches its OWN projection via
-// routeProjection and never touches m.live. Under scrollback's DefaultEventFilter no
-// subagent Ephemeral is delivered, so the guard is a strict no-op there.
+// routeProjection and never touches m.live.
 func TestTranscriptRootFoldGuardedToPrimary(t *testing.T) {
 	t.Parallel()
 
@@ -3498,8 +3497,8 @@ func TestTranscriptRootFoldGuardedToPrimary(t *testing.T) {
 
 // TestTranscriptRootFoldPrimaryUnchanged locks the no-op half of the guard: a PRIMARY
 // (and a zero-LoopID) Ephemeral stream still folds into m.live exactly as before — the
-// guard must not regress the single-loop scrollback path, which only ever delivers
-// primary/zero-loop Ephemeral under DefaultEventFilter.
+// guard must not regress the single-loop path, which only ever delivers primary/zero-loop
+// Ephemeral.
 func TestTranscriptRootFoldPrimaryUnchanged(t *testing.T) {
 	t.Parallel()
 

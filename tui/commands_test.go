@@ -89,19 +89,18 @@ func TestSubNextNilIsNoop(t *testing.T) {
 	}
 }
 
-// TestSubscribeCmd covers the startup subscribe: it forwards the single-loop
-// DefaultEventFilter (built from PrimaryLoopID) and reports the outcome. On success
-// the stream is carried on the msg; on error the err is carried and the stream is nil.
-func TestSubscribeCmd(t *testing.T) {
+// TestSubscribeWith covers the startup subscribe: it forwards the GIVEN filter (the
+// all-loop AllLoopsEventFilter) and reports the outcome. On success the stream is carried
+// on the msg; on error the err is carried and the stream is nil.
+func TestSubscribeWith(t *testing.T) {
 	t.Parallel()
 
-	t.Run("success carries the stream and the default filter", func(t *testing.T) {
+	t.Run("success carries the stream and the all-loops filter", func(t *testing.T) {
 		t.Parallel()
-		primary := callID(0x5A)
 		sub := newFakeSubscription()
-		agent := &fakeAgent{primaryLoopID: primary, subStream: sub}
+		agent := &fakeAgent{rootLoopID: callID(0x5A), subStream: sub}
 
-		msg := subscribeCmd(agent)()
+		msg := subscribeWith(agent, AllLoopsEventFilter())()
 		res, ok := msg.(subscribedMsg)
 		if !ok {
 			t.Fatalf("msg = %T, want subscribedMsg", msg)
@@ -112,9 +111,9 @@ func TestSubscribeCmd(t *testing.T) {
 		if res.sub != sub {
 			t.Errorf("sub = %p, want %p", res.sub, sub)
 		}
-		// The forwarded filter is the single-loop default for the primary loop.
-		if _, ok := agent.subFilter.Ephemeral.Loops[primary]; !ok {
-			t.Errorf("subscribe filter Ephemeral did not scope to the primary loop %v", primary)
+		// The forwarded filter is the all-loop scope: both classes deliver from every loop.
+		if !agent.subFilter.Ephemeral.All {
+			t.Error("subscribe filter Ephemeral.All = false, want true (every loop's live stream)")
 		}
 		if !agent.subFilter.Enduring.All {
 			t.Error("subscribe filter Enduring.All = false, want true (every loop's enduring events)")
@@ -125,7 +124,7 @@ func TestSubscribeCmd(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{subErr: errors.New("no hub")}
 
-		msg := subscribeCmd(agent)()
+		msg := subscribeWith(agent, AllLoopsEventFilter())()
 		res, ok := msg.(subscribedMsg)
 		if !ok {
 			t.Fatalf("msg = %T, want subscribedMsg", msg)

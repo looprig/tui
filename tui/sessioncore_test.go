@@ -16,7 +16,7 @@ import (
 // same agent and a blank banner), the direct seam the sessionCore transport tests
 // drive without a Screen wrapper.
 func newTestCore(agent Agent) sessionCore {
-	return newSessionCore(context.Background(), agent, fakeOpen(agent), AgentBanner{}, defaultLoopFilter)
+	return newSessionCore(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 }
 
 // TestSessionCoreHandleEventRoutesToBothReducers pins the shared transport's core
@@ -121,7 +121,7 @@ func TestSessionCoreApplyTurnStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			c := newTestCore(&fakeAgent{primaryLoopID: primary})
+			c := newTestCore(&fakeAgent{rootLoopID: primary})
 			c.status = tt.startStatus
 
 			phase := c.applyTurnStatus(tt.ev)
@@ -138,7 +138,7 @@ func TestSessionCoreApplyTurnStatus(t *testing.T) {
 // TestSessionCoreReopenOrdering pins the /clear reopen ordering the two shells share:
 // on success the OLD subscription is CLOSED, the agent is swapped to the fresh one, the
 // transcript/interaction/status reset, and the re-subscribe targets the FRESH agent
-// (proving the swap happened before subscribeCmd was built). On error the old agent is
+// (proving the swap happened before the re-subscribe command was built). On error the old agent is
 // kept, an error entry commits, and the shell is told to present it.
 func TestSessionCoreReopenOrdering(t *testing.T) {
 	t.Parallel()
@@ -146,8 +146,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 	t.Run("success closes old sub before swapping and re-subscribes the fresh agent", func(t *testing.T) {
 		t.Parallel()
 
-		old := &fakeAgent{primaryLoopID: callID(0x01)}
-		fresh := &fakeAgent{primaryLoopID: callID(0x02)}
+		old := &fakeAgent{rootLoopID: callID(0x01)}
+		fresh := &fakeAgent{rootLoopID: callID(0x02)}
 		c := newTestCore(old)
 		oldSub := newFakeSubscription()
 		c.sub = oldSub
@@ -168,8 +168,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if c.Agent() != fresh {
 			t.Errorf("agent = %p, want fresh %p", c.Agent(), fresh)
 		}
-		if c.transcript.primaryLoopID != fresh.primaryLoopID {
-			t.Errorf("transcript primaryLoopID = %v, want fresh %v (read after the swap)", c.transcript.primaryLoopID, fresh.primaryLoopID)
+		if c.transcript.primaryLoopID != fresh.rootLoopID {
+			t.Errorf("transcript primaryLoopID = %v, want fresh %v (read after the swap)", c.transcript.primaryLoopID, fresh.rootLoopID)
 		}
 		if len(c.transcript.committed) != 0 {
 			t.Errorf("committed = %d, want 0 (reset)", len(c.transcript.committed))
@@ -186,7 +186,7 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 			t.Error("old agent Close() not called")
 		}
 		if fresh.subscribeCount != 1 {
-			t.Errorf("fresh Subscribe count = %d, want 1 (swap happened before subscribeCmd was built)", fresh.subscribeCount)
+			t.Errorf("fresh Subscribe count = %d, want 1 (swap happened before the re-subscribe command was built)", fresh.subscribeCount)
 		}
 		if old.subscribeCount != 0 {
 			t.Errorf("old Subscribe count = %d, want 0 (re-subscribe must target the fresh agent)", old.subscribeCount)

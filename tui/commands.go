@@ -33,23 +33,13 @@ const closeTimeout = 5 * time.Second
 // is self-healing (the next terminal event clears the prompt queue regardless).
 const promptDispatchTimeout = 2 * time.Second
 
-// subscribeCmd attaches the session-lifetime event subscription with the
-// single-loop DefaultEventFilter and reports the outcome. It is the ONE event
-// source for the whole session — established once at startup (batched into Init)
-// and re-established after a /clear swaps the agent. Unlike the old per-turn
-// reader, the returned stream spans every turn and loop; it closes only on Close,
-// hub-forced loss, or hub teardown, never per turn.
-func subscribeCmd(agent Agent) tea.Cmd {
-	return subscribeWith(agent, DefaultEventFilter(agent.PrimaryLoopID()))
-}
-
-// subscribeWith is subscribeCmd generalized over the filter: it attaches the
-// session-lifetime subscription with the GIVEN event filter and reports the outcome.
-// The filter is INJECTED by the embedding shell via sessionCore.subscribe — the
-// scrollback Screen supplies the primary-only DefaultEventFilter, the modern
-// Screen the AllLoopsEventFilter — so each mode's subscription scope is chosen at
-// the composition seam, not hard-coded in the command. subscribeCmd is the
-// primary-only convenience retained for the tests that assert the single-loop default.
+// subscribeWith attaches the session-lifetime subscription with the GIVEN event filter
+// and reports the outcome. It is the ONE event source for the whole session — established
+// once at startup (batched into Init) and re-established after a /clear swaps the agent;
+// the returned stream spans every turn and loop and closes only on Close, hub-forced loss,
+// or hub teardown, never per turn. The filter is INJECTED by the embedding shell via
+// sessionCore.subscribe (the AllLoopsEventFilter all-loop scope), so the subscription scope
+// is chosen at the composition seam, not hard-coded in the command.
 func subscribeWith(agent Agent, filter event.EventFilter) tea.Cmd {
 	return func() tea.Msg {
 		sub, err := agent.Subscribe(filter)

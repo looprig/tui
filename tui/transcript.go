@@ -369,11 +369,11 @@ type transcriptModel struct {
 	// rows. A turn-start event commits a user row only when its Header.LoopID equals
 	// this id (in addition to Cause.LoopID being zero and a Message present): a
 	// SUBAGENT loop's own initial task also arrives as an untriggered TurnStarted
-	// (Cause.LoopID == 0) carrying a Message, and the DefaultEventFilter delivers
+	// (Cause.LoopID == 0) carrying a Message, and the AllLoopsEventFilter delivers
 	// it (Enduring from every loop), so without this scoping it would bogusly commit as
 	// a human user row. A subagent loop's own turns surface ONLY collapsed via StepDone,
 	// attributed by LoopID (§5/§6) — never as a human user row. It is wired from
-	// Agent.PrimaryLoopID() at construction (see screen.go New / handleReopenResult);
+	// Agent.RootLoopID() at construction (see screen.go New / handleReopenResult);
 	// the zero value matches a zero-LoopID primary turn (the single-loop default).
 	primaryLoopID uuid.UUID
 	// loopAgents maps a loop id to the agent name driving it, learned from each loop's
@@ -490,9 +490,9 @@ type subagentAccumulator struct {
 // PROVISIONAL live render; ToolCallStarted/ToolCallCompleted drive the live tool
 // cards (in the live tail only — they are not committed to scrollback here). These
 // Ephemeral root folds (TokenDelta/ToolCall*) are PRIMARY-ONLY (isPrimaryLoop): under the
-// modern AllLoopsEventFilter every loop's live Ephemeral is delivered, so a subagent's
+// AllLoopsEventFilter every loop's live Ephemeral is delivered, so a subagent's
 // stream must NOT pollute the root live segment — it reaches its own projection via
-// routeProjection. The guard is a no-op under scrollback's primary-only DefaultEventFilter.
+// routeProjection.
 //
 // StepDone is the authoritative commit point and the self-heal anchor: it SNAPS the
 // transcript to the loop's finalized StepDone.Messages (the step's AIMessage + its
@@ -541,9 +541,8 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.rejectInput(ev.Cause.CommandID, ev.Reason)
 	case event.TokenDelta:
 		// PRIMARY-ONLY root fold: a subagent's live TokenDelta (delivered only under the
-		// modern AllLoopsEventFilter) must NEVER touch the root live segment — it reaches
-		// its own projection via routeProjection. A no-op under scrollback's primary-only
-		// DefaultEventFilter (which delivers no subagent Ephemeral).
+		// AllLoopsEventFilter) must NEVER touch the root live segment — it reaches
+		// its own projection via routeProjection.
 		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
 			m.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
 		}
@@ -793,7 +792,7 @@ func (m transcriptModel) canonLoop(id uuid.UUID) uuid.UUID {
 // commits a kindUser row ONLY for a GENUINE PRIMARY-loop user turn — ALL THREE must
 // hold: loopID == m.primaryLoopID (a SUBAGENT loop's OWN initial task also arrives
 // as an untriggered TurnStarted carrying a Message — Cause.LoopID == 0,
-// LoopID == the subagent loop — and the DefaultEventFilter delivers it from every
+// LoopID == the subagent loop — and the AllLoopsEventFilter delivers it from every
 // loop, so without this scoping it would bogusly commit as a human user row);
 // triggeredBy is the zero loop id (a SubagentResult hand-back FOLDS into the PRIMARY
 // loop, so LoopID == primary but Cause.LoopID != 0 — that is a hand-back, not a

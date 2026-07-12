@@ -31,7 +31,8 @@ func (a *fakeAgent) Submit(context.Context, []content.Block) (uuid.UUID, error) 
 func (a *fakeAgent) SubmitToLoop(context.Context, uuid.UUID, []content.Block) (uuid.UUID, error) {
 	return uuid.UUID{}, nil
 }
-func (a *fakeAgent) PrimaryLoopID() uuid.UUID                { return a.loopID }
+func (a *fakeAgent) RootLoopID() uuid.UUID                   { return a.loopID }
+func (a *fakeAgent) ActiveLoopID() uuid.UUID                 { return a.loopID }
 func (a *fakeAgent) Interrupt(context.Context) (bool, error) { return false, nil }
 func (a *fakeAgent) AcceptsImages() bool                     { return false }
 func (a *fakeAgent) ReplayBacklog(context.Context) ([]event.Event, error) {
@@ -399,7 +400,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// newLoopID mints a non-zero loop id for a fake agent's PrimaryLoopID.
+// newLoopID mints a non-zero loop id for a fake agent's RootLoopID.
 func newLoopID(t *testing.T) uuid.UUID {
 	t.Helper()
 	id, err := uuid.New()

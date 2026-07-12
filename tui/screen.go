@@ -21,7 +21,7 @@ import (
 // content streams: it renders the FOCUSED loop's projection into a hand-rolled
 // viewportModel (scroll + drag-select + copy), applies a RETROACTIVE collapse fold
 // (ctrl+t + header-click), draws a bottom active-loops bar and the reused composer, and
-// subscribes to EVERY loop's live stream (allLoopsFilter) so any focused subagent's tokens
+// subscribes to EVERY loop's live stream (AllLoopsEventFilter) so any focused subagent's tokens
 // render live rather than freezing at Enduring StepDone granularity.
 //
 // The core owns event routing exactly as it does for Screen; Screen adds ONLY the
@@ -148,17 +148,17 @@ const loopBarCap = 8
 const liveTailEntryID displayID = 0
 
 // New constructs an idle Screen driving agent, with open as the /clear thunk and
-// banner the agent name/description shown as the opening info notice. It injects
-// allLoopsFilter so the session subscription delivers EVERY loop's live Ephemeral stream
-// (see AllLoopsEventFilter) — the modern mode renders any focused loop's whole live output.
+// banner the agent name/description shown as the opening info notice. The session
+// subscription delivers EVERY loop's live Ephemeral stream (see AllLoopsEventFilter) — the
+// modern mode renders any focused loop's whole live output.
 // The viewport starts pinned to the tail (atTail) so streaming content auto-follows, the
 // collapse state starts folded (dense; ctrl+t expands), and focus starts on the primary loop.
 func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
 	m := Screen{
-		sessionCore:   newSessionCore(ctx, agent, open, banner, allLoopsFilter),
+		sessionCore:   newSessionCore(ctx, agent, open, banner),
 		viewport:      viewportModel{atTail: true},
 		collapse:      newCollapseState(),
-		focusedLoopID: agent.PrimaryLoopID(),
+		focusedLoopID: agent.RootLoopID(),
 		turnStartedAt: make(map[uuid.UUID]time.Time),
 	}
 	m.interaction = styleComposer(m.interaction)
@@ -194,7 +194,7 @@ func styleComposer(in interactionModel) interactionModel {
 
 // Init focuses the composer (starting the cursor blink), schedules the opening banner
 // (systemReadyMsg), schedules the cold-restore repaint, and attaches the session-lifetime
-// ALL-LOOPS subscription (m.subscribe resolves the injected allLoopsFilter). restoreBacklogCmd
+// ALL-LOOPS subscription (m.subscribe uses AllLoopsEventFilter). restoreBacklogCmd
 // folds a RESTORED session's historical Enduring backlog OFF the update loop and repaints it
 // once (restoredMsg) before any live event drives the transcript — reusing the SAME shell-
 // agnostic command Screen batches, so both modes fold restore identically. A NEW session's
@@ -204,7 +204,7 @@ func (m Screen) Init() tea.Cmd {
 	return tea.Batch(
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
-		restoreBacklogCmd(m.appCtx, m.agent, m.agent.PrimaryLoopID()),
+		restoreBacklogCmd(m.appCtx, m.agent, m.agent.RootLoopID()),
 		m.subscribe(),
 		// The anim tick chain runs continuously for the life of the program (started here,
 		// re-armed by handleAnim, stopped only on quit). It shimmers the gradient only for
@@ -567,7 +567,7 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 		return cmd
 	}
 	// Successful reopen: reset the modern presentation to match the fresh session.
-	m.focusedLoopID = m.agent.PrimaryLoopID()
+	m.focusedLoopID = m.agent.RootLoopID()
 	m.collapse = newCollapseState()
 	m.viewport = viewportModel{atTail: true}
 	m.startupPending = false
