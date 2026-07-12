@@ -11,7 +11,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 )
 
-// DisplayProjection is the committed TUI projection of a fold over the primary loop's
+// DisplayProjection is the committed TUI projection of a fold over the root loop's
 // Enduring events — the "displayed" transcript the event-persistence design's headline
 // property compares (displayed == stored == restored). It bundles the two pure reducer
 // states (the scrollback transcript and the pending-gate interaction surface) so the
@@ -25,15 +25,15 @@ type DisplayProjection struct {
 
 // FoldDisplay folds events through the SAME pure reducers the live path and the
 // cold-restore repaint use (transcript.ApplyEvent + interaction.ApplyEvent), starting
-// from the zero reducer state scoped to primaryLoopID, and returns the resulting
+// from the zero reducer state scoped to rootLoopID, and returns the resulting
 // displayed projection. It is the single fold the TUI uses to turn a slice of Enduring
 // events into a repaintable transcript: restoreBacklogCmd folds the restored backlog
 // through it, and the persistence property tests fold both a restored ReplayBacklog and
 // the original live Enduring sequence through it to assert the two displayed views are
 // identical. The fold is order-sensitive and side-effect-free — folding the same events
 // twice yields an EqualTranscript pair.
-func FoldDisplay(events []event.Event, primaryLoopID uuid.UUID) DisplayProjection {
-	tr := transcriptModel{primaryLoopID: primaryLoopID}
+func FoldDisplay(events []event.Event, rootLoopID uuid.UUID) DisplayProjection {
+	tr := transcriptModel{rootLoopID: rootLoopID}
 	in := newInteractionModel()
 	for _, ev := range events {
 		tr = tr.ApplyEvent(ev)
@@ -170,16 +170,16 @@ type restoredMsg struct {
 // returns a restoredMsg carrying a typed *RestoreBacklogError (non-fatal). A new session
 // (empty backlog) folds to an empty transcript, which the Screen installs as a no-op.
 //
-// primaryLoopID scopes the rebuilt transcript's committed user rows to the primary loop
-// exactly as the live path does (transcriptModel.primaryLoopID) — a subagent loop's
+// rootLoopID scopes the rebuilt transcript's committed user rows to the root loop
+// exactly as the live path does (transcriptModel.rootLoopID) — a subagent loop's
 // turns in the backlog surface collapsed via StepDone, never as a human user row.
-func restoreBacklogCmd(ctx context.Context, agent Agent, primaryLoopID uuid.UUID) tea.Cmd {
+func restoreBacklogCmd(ctx context.Context, agent Agent, rootLoopID uuid.UUID) tea.Cmd {
 	return func() tea.Msg {
 		backlog, err := agent.ReplayBacklog(ctx)
 		if err != nil {
 			return restoredMsg{err: &RestoreBacklogError{Cause: err}}
 		}
-		proj := FoldDisplay(backlog, primaryLoopID)
+		proj := FoldDisplay(backlog, rootLoopID)
 		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction}
 	}
 }

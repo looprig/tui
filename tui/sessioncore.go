@@ -67,7 +67,7 @@ func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner Age
 		appCtx:      ctx,
 		banner:      banner,
 		status:      StatusIdle,
-		transcript:  transcriptModel{primaryLoopID: agent.RootLoopID()},
+		transcript:  transcriptModel{rootLoopID: agent.RootLoopID()},
 		interaction: newInteractionModel(),
 		// The AUTHORITATIVE active baseline is NOT established here — it is read from the
 		// agent only once the subscription is live (applySubscribed), so no selection
@@ -140,7 +140,7 @@ func (c *sessionCore) handleEvent(ev event.Event) (tea.Cmd, turnPhase) {
 // (events carry Header.LoopID) and, when the event belongs to the ACTIVE loop, re-derives the
 // displayed status from that loop's freshly folded bit. A background (non-active) loop's turn
 // events fold their bit but leave the displayed status untouched — the active-loop projection,
-// not the primary, owns the status now. Interrupting/Resetting are owned by their own handlers
+// not the root, owns the status now. Interrupting/Resetting are owned by their own handlers
 // and are NOT set here, but the active loop's terminal resolves Interrupting → Idle (completing
 // an in-flight interrupt). It returns the phase transition (relative to the active loop) so a
 // shell can drive its presentation reaction; non-turn and background-loop turn events return
@@ -308,7 +308,7 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	c.agent = msg.agent
 	// Read the NEW agent's root loop id (the swap above happened first) so the fresh
 	// transcript scopes its committed user rows to the replacement loop.
-	c.transcript = transcriptModel{primaryLoopID: c.agent.RootLoopID()}
+	c.transcript = transcriptModel{rootLoopID: c.agent.RootLoopID()}
 	c.interaction = c.interaction.ClearPrompts()
 	c.status = StatusIdle
 	// Drop the old session's authoritative active baseline and per-loop running fold. The
@@ -387,11 +387,11 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 
 // submitToLoop is submit's loop-targeted counterpart: it builds blocks from the composed
 // text exactly as submit does and sends them fire-and-forget to a SPECIFIC loop (the
-// modern viewport's focused loop) via submitToLoopCmd, rather than to the primary. A
+// modern viewport's focused loop) via submitToLoopCmd, rather than to the root. A
 // buildBlocks error commits the SAME plain-user-row-plus-faint-error entries and sends
 // nothing (returning true so the shell presents them). It exists so the modern shell can
 // route a composer submit to the focused loop while reusing the one buildBlocks +
-// error-commit path — Screen never calls it (its submit stays the primary-loop submit).
+// error-commit path — Screen never calls it (its submit stays the root-loop submit).
 func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool) {
 	blocks, err := buildBlocks(text, c.agent.AcceptsImages())
 	if err != nil {

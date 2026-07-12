@@ -90,7 +90,7 @@ func TestFoldDisplay(t *testing.T) {
 	// A different primary loop scope yields a different committed transcript (the
 	// primary-loop user row is scoped), so EqualTranscript must be false.
 	if a.EqualTranscript(FoldDisplay(cleanTurn, other)) {
-		t.Error("EqualTranscript across different primaryLoopID = true, want false")
+		t.Error("EqualTranscript across different rootLoopID = true, want false")
 	}
 }
 

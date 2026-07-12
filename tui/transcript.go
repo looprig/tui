@@ -123,7 +123,7 @@ const (
 	// Verb; renderEntry renders it via renderSubagentLine.
 	kindSubagent
 	// kindHarness is an out-of-band, faint status line the shell (not the model) emits —
-	// e.g. "turn ran for 25s" committed when the primary loop's turn ends. It carries a
+	// e.g. "turn ran for 25s" committed when the root loop's turn ends. It carries a
 	// single TextBlock and renders as a hollow-circle "○ <text>" row in the faint,
 	// out-of-focus status tone (renderHarnessLine), distinct from a leveled kindNotice
 	// (no "▌ " accent bar).
@@ -155,7 +155,7 @@ type promptContext struct {
 	// Agent attributes the prompt to the SUBAGENT that opened it (design §6d Option B:
 	// child gates surface as attributed records). It is the resolved label — the
 	// subagent's agent name, or its loopID short form when the name is unknown/empty.
-	// It is EMPTY for a PRIMARY-loop AskUser (the orchestrator's own question is not
+	// It is EMPTY for a ROOT-loop AskUser (the orchestrator's own question is not
 	// agent-labeled); renderUserInputRecord prepends "<agent>: " only when it is set.
 	Agent string
 }
@@ -343,12 +343,12 @@ type queuedInput struct {
 	shown   bool
 }
 
-// loopProjection is a NON-PRIMARY loop's own committed + live stream, folded from that
+// loopProjection is a NON-ROOT loop's own committed + live stream, folded from that
 // loop's events so modern mode can render any focused loop's whole transcript
-// independently of the primary root fold (design §Per-loop projections). committed holds
+// independently of the root fold (design §Per-loop projections). committed holds
 // the loop's finalized rows; live is its in-progress segment. Its entries draw from the
 // model's SINGLE nextID allocator (never a per-projection counter), so displayIDs are
-// globally unique across every projection and the primary root fold — a later collapse
+// globally unique across every projection and the root fold — a later collapse
 // map keyed by displayID cannot collide.
 type loopProjection struct {
 	committed []entry
@@ -365,7 +365,7 @@ type transcriptModel struct {
 	live      liveSeg
 	queued    []queuedInput
 	nextID    displayID
-	// primaryLoopID is the loop whose GENUINE user turns become committed kindUser
+	// rootLoopID is the loop whose GENUINE user turns become committed kindUser
 	// rows. A turn-start event commits a user row only when its Header.LoopID equals
 	// this id (in addition to Cause.LoopID being zero and a Message present): a
 	// SUBAGENT loop's own initial task also arrives as an untriggered TurnStarted
@@ -374,15 +374,24 @@ type transcriptModel struct {
 	// a human user row. A subagent loop's own turns surface ONLY collapsed via StepDone,
 	// attributed by LoopID (§5/§6) — never as a human user row. It is wired from
 	// Agent.RootLoopID() at construction (see screen.go New / handleReopenResult);
-	// the zero value matches a zero-LoopID primary turn (the single-loop default).
-	primaryLoopID uuid.UUID
-	// loopAgents maps a loop id to the agent name driving it, learned from each loop's
-	// LoopStarted.AgentName (P1) as those Enduring/all-loops events arrive on the TUI's
-	// lifetime subscription. It is the source of a subagent's attribution label (the
-	// "▸ <agent>: done" collapsed StepDone line and an attributed AskUser record). A
-	// loop absent from the map (LoopStarted not yet seen) or mapped to an empty name (a
-	// legacy/no-name loop) falls back to the loopID short form — see agentLabel. It is
-	// cloned on write so the by-value reducer never aliases a prior model's map.
+	// the zero value matches a zero-LoopID root turn (the single-loop default).
+	//
+	// VOCABULARY — the root-alias rule: throughout this reducer a loop is treated as the root
+	// when `loopID == rootLoopID || loopID.IsZero()`. A zero LoopID (session/root-scoped events
+	// and the single-loop default) ALIASES to the root, so isRootLoop, canonLoop, and
+	// projectionFor all fold the zero id onto rootLoopID — the single definition the helpers
+	// implement.
+	rootLoopID uuid.UUID
+	// loopAgents maps a loop id to its PRESENTATION LABEL, learned from each loop's LoopStarted
+	// as those Enduring/all-loops events arrive on the TUI's lifetime subscription. The label is
+	// the loop's DisplayName when non-empty, else its Header.AgentName (see loopStartedLabel) —
+	// stored as an identity.AgentName for pragmatic reuse (no new label type; the value is the
+	// display label, not necessarily the raw agent name). It is the source of a subagent's
+	// attribution label (the "▸ <agent>: done" collapsed StepDone line and an attributed AskUser
+	// record). A loop absent from the map (LoopStarted not yet seen) or mapped to an empty label
+	// (a legacy/no-name loop) falls back to the loopID short form — see agentLabel. It stays
+	// keyed by LoopID and is cloned on write so the by-value reducer never aliases a prior
+	// model's map.
 	loopAgents map[uuid.UUID]identity.AgentName
 	// loopLive maps a loop id to its liveness bit — true between the loop's LoopStarted /
 	// turn activity and its LoopIdle, false once it parks idle (design §Loop lifecycle &
@@ -419,14 +428,14 @@ type transcriptModel struct {
 	// cloned on write (value-copy contract) — appended to a fresh slice, never mutated in
 	// a shared backing array — mirroring the map clone-on-write alongside it.
 	accumOrder []spawnKey
-	// projections holds, per NON-PRIMARY loop id, that loop's own committed+live stream
+	// projections holds, per NON-ROOT loop id, that loop's own committed+live stream
 	// (design §Per-loop projections). It is an ADDITIVE sink: routeProjection folds a
-	// non-primary, non-zero-LoopID event into its projection AFTER the folded root
+	// non-root, non-zero-LoopID event into its projection AFTER the folded root
 	// reconstruction has run unchanged, so scrollback's root view, the user-row rule, and
-	// the subagentAccum machinery are all untouched. The PRIMARY loop is NEVER stored here
+	// the subagentAccum machinery are all untouched. The ROOT loop is NEVER stored here
 	// — projectionFor aliases the existing committed/live root fold for it (no re-fold, no
 	// duplicate id). Projections are ALWAYS folded (routeProjection is unconditional), so
-	// scrollback mode pays a small ADDITIVE write cost per non-primary loop; it simply never
+	// scrollback mode pays a small ADDITIVE write cost per non-root loop; it simply never
 	// READS them (projectionFor is only called by the modern viewport). This avoids a build
 	// flag a later task could forget to set, which would silently empty every focused view.
 	// It is cloned on write
@@ -489,7 +498,7 @@ type subagentAccumulator struct {
 // *content.TextChunk → live.Text and *content.ThinkingChunk → live.Thinking as a
 // PROVISIONAL live render; ToolCallStarted/ToolCallCompleted drive the live tool
 // cards (in the live tail only — they are not committed to scrollback here). These
-// Ephemeral root folds (TokenDelta/ToolCall*) are PRIMARY-ONLY (isPrimaryLoop): under the
+// Ephemeral root folds (TokenDelta/ToolCall*) are ROOT-ONLY (isRootLoop): under the
 // AllLoopsEventFilter every loop's live Ephemeral is delivered, so a subagent's
 // stream must NOT pollute the root live segment — it reaches its own projection via
 // routeProjection.
@@ -507,7 +516,7 @@ type subagentAccumulator struct {
 // PermissionRequested only REMEMBERS the gate (by ToolExecutionID) so the call's committed card
 // can read "Approved …" / "Denied …" once Screen reports the keypress via ResolveGate;
 // it commits nothing (the permission shows on the tool card, not a separate record). This
-// root-gate recording is PRIMARY-ONLY (isPrimaryLoop) — a subagent's gate must not bake into
+// root-gate recording is ROOT-ONLY (isRootLoop) — a subagent's gate must not bake into
 // the root live card; the interaction model still enqueues the prompt for every loop.
 // UserInputRequested (AskUser is not a tool) commits ONLY the prompt record. Neither
 // commits pending prose — the provisional live prose stays live and commits exactly
@@ -521,7 +530,7 @@ type subagentAccumulator struct {
 func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	switch ev := ev.(type) {
 	case event.LoopStarted:
-		m.recordLoopAgent(ev.LoopID, ev.AgentName)
+		m.recordLoopAgent(ev.LoopID, loopStartedLabel(ev))
 		m.recordLoopLive(ev.LoopID, true)
 		m.loopSpawned(ev)
 	case event.LoopIdle:
@@ -540,41 +549,41 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.TurnRejected:
 		m.rejectInput(ev.Cause.CommandID, ev.Reason)
 	case event.TokenDelta:
-		// PRIMARY-ONLY root fold: a subagent's live TokenDelta (delivered only under the
+		// ROOT-ONLY root fold: a subagent's live TokenDelta (delivered only under the
 		// AllLoopsEventFilter) must NEVER touch the root live segment — it reaches
 		// its own projection via routeProjection.
-		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+		if m.isRootLoop(ev.EventHeader().LoopID) {
 			m.live.applyChunk(ev.Chunk, ev.EventHeader().CreatedAt)
 		}
 	case event.ToolCallStarted:
-		// PRIMARY-ONLY root fold (see TokenDelta): a subagent's live tool card must not
-		// enter the root live tail. Non-primary tool cards are a no-op at the root (live
+		// ROOT-ONLY root fold (see TokenDelta): a subagent's live tool card must not
+		// enter the root live tail. Non-root tool cards are a no-op at the root (live
 		// tool spinners inside projections are a deferred follow-up — see routeProjection).
-		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+		if m.isRootLoop(ev.EventHeader().LoopID) {
 			m.toolStarted(ev)
 		}
 	case event.ToolCallCompleted:
-		// PRIMARY-ONLY root fold (see ToolCallStarted): a subagent's completion resolves
-		// no root card. A non-primary completion never matched a root card anyway (its
+		// ROOT-ONLY root fold (see ToolCallStarted): a subagent's completion resolves
+		// no root card. A non-root completion never matched a root card anyway (its
 		// start was skipped), so this is doubly a no-op for subagents.
-		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+		if m.isRootLoop(ev.EventHeader().LoopID) {
 			m.toolCompleted(ev)
 		}
 	case event.StepDone:
 		m.stepDone(ev)
 	case event.PermissionRequested:
-		// PRIMARY-ONLY root-gate recording: only a primary gate bakes into the root live
+		// ROOT-ONLY root-gate recording: only a root gate bakes into the root live
 		// card's "Approved …"/"Denied …" verb. A subagent's gate must not touch m.live —
 		// the interaction model still enqueues the prompt for ALL loops separately
 		// (interaction.ApplyEvent, keyed by LoopID), which drives the bar "!" marker.
-		if m.isPrimaryLoop(ev.EventHeader().LoopID) {
+		if m.isRootLoop(ev.EventHeader().LoopID) {
 			m.permissionRequested(ev)
 		}
 	case event.UserInputRequested:
 		m.userInputRequested(ev)
 	case event.TurnDone:
 		if m.subagentTerminal(ev.LoopID, subDone) {
-			break // a child terminal: record status, never touch the primary live segment
+			break // a child terminal: record status, never touch the root live segment
 		}
 		m.commitLive()
 	case event.TurnInterrupted:
@@ -589,31 +598,46 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.turnFailed(ev)
 	}
 	// ADDITIVE per-loop sink: after the folded root reconstruction above has run
-	// unchanged, ALSO fold a non-primary, non-zero-LoopID event into its own projection
+	// unchanged, ALSO fold a non-root, non-zero-LoopID event into its own projection
 	// so modern mode can render that loop's whole stream (design §Per-loop projections).
-	// It is a no-op for the primary loop and for session-scoped (zero-LoopID) events.
+	// It is a no-op for the root loop and for session-scoped (zero-LoopID) events.
 	m.routeProjection(ev)
 	return m
 }
 
-// isPrimaryLoop reports whether loopID owns the ROOT live segment (m.live): the PRIMARY
-// loop, or the zero loop id treated as primary (the single-loop / session default). It is
+// isRootLoop reports whether loopID owns the ROOT live segment (m.live): the ROOT
+// loop, or the zero loop id treated as root (the single-loop / session default). It is
 // the guard for the root-fold Ephemeral cases (TokenDelta / ToolCall* / permission gate) —
-// only the primary's live Ephemeral may fold into m.live, which projectionFor(primary)
-// aliases and the default primary-focused viewport renders. A NON-primary Ephemeral event
+// only the root's live Ephemeral may fold into m.live, which projectionFor(root)
+// aliases and the default root-focused viewport renders. A NON-root Ephemeral event
 // (a subagent's, delivered only under the modern AllLoopsEventFilter) reaches its own
 // projection via routeProjection and must never touch m.live. It intentionally mirrors
-// projectionFor's primary-alias rule (loopID == primaryLoopID || loopID.IsZero()), so the
-// root fold and the primary projection agree on the single owner of m.live.
-func (m transcriptModel) isPrimaryLoop(loopID uuid.UUID) bool {
-	return loopID == m.primaryLoopID || loopID.IsZero()
+// projectionFor's root-alias rule (loopID == rootLoopID || loopID.IsZero()), so the
+// root fold and the root projection agree on the single owner of m.live.
+func (m transcriptModel) isRootLoop(loopID uuid.UUID) bool {
+	return loopID == m.rootLoopID || loopID.IsZero()
 }
 
-// recordLoopAgent records the agent name driving loopID (the LoopStarted boundary), so
-// a later subagent StepDone/AskUser from that loop can be attributed by name. The map
-// is cloned on write (value-copy contract) so the by-value reducer never aliases a
-// prior model's map. A re-seen loop id overwrites — the name is immutable, so this is
-// idempotent in practice.
+// loopStartedLabel resolves the presentation label a LoopStarted contributes to the loop
+// table: the loop's user-facing DisplayName when non-empty, else the Header.AgentName (older
+// journals carry no DisplayName, so consumers fall back to the agent name — see
+// event.LoopStarted.DisplayName). It is stored as the loop's identity.AgentName label so the
+// existing keyed-by-LoopID map, attribution line, and bar rendering are all unchanged; only the
+// SOURCE of the label shifts from the raw agent name to the display name. A fully empty result
+// (both empty) still resolves to the loopID short form downstream via agentLabel.
+func loopStartedLabel(ev event.LoopStarted) identity.AgentName {
+	if ev.DisplayName != "" {
+		return identity.AgentName(ev.DisplayName)
+	}
+	return ev.AgentName
+}
+
+// recordLoopAgent records loopID's PRESENTATION LABEL (the LoopStarted boundary), so a later
+// subagent StepDone/AskUser from that loop can be attributed. The label is resolved by the
+// caller via loopStartedLabel — the loop's DisplayName when non-empty, else its Header.AgentName
+// — and stored as an identity.AgentName (keyed by LoopID). The map is cloned on write
+// (value-copy contract) so the by-value reducer never aliases a prior model's map. A re-seen
+// loop id overwrites — the label is immutable, so this is idempotent in practice.
 func (m *transcriptModel) recordLoopAgent(loopID uuid.UUID, name identity.AgentName) {
 	next := make(map[uuid.UUID]identity.AgentName, len(m.loopAgents)+1)
 	for k, v := range m.loopAgents {
@@ -759,10 +783,10 @@ func (m transcriptModel) QueuedInputs() [][]content.Block {
 // the blocks of every ready queued affordance (shown AND carrying remembered blocks)
 // whose target loop is loopID. It is the modern viewport's per-loop queue read — a
 // submit while focused on a subagent queues onto THAT loop (Stage 2), so its affordance
-// must show under the subagent's view and NOT leak under the primary. The loop match
-// folds projectionFor's primary alias (the zero id and the primary loop id name the same
-// loop), so a primary-focused view shows both a single-loop-default zero-stamped
-// affordance and a primary-id-stamped one. The returned slice is a fresh copy, so a
+// must show under the subagent's view and NOT leak under the root. The loop match
+// folds projectionFor's root alias (the zero id and the root loop id name the same
+// loop), so a root-focused view shows both a single-loop-default zero-stamped
+// affordance and a root-id-stamped one. The returned slice is a fresh copy, so a
 // caller cannot reach the model's internal queue.
 func (m transcriptModel) QueuedInputsFor(loopID uuid.UUID) [][]content.Block {
 	var out [][]content.Block
@@ -774,34 +798,34 @@ func (m transcriptModel) QueuedInputsFor(loopID uuid.UUID) [][]content.Block {
 	return out
 }
 
-// canonLoop folds the zero loop id onto the primary loop id so the two representations
-// of "the primary loop" compare equal — the same primary-alias rule projectionFor
-// applies (loopID == primaryLoopID || loopID.IsZero()). A non-zero, non-primary id is
+// canonLoop folds the zero loop id onto the root loop id so the two representations
+// of "the root loop" compare equal — the same root-alias rule projectionFor
+// applies (loopID == rootLoopID || loopID.IsZero()). A non-zero, non-root id is
 // returned unchanged. It is the loop-identity equality used to scope a per-loop queue
-// (QueuedInputsFor): a queued affordance the primary loop stamped (or a single-loop
-// default zero stamp) matches a primary-focused view and no other.
+// (QueuedInputsFor): a queued affordance the root loop stamped (or a single-loop
+// default zero stamp) matches a root-focused view and no other.
 func (m transcriptModel) canonLoop(id uuid.UUID) uuid.UUID {
 	if id.IsZero() {
-		return m.primaryLoopID
+		return m.rootLoopID
 	}
 	return id
 }
 
 // startTurnUser commits the authoritative user row for a turn-start event
 // (TurnStarted/TurnFoldedInto) and drops the matching queued affordance. It
-// commits a kindUser row ONLY for a GENUINE PRIMARY-loop user turn — ALL THREE must
-// hold: loopID == m.primaryLoopID (a SUBAGENT loop's OWN initial task also arrives
+// commits a kindUser row ONLY for a GENUINE ROOT-loop user turn — ALL THREE must
+// hold: loopID == m.rootLoopID (a SUBAGENT loop's OWN initial task also arrives
 // as an untriggered TurnStarted carrying a Message — Cause.LoopID == 0,
 // LoopID == the subagent loop — and the AllLoopsEventFilter delivers it from every
 // loop, so without this scoping it would bogusly commit as a human user row);
-// triggeredBy is the zero loop id (a SubagentResult hand-back FOLDS into the PRIMARY
-// loop, so LoopID == primary but Cause.LoopID != 0 — that is a hand-back, not a
+// triggeredBy is the zero loop id (a SubagentResult hand-back FOLDS into the ROOT
+// loop, so LoopID == root but Cause.LoopID != 0 — that is a hand-back, not a
 // human turn); and a Message is present. The row is committed from the event's
 // authoritative blocks, never from remembered submit state, which sidesteps the
 // submit↔event arrival race. The queued affordance for this InputID is always
 // dropped (the real row, if any, supersedes it).
 func (m *transcriptModel) startTurnUser(loopID, triggeredBy, inputID uuid.UUID, msg *content.UserMessage) {
-	if loopID == m.primaryLoopID && triggeredBy.IsZero() && msg != nil {
+	if loopID == m.rootLoopID && triggeredBy.IsZero() && msg != nil {
 		*m = m.CommitUser(msg.Blocks)
 	}
 	m.dropQueued(inputID)
@@ -892,7 +916,7 @@ func (m transcriptModel) CommitSystem(text string) transcriptModel {
 
 // CommitHarness appends one kindHarness status line carrying text with a fresh stable ID,
 // and returns the next model. It is the shell-emitted, out-of-band status primitive (e.g.
-// the "turn ran for 25s" line committed when the primary loop's turn ends). Like a notice it
+// the "turn ran for 25s" line committed when the root loop's turn ends). Like a notice it
 // does NOT touch the live segment; unlike a notice it renders as a faint "○ <text>" row (no
 // leveled accent bar). An empty text still commits one entry.
 func (m transcriptModel) CommitHarness(text string) transcriptModel {
@@ -975,9 +999,9 @@ func cloneGateDescriptions(g map[uuid.UUID]string) map[uuid.UUID]string {
 // userInputRequested is the AskUser prompt-open boundary: it commits the FULL
 // user-input context (Question + ALL Choices) as a kindPromptRecord entry. Choices
 // are copied so a later mutation of the event's slice cannot reach the committed
-// record. A SUBAGENT loop's AskUser (LoopID != primaryLoopID) is attributed: ctx.Agent
+// record. A SUBAGENT loop's AskUser (LoopID != rootLoopID) is attributed: ctx.Agent
 // is set to the loop's label (agentLabel) so the record reads "<agent>: <question>"; a
-// PRIMARY-loop AskUser leaves Agent empty (the orchestrator's own question is not
+// ROOT-loop AskUser leaves Agent empty (the orchestrator's own question is not
 // agent-labeled). It does NOT commit pending live prose: the provisional narration
 // stays in the live segment and is committed exactly once by the step's StepDone
 // (committing it here would duplicate it in append-only scrollback). live is NOT reset
@@ -987,7 +1011,7 @@ func (m *transcriptModel) userInputRequested(ev event.UserInputRequested) {
 	if len(ev.Choices) > 0 {
 		ctx.Choices = append([]string(nil), ev.Choices...)
 	}
-	if ev.LoopID != m.primaryLoopID {
+	if ev.LoopID != m.rootLoopID {
 		ctx.Agent = m.agentLabel(ev.LoopID)
 	}
 	m.commitPrompt(ctx)
@@ -1102,9 +1126,9 @@ func (m *transcriptModel) toolCompleted(ev event.ToolCallCompleted) {
 }
 
 // stepDone is the StepDone commit point. A SUBAGENT loop's step (LoopID !=
-// primaryLoopID) is committed COLLAPSED as a single attributed "▸ <agent>: done" line
+// rootLoopID) is committed COLLAPSED as a single attributed "▸ <agent>: done" line
 // (commitSubagentLine) and returns early — its narration/tool group is deliberately
-// NOT folded into the root transcript (design §6d Option B). For the PRIMARY loop it
+// NOT folded into the root transcript (design §6d Option B). For the ROOT loop it
 // SNAPS the transcript to the loop's finalized step group: it builds each tool-use
 // block's card (reusing the resolved
 // LIVE card — with its redacted Summary, capped preview, and permission Decision — or
@@ -1127,8 +1151,8 @@ func (m *transcriptModel) stepDone(ev event.StepDone) {
 	//     committed later when the orchestrator's StepDone reconciles it (design §1/§3).
 	//   - WITHOUT one (empty/absent ParentToolUseID, e.g. a non-tool spawn): the LEGACY
 	//     collapsed "▸ <agent>: done" line, retained as the fallback (design §6d Option B).
-	// Either way a subagent step returns early; the PRIMARY loop falls through to commit.
-	if ev.LoopID != m.primaryLoopID {
+	// Either way a subagent step returns early; the ROOT loop falls through to commit.
+	if ev.LoopID != m.rootLoopID {
 		if _, ok := m.loopParent[ev.LoopID]; ok {
 			m.subagentStep(ev)
 			return
@@ -1171,7 +1195,7 @@ const subagentVerbDone = "done"
 
 // commitSubagentLine appends ONE collapsed kindSubagent entry attributing a subagent
 // loop's step to its agent (agentLabel: the agent name, or the loopID short form when
-// unknown/empty) with the given verb. It does NOT touch the primary live segment — a
+// unknown/empty) with the given verb. It does NOT touch the root live segment — a
 // subagent's step is out-of-band from the orchestrator's in-progress narration.
 func (m *transcriptModel) commitSubagentLine(loopID uuid.UUID, verb string) {
 	m.nextID++
@@ -1187,7 +1211,7 @@ func (m *transcriptModel) commitSubagentLine(loopID uuid.UUID, verb string) {
 // LoopStarted: a non-empty ParentToolUseID means the loop was spawned by a Subagent
 // call, so it maps child loopID → spawnKey{Cause.LoopID,Cause.TurnID,Cause.StepID,
 // ParentToolUseID} (loopParent) and seeds the detached accumulator with the agent name
-// (subagentAccum). An empty ParentToolUseID (primary/non-tool spawn) is left alone —
+// (subagentAccum). An empty ParentToolUseID (root/non-tool spawn) is left alone —
 // that loop keeps the legacy collapsed "▸ <agent>: done" fallback. Both maps are cloned
 // on write (value-copy contract).
 func (m *transcriptModel) loopSpawned(ev event.LoopStarted) {
@@ -1233,11 +1257,11 @@ func (m *transcriptModel) subagentTask(loopID uuid.UUID, msg *content.UserMessag
 //
 // A DEPTH-2 (or deeper) loop's StepDone is NOT folded as a child card (design §6):
 // instead it increments the DEPTH-1 ancestor card's collapsed Nested counter, found by
-// walking the spawn-parent chain up to the loop whose parent is the primary. A depth-1
-// loop's own StepDone (its spawn parent IS the primary) folds children normally.
+// walking the spawn-parent chain up to the loop whose parent is the root. A depth-1
+// loop's own StepDone (its spawn parent IS the root) folds children normally.
 func (m *transcriptModel) subagentStep(ev event.StepDone) {
 	key := m.loopParent[ev.LoopID]
-	if key.parentLoopID != m.primaryLoopID {
+	if key.parentLoopID != m.rootLoopID {
 		// Depth ≥ 2: collapse into the depth-1 ancestor's Nested counter, never a card.
 		if d1, ok := m.depth1Key(ev.LoopID); ok {
 			m.ensureAccum(d1).nested++
@@ -1254,11 +1278,11 @@ func (m *transcriptModel) subagentStep(ev event.StepDone) {
 }
 
 // depth1Key walks the spawn-parent chain from loopID up to the DEPTH-1 loop — the one
-// whose spawn parent is the primary loop — and returns that loop's spawn key (design
+// whose spawn parent is the root loop — and returns that loop's spawn key (design
 // §6: attribute a deeper StepDone to the right depth-1 card by ancestry, not the spawn
 // id). It follows each loop's recorded spawnKey.parentLoopID; the chain ends at the loop
-// whose parent is m.primaryLoopID. It returns false if the chain breaks before reaching
-// a primary-parented loop (an orphaned/unknown ancestor — fail-safe, no counter bump). A
+// whose parent is m.rootLoopID. It returns false if the chain breaks before reaching
+// a root-parented loop (an orphaned/unknown ancestor — fail-safe, no counter bump). A
 // guard caps the walk at the number of known child loops so a malformed cycle cannot
 // spin.
 func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
@@ -1267,7 +1291,7 @@ func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
 		if !ok {
 			return spawnKey{}, false
 		}
-		if key.parentLoopID == m.primaryLoopID {
+		if key.parentLoopID == m.rootLoopID {
 			return key, true
 		}
 		loopID = key.parentLoopID
@@ -1277,7 +1301,7 @@ func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
 
 // subagentTerminal records a child loop's terminal status on its accumulator and
 // reports whether loopID was a recorded subagent child (so ApplyEvent skips the
-// primary-loop terminal handling for it — a child terminal must never flush the
+// root-loop terminal handling for it — a child terminal must never flush the
 // orchestrator's live segment). A non-child loop returns false (the normal terminal
 // path runs).
 func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) bool {
@@ -1470,10 +1494,10 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCar
 }
 
 // stepToolCard builds the committed ToolCallView for the index-th tool-use block of a
-// PRIMARY-loop step. It prefers the resolved live card at the same position (carrying
+// ROOT-loop step. It prefers the resolved live card at the same position (carrying
 // the redacted Summary and capped preview already shown live); when there is none it
 // falls back to storedStepToolCard (the stored block + matching ToolResultMessage). The
-// live-preference branch is correct ONLY for the primary loop's own step — a child's
+// live-preference branch is correct ONLY for the root loop's own step — a child's
 // nested cards must NOT consult m.live.Calls (it would steal a same-index parent live
 // card in a mixed batch), so child reconstruction uses storedStepToolCard exclusively
 // (design §3a).
@@ -1496,7 +1520,7 @@ func (m *transcriptModel) stepToolCard(use content.ToolUseBlock, results map[str
 // storedStepToolCard builds a ToolCallView PURELY from the stored tool-use block and
 // its paired ToolResultMessage (correlated by use.ID), with NO m.live.Calls access. It
 // is the durable, position-independent card builder: the shared fallback of
-// stepToolCard (the primary loop) AND the EXCLUSIVE builder for a subagent's nested
+// stepToolCard (the root loop) AND the EXCLUSIVE builder for a subagent's nested
 // children (where a same-index parent live card must never leak in — design §3a). The
 // card shows no summary (the redacted summary is not carried in the stored message);
 // its ✓/✗ status comes from ToolResultMessage.IsError, which the stored message
@@ -1566,16 +1590,16 @@ func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 }
 
 // projectionFor returns the committed + live stream to render for loopID. For the
-// PRIMARY loop id — and the zero id (the single-loop / session default) — it is a pure
+// ROOT loop id — and the zero id (the single-loop / session default) — it is a pure
 // ALIAS of the existing root fold (m.committed / m.live): the READ neither builds nor reads
-// m.projections, so the primary view pays ZERO extra read cost, no entry is folded twice,
-// and no displayID is minted twice (design §Per-loop projections, primary-alias rule). (The
-// WRITE side, routeProjection, still folds non-primary loops unconditionally — see the
+// m.projections, so the root view pays ZERO extra read cost, no entry is folded twice,
+// and no displayID is minted twice (design §Per-loop projections, root-alias rule). (The
+// WRITE side, routeProjection, still folds non-root loops unconditionally — see the
 // projections field comment.) Any OTHER loop id returns its loopProjection's committed+live; an
 // absent projection yields an empty pair (a loop seen but not yet producing content). It
 // is the seam Task 7's viewport renders through — projectionFor(focusedLoopID).
 func (m transcriptModel) projectionFor(loopID uuid.UUID) (committed []entry, live liveSeg) {
-	if loopID == m.primaryLoopID || loopID.IsZero() {
+	if loopID == m.rootLoopID || loopID.IsZero() {
 		return m.committed, m.live
 	}
 	if p, ok := m.projections[loopID]; ok {
@@ -1585,18 +1609,18 @@ func (m transcriptModel) projectionFor(loopID uuid.UUID) (committed []entry, liv
 }
 
 // routeProjection is the ADDITIVE per-loop sink (design §Per-loop projections): AFTER the
-// folded root reconstruction has run unchanged, it ALSO folds a NON-PRIMARY, non-zero-
+// folded root reconstruction has run unchanged, it ALSO folds a NON-ROOT, non-zero-
 // LoopID event into that loop's projection so modern mode can render the loop's own
-// committed+live stream. It is a strict no-op for the PRIMARY loop (its stream IS the root
+// committed+live stream. It is a strict no-op for the ROOT loop (its stream IS the root
 // fold, aliased by projectionFor) and for session-scoped zero-LoopID events (handled by
 // the model logic, NEVER a projection — the zero-LoopID guard). Every committed entry
 // draws from the single m.nextID, so displayIDs stay globally unique across all
-// projections and the root fold. It NEVER consults m.live.Calls: a non-primary step's
+// projections and the root fold. It NEVER consults m.live.Calls: a non-root step's
 // tool cards are rebuilt purely via storedStepToolCard (design §3a — consulting the
-// primary live.Calls would steal a same-index primary card).
+// root live.Calls would steal a same-index root card).
 func (m *transcriptModel) routeProjection(ev event.Event) {
 	loopID := ev.EventHeader().LoopID
-	if loopID.IsZero() || loopID == m.primaryLoopID {
+	if loopID.IsZero() || loopID == m.rootLoopID {
 		return
 	}
 	// ensureProjection is called LAZILY, inside the writing cases only, so a loop seen
@@ -1624,7 +1648,7 @@ func (m *transcriptModel) routeProjection(ev event.Event) {
 		// Reset in place only if the projection already exists (lazy — no empty projection
 		// is created for a bare terminal). KNOWN Stage-1 limitation: a subagent interrupted
 		// or failed MID-step shows no terminal tombstone/error in its own focused view
-		// (unlike the primary turnInterrupted/turnFailed commits) — revisit if Task 7
+		// (unlike the root turnInterrupted/turnFailed commits) — revisit if Task 7
 		// surfaces the need; live tool-spinner parity for projections is likewise deferred.
 		if p, ok := m.projections[loopID]; ok {
 			p.live = liveSeg{}
@@ -1632,7 +1656,7 @@ func (m *transcriptModel) routeProjection(ev event.Event) {
 	}
 }
 
-// ensureProjection returns the projection for a NON-PRIMARY loop, creating it (and
+// ensureProjection returns the projection for a NON-ROOT loop, creating it (and
 // cloning the projections map on write) on first sight so a later event folds into the
 // same projection. A freshly created projection is freshly allocated, so the by-value
 // reducer never aliases a prior model's projection; the MAP clone upholds the value-copy
@@ -1654,7 +1678,7 @@ func (m *transcriptModel) ensureProjection(loopID uuid.UUID) *loopProjection {
 // projectionUser commits THIS loop's OWN user/task row into its projection when the
 // turn-start is the loop's own initial task — triggeredBy (Cause.LoopID) is zero (not a
 // hand-back) and a Message is present. Unlike the root startTurnUser (keyed on
-// primaryLoopID), the per-loop rule is scoped to THIS projection's loop: routeProjection
+// rootLoopID), the per-loop rule is scoped to THIS projection's loop: routeProjection
 // already selected the projection by the event's LoopID, so the row is the loop's own
 // task, shown at the head of its focused stream (design §Per-loop projections). It draws
 // from the single m.nextID.
@@ -1666,9 +1690,9 @@ func (m *transcriptModel) projectionUser(p *loopProjection, triggeredBy uuid.UUI
 	p.committed = append(p.committed, entry{ID: m.nextID, Kind: kindUser, Blocks: msg.Blocks})
 }
 
-// projectionStep commits one StepDone into a projection, mirroring the primary stepDone
+// projectionStep commits one StepDone into a projection, mirroring the root stepDone
 // commit but building each tool card via storedStepToolCard EXCLUSIVELY — never
-// stepToolCard, which consults m.live.Calls and would steal a same-index primary live
+// stepToolCard, which consults m.live.Calls and would steal a same-index root live
 // card (design §3a). It commits the step's AIMessage prose/headline (projectionStepAssistant)
 // then each tool card as its own kindTool entry, promoting a lone empty-text card to the
 // bullet exactly as the root fold does, and finally resets the projection's provisional

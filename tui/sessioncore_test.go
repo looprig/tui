@@ -168,8 +168,8 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 		if c.Agent() != fresh {
 			t.Errorf("agent = %p, want fresh %p", c.Agent(), fresh)
 		}
-		if c.transcript.primaryLoopID != fresh.rootLoopID {
-			t.Errorf("transcript primaryLoopID = %v, want fresh %v (read after the swap)", c.transcript.primaryLoopID, fresh.rootLoopID)
+		if c.transcript.rootLoopID != fresh.rootLoopID {
+			t.Errorf("transcript rootLoopID = %v, want fresh %v (read after the swap)", c.transcript.rootLoopID, fresh.rootLoopID)
 		}
 		if len(c.transcript.committed) != 0 {
 			t.Errorf("committed = %d, want 0 (reset)", len(c.transcript.committed))

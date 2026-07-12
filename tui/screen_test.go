@@ -492,10 +492,121 @@ func barSpanOf(segs []barSeg, id uuid.UUID) (barSeg, bool) {
 	return barSeg{}, false
 }
 
+// TestModernNewFocusesActive proves New initializes focusedLoopID from Agent.ActiveLoopID —
+// even when the active loop differs from the root — while the transcript's root attribution
+// stays anchored to Agent.RootLoopID, independent of active/focus.
+func TestModernNewFocusesActive(t *testing.T) {
+	t.Parallel()
+
+	root := callID(1)
+	active := callID(2)
+
+	tests := []struct {
+		name         string
+		rootLoopID   uuid.UUID
+		activeLoopID uuid.UUID
+		wantFocus    uuid.UUID
+	}{
+		{name: "focus initializes from a distinct ActiveLoopID", rootLoopID: root, activeLoopID: active, wantFocus: active},
+		{name: "focus initializes from ActiveLoopID coinciding with root", rootLoopID: root, activeLoopID: root, wantFocus: root},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{rootLoopID: tt.rootLoopID, activeLoopID: tt.activeLoopID}
+			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+			if m.focusedLoopID != tt.wantFocus {
+				t.Errorf("focusedLoopID = %v, want %v (New must focus the active loop, not the root)", m.focusedLoopID, tt.wantFocus)
+			}
+			if m.transcript.rootLoopID != tt.rootLoopID {
+				t.Errorf("transcript rootLoopID = %v, want %v (root attribution is independent of active/focus)", m.transcript.rootLoopID, tt.rootLoopID)
+			}
+		})
+	}
+}
+
+// TestModernReopenFocusesActive proves a successful /clear reopen initializes focus from the
+// REPLACEMENT agent's ActiveLoopID (once), while root attribution follows the replacement's
+// RootLoopID rather than its active loop.
+func TestModernReopenFocusesActive(t *testing.T) {
+	t.Parallel()
+
+	freshRoot := callID(2)
+	freshActive := callID(3)
+
+	tests := []struct {
+		name         string
+		activeLoopID uuid.UUID
+		wantFocus    uuid.UUID
+	}{
+		{name: "reopen focuses a distinct active loop", activeLoopID: freshActive, wantFocus: freshActive},
+		{name: "reopen focuses the root when active coincides", activeLoopID: freshRoot, wantFocus: freshRoot},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			old := &fakeAgent{rootLoopID: callID(1)}
+			fresh := &fakeAgent{rootLoopID: freshRoot, activeLoopID: tt.activeLoopID}
+			m := newScreenSized(t, old, 80, 24)
+
+			m, _ = updateScreen(t, m, reopenResultMsg{agent: fresh})
+			if m.focusedLoopID != tt.wantFocus {
+				t.Errorf("focusedLoopID = %v, want %v (reopen focuses the replacement's active loop)", m.focusedLoopID, tt.wantFocus)
+			}
+			if m.transcript.rootLoopID != freshRoot {
+				t.Errorf("transcript rootLoopID = %v, want fresh root %v", m.transcript.rootLoopID, freshRoot)
+			}
+		})
+	}
+}
+
+// TestModernSelectionDoesNotStealFocus pins that a later ActiveLoopChanged advances the
+// session's active loop (and the bar's active field + status) but leaves focusedLoopID
+// unchanged — focus is set ONLY by New / clear / an explicit user action, never by a selection
+// event. The bar exposes focused, active, and root as three INDEPENDENT fields.
+func TestModernSelectionDoesNotStealFocus(t *testing.T) {
+	t.Parallel()
+
+	root := callID(1)
+	active := callID(2) // the initial baseline AND the initial focus (New focuses active)
+	next := callID(3)   // a later selection
+
+	agent := &fakeAgent{rootLoopID: root, activeLoopID: active}
+	m := newScreenSized(t, agent, 80, 24)
+	// Establish the authoritative active baseline (as applySubscribed would) so the later
+	// ActiveLoopChanged reconciles rather than failing closed.
+	m.sessionCore.activeLoopID = active
+
+	if m.focusedLoopID != active {
+		t.Fatalf("focusedLoopID = %v, want initial active %v", m.focusedLoopID, active)
+	}
+
+	m = feed(t, m, selectionEvent(callID(9), event.ActiveLoopChanged{PreviousLoopID: active, ActiveLoopID: next}))
+
+	if m.focusedLoopID != active {
+		t.Errorf("focusedLoopID = %v, want unchanged %v (a selection must never steal focus)", m.focusedLoopID, active)
+	}
+	if m.activeLoopID != next {
+		t.Errorf("activeLoopID = %v, want advanced to %v", m.activeLoopID, next)
+	}
+	b := m.bar()
+	if b.active != next {
+		t.Errorf("bar active = %v, want %v (bar tracks the reconciled active loop)", b.active, next)
+	}
+	if b.focused != active {
+		t.Errorf("bar focused = %v, want unchanged %v", b.focused, active)
+	}
+	if b.root != root {
+		t.Errorf("bar root = %v, want stable %v", b.root, root)
+	}
+}
+
 // TestModernFocusRendersFocusedProjection is the core focus-swap assertion: with focus on the
-// primary the viewport shows the PRIMARY's stream, and focusing a subagent re-renders THAT
-// loop's projection — the viewport lines equal a fresh renderFocused() of the focused loop and
-// carry the focused loop's content, not the other loop's.
+// root the viewport shows the ROOT's stream, and focusing a subagent re-renders THAT loop's
+// projection — the viewport lines equal a fresh renderFocused() of the focused loop and carry
+// the focused loop's content, not the other loop's.
 func TestModernFocusRendersFocusedProjection(t *testing.T) {
 	t.Parallel()
 

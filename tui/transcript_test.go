@@ -163,6 +163,66 @@ func loopStarted(loopID uuid.UUID, name identity.AgentName) event.Event {
 	}}
 }
 
+// loopStartedNamed builds an event.LoopStarted carrying BOTH the agent name (on the Header)
+// and the loop's user-facing DisplayName, so a test can drive the display-label fold: the
+// stored/displayed label is DisplayName when non-empty, else the Header.AgentName (older
+// journals carry no DisplayName), else the loopID short form.
+func loopStartedNamed(id uuid.UUID, agentName identity.AgentName, displayName string) event.Event {
+	return event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{LoopID: id},
+			AgentName:   agentName,
+		},
+		DisplayName: displayName,
+	}
+}
+
+// TestTranscriptLoopStartedDisplayName proves the LoopStarted display-label fold: DisplayName
+// becomes the stored/displayed label, an empty DisplayName falls back to Header.AgentName (older
+// journals), and both empty falls back to the loopID short form — while the display metadata
+// never changes the loop's identity (the loop table stays keyed by LoopID).
+func TestTranscriptLoopStartedDisplayName(t *testing.T) {
+	t.Parallel()
+
+	root := callID(0xA1)
+	l := callID(0x11)
+
+	tests := []struct {
+		name        string
+		agentName   identity.AgentName
+		displayName string
+		wantLabel   string
+	}{
+		{name: "DisplayName becomes the stored label", agentName: "agent-x", displayName: "Pretty Reviewer", wantLabel: "Pretty Reviewer"},
+		{name: "empty DisplayName falls back to AgentName", agentName: "agent-x", displayName: "", wantLabel: "agent-x"},
+		{name: "both empty falls back to loopID short form", agentName: "", displayName: "", wantLabel: loopShortForm(l)},
+		{name: "DisplayName wins even when AgentName is also set", agentName: "raw-name", displayName: "Nice Name", wantLabel: "Nice Name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{rootLoopID: root}
+			m = m.ApplyEvent(loopStartedNamed(l, tt.agentName, tt.displayName))
+
+			if got := m.agentLabel(l); got != tt.wantLabel {
+				t.Errorf("agentLabel = %q, want %q", got, tt.wantLabel)
+			}
+			li, ok := findLoop(m.loops(), l)
+			if !ok {
+				t.Fatalf("loop %v absent from loops()", l)
+			}
+			if li.Name != tt.wantLabel {
+				t.Errorf("loops() Name = %q, want %q", li.Name, tt.wantLabel)
+			}
+			// Display metadata never changes the loop's identity: the table stays keyed by LoopID.
+			if li.ID != l {
+				t.Errorf("loops() ID = %v, want %v (a display label must not change loop identity)", li.ID, l)
+			}
+		})
+	}
+}
+
 // blockText returns the Text of b if it is a *content.TextBlock, else "".
 func blockText(b content.Block) string {
 	if tb, ok := b.(*content.TextBlock); ok {
@@ -1388,13 +1448,13 @@ func TestTranscriptUserRowFromTurnEvent(t *testing.T) {
 
 // TestTranscriptUserRowRequiresPrimaryLoop locks the loop-scoping half of the
 // user-row decision: a TurnStarted / TurnFoldedInto whose Header.LoopID is NOT the
-// model's primaryLoopID commits NO kindUser row — even with Cause.LoopID == 0
+// model's rootLoopID commits NO kindUser row — even with Cause.LoopID == 0
 // and a non-nil Message. This is the subagent-own-turn case: a subagent's INITIAL
 // task arrives at its loop as a command.UserInput, so its emitted TurnStarted has
 // Cause.LoopID == 0 and LoopID == <the subagent loop>; the AllLoopsEventFilter
 // delivers it (Enduring from All loops), so it reaches ApplyEvent — but it must NOT
 // become a human user row (§5/§6: subagent loops' own turns surface only via
-// StepDone). A turn whose LoopID == primaryLoopID still commits the row.
+// StepDone). A turn whose LoopID == rootLoopID still commits the row.
 func TestTranscriptUserRowRequiresPrimaryLoop(t *testing.T) {
 	primary := callID(0xA1) // the model's primary loop id
 	subLoop := callID(0xC2) // a different (subagent) loop id
@@ -1429,7 +1489,7 @@ func TestTranscriptUserRowRequiresPrimaryLoop(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := transcriptModel{primaryLoopID: primary}
+			m := transcriptModel{rootLoopID: primary}
 			m = m.ApplyEvent(tt.event)
 			if got := kindUserCount(m); got != tt.wantRows {
 				t.Fatalf("kindUser rows = %d, want %d", got, tt.wantRows)
@@ -1516,7 +1576,7 @@ func TestTranscriptQueuedInputsForLoop(t *testing.T) {
 	idB := callID(0x12)
 	idC := callID(0x13)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// Two inputs queued on the primary loop; one on a subagent loop.
 	m = m.RecordSubmit(idA, userBlocks("primary one"))
 	m = m.ApplyEvent(queuedFor(idA, primary))
@@ -1798,7 +1858,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("subagent StepDone renders one labeled line attributed to its agent", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(loopStarted(sub, identity.AgentName("researcher")))
 		m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "I dug through the repo", toolUse("tu-1", "Grep", `{}`)), toolResult("tu-1", "match")))
 
@@ -1824,7 +1884,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("primary StepDone is NOT a subagent line (narration unchanged)", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(loopStarted(primary, identity.AgentName("orchestrator")))
 		m = m.ApplyEvent(stepDoneFrom(primary, aiMessage("", "here is the plan")))
 
@@ -1847,7 +1907,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("subagent with unknown agent name falls back to loopID short form", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		// No LoopStarted seen for sub → agent name unknown.
 		m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "scanned", toolUse("tu-1", "Read", `{}`)), toolResult("tu-1", "ok")))
 
@@ -1874,7 +1934,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("empty agent name on LoopStarted falls back to loopID short form", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(loopStarted(sub, identity.AgentName(""))) // explicit empty name
 		m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "done work")))
 
@@ -1889,7 +1949,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("subagent AskUser prompt record is attributed to its agent", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(loopStarted(sub, identity.AgentName("reviewer")))
 		m = m.ApplyEvent(event.UserInputRequested{
 			Header:   event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
@@ -1917,7 +1977,7 @@ func TestSubagentStepDoneAttribution(t *testing.T) {
 
 	t.Run("primary AskUser prompt record is NOT agent-labeled", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(loopStarted(primary, identity.AgentName("orchestrator")))
 		m = m.ApplyEvent(event.UserInputRequested{
 			Header:   event.Header{Coordinates: identity.Coordinates{LoopID: primary}},
@@ -2033,7 +2093,7 @@ func TestSubagentNestedFromEnduring(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "map repo"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
@@ -2100,7 +2160,7 @@ func TestSubagentMixedBatchSameIndexIsolation(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// Parent's live Bash card at index 0 (as if the orchestrator's own Bash streamed).
 	m = m.ApplyEvent(event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}}})
 	m = m.ApplyEvent(toolStarted(callID(0x11), "Bash", "parent bash"))
@@ -2168,7 +2228,7 @@ func TestSubagentConcurrent(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(subA, "explorer", primary, turn, step, "toolu_A"))
 	m = m.ApplyEvent(childTurnStarted(subA, "task A"))
 	m = m.ApplyEvent(stepDoneFrom(subA,
@@ -2235,7 +2295,7 @@ func TestSubagentEmptyParentToolUseIDFallback(t *testing.T) {
 	primary := callID(0xA1)
 	sub := callID(0xB2)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, callID(0xC3), callID(0xD4), "")) // empty ParentToolUseID
 	m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "scanning", toolUse("g", "Grep", `{}`)), toolResult("g", "hit")))
 
@@ -2278,7 +2338,7 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(subA, "explorer", primary, turn, step, "toolu_A"))
 	m = m.ApplyEvent(childTurnStarted(subA, "task A"))
 	m = m.ApplyEvent(stepDoneFrom(subA, aiMessage("", "", toolUse("a-grep", "Grep", `{}`)), toolResult("a-grep", "A hit")))
@@ -2335,7 +2395,7 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "investigate"))
 	m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "", toolUse("c-grep", "Grep", `{}`)), toolResult("c-grep", "child hit")))
@@ -2411,7 +2471,7 @@ func TestSubagentDepth2Nested(t *testing.T) {
 	d1turn := callID(0xE5)
 	d1step := callID(0xF6)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// depth-1: spawned by the primary via toolu_X.
 	m = m.ApplyEvent(childLoopStarted(depth1, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(depth1, "map repo"))
@@ -2521,7 +2581,7 @@ func TestSubagentRestoreEquivalence(t *testing.T) {
 
 	// LIVE path: fold every event through the pure reducers per-event, exactly as the
 	// live session does, then wrap the resulting reducer state as a DisplayProjection.
-	liveTr := transcriptModel{primaryLoopID: primary}
+	liveTr := transcriptModel{rootLoopID: primary}
 	liveIn := newInteractionModel()
 	for _, ev := range events {
 		liveTr = liveTr.ApplyEvent(ev)
@@ -2594,7 +2654,7 @@ func TestSubagentFailureBeforeChildLoop(t *testing.T) {
 
 	const errText = "error: subagent failed: unknown agent"
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// NO child LoopStarted is ever fed — the spawn failed before a child loop existed.
 	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
 		aiMessage("", "", toolUse("toolu_X", "Subagent", `{"agent":"unknown","message":"go"}`)),
@@ -2657,7 +2717,7 @@ func TestSubagentInterruption(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "investigate"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
@@ -2704,7 +2764,7 @@ func TestPendingSubagentCards(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "map repo"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
@@ -2803,7 +2863,7 @@ func TestPendingSubagentCardsCapsChildren(t *testing.T) {
 }
 
 // TestProjectionForPrimaryAlias locks the primary-alias rule (design §Per-loop
-// projections): projectionFor(primaryLoopID) — and projectionFor(zero) — returns the
+// projections): projectionFor(rootLoopID) — and projectionFor(zero) — returns the
 // EXISTING root fold (m.committed / m.live), NOT a rebuilt copy with new IDs, and the
 // primary loop is NEVER stored in m.projections. So scrollback and the primary view pay
 // zero extra cost, nothing is folded twice, and no displayID is minted twice.
@@ -2811,7 +2871,7 @@ func TestProjectionForPrimaryAlias(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(0xA1)
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// A genuine primary turn: a committed user row + streaming (uncommitted) live prose.
 	m = m.ApplyEvent(event.TurnStarted{
 		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}},
@@ -2862,7 +2922,7 @@ func TestProjectionNonPrimaryBuildsOwnStream(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "map repo"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
@@ -2897,13 +2957,13 @@ func TestProjectionNonPrimaryBuildsOwnStream(t *testing.T) {
 
 // TestProjectionZeroLoopIDGuard locks the zero-LoopID guard: session-scoped and
 // zero-LoopID events are handled by the model logic and are NEVER routed into a
-// projection. primaryLoopID is deliberately NON-zero so the guard being exercised is
+// projection. rootLoopID is deliberately NON-zero so the guard being exercised is
 // the IsZero() check (zero != primary), not the primary-alias branch.
 func TestProjectionZeroLoopIDGuard(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(0xA1)
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 
 	m = m.ApplyEvent(event.SessionIdle{})
 	m = m.ApplyEvent(event.TurnStarted{Message: userMsg("zero-loop turn")}) // zero LoopID
@@ -2927,7 +2987,7 @@ func TestProjectionGloballyUniqueIDs(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// Primary stream: a genuine user row + a finalized assistant step.
 	m = m.ApplyEvent(event.TurnStarted{
 		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}},
@@ -2973,7 +3033,7 @@ func TestProjectionStoredCardNoSteal(t *testing.T) {
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// The primary's OWN live Bash card at index 0 (as if the orchestrator's Bash streamed).
 	m = m.ApplyEvent(event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}}})
 	m = m.ApplyEvent(toolStarted(callID(0x11), "Bash", "parent bash"))
@@ -3098,7 +3158,7 @@ func TestTranscriptLoopLiveness(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := transcriptModel{primaryLoopID: primary}
+			m := transcriptModel{rootLoopID: primary}
 			for _, ev := range tt.events {
 				m = m.ApplyEvent(ev)
 			}
@@ -3124,7 +3184,7 @@ func TestTranscriptLoopsOrderAndNames(t *testing.T) {
 	l2 := callID(0x22)
 	l3 := callID(0x33)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	m = m.ApplyEvent(loopStarted(primary, identity.AgentName("orchestrator")))
 	m = m.ApplyEvent(loopStarted(l1, identity.AgentName("explorer")))
 	m = m.ApplyEvent(loopStarted(l2, identity.AgentName(""))) // empty name → short-form fallback
@@ -3160,7 +3220,7 @@ func TestTranscriptLoopLivenessCloneOnWrite(t *testing.T) {
 	l1 := callID(0x11)
 	l2 := callID(0x22)
 
-	base := transcriptModel{primaryLoopID: primary}
+	base := transcriptModel{rootLoopID: primary}
 	base = base.ApplyEvent(loopStarted(l1, identity.AgentName("explorer")))
 
 	// A copy that appends a new loop must not grow the base's order.
@@ -3321,7 +3381,7 @@ func TestThinkingDurationCapture(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			m := transcriptModel{primaryLoopID: primary}
+			m := transcriptModel{rootLoopID: primary}
 			for _, ev := range tt.events {
 				m = m.ApplyEvent(ev)
 			}
@@ -3353,7 +3413,7 @@ func TestInterruptedProseCarriesThinkDuration(t *testing.T) {
 		}
 	}
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// Thinking streams from +0 to +10s, then the turn is interrupted BEFORE any StepDone:
 	// turnInterrupted → commitProse flushes the provisional thinking with its measured span.
 	for _, ev := range []event.Event{
@@ -3459,7 +3519,7 @@ func TestTranscriptRootFoldGuardedToPrimary(t *testing.T) {
 	primary := callID(0xA1)
 	sub := callID(0xB2)
 
-	m := transcriptModel{primaryLoopID: primary}
+	m := transcriptModel{rootLoopID: primary}
 	// The PRIMARY orchestrator's own turn is streaming live thinking + narration.
 	m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
 	m = m.ApplyEvent(loopThinkingChunk(primary, "PRIMARY plan"))
@@ -3503,18 +3563,18 @@ func TestTranscriptRootFoldPrimaryUnchanged(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		primaryLoopID uuid.UUID
-		loopID        uuid.UUID
+		name       string
+		rootLoopID uuid.UUID
+		loopID     uuid.UUID
 	}{
-		{name: "primary loop folds into m.live", primaryLoopID: callID(0xA1), loopID: callID(0xA1)},
-		{name: "zero loop id (single-loop default) folds into m.live", primaryLoopID: uuid.UUID{}, loopID: uuid.UUID{}},
+		{name: "primary loop folds into m.live", rootLoopID: callID(0xA1), loopID: callID(0xA1)},
+		{name: "zero loop id (single-loop default) folds into m.live", rootLoopID: uuid.UUID{}, loopID: uuid.UUID{}},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := transcriptModel{primaryLoopID: tt.primaryLoopID}
+			m := transcriptModel{rootLoopID: tt.rootLoopID}
 			m = m.ApplyEvent(event.TurnStarted{Header: hdr(tt.loopID)})
 			m = m.ApplyEvent(loopThinkingChunk(tt.loopID, "reason"))
 			m = m.ApplyEvent(loopTextChunk(tt.loopID, "narration"))
@@ -3550,7 +3610,7 @@ func TestTranscriptPermissionGateGuardedToPrimary(t *testing.T) {
 
 	t.Run("primary PermissionRequested records the gate in m.live", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
 		m = m.ApplyEvent(event.PermissionRequested{
 			Header:          hdr(primary),
@@ -3567,7 +3627,7 @@ func TestTranscriptPermissionGateGuardedToPrimary(t *testing.T) {
 
 	t.Run("subagent PermissionRequested does NOT touch m.live gates", func(t *testing.T) {
 		t.Parallel()
-		m := transcriptModel{primaryLoopID: primary}
+		m := transcriptModel{rootLoopID: primary}
 		m = m.ApplyEvent(event.TurnStarted{Header: hdr(primary)})
 		m = m.ApplyEvent(event.PermissionRequested{
 			Header:          hdr(sub),

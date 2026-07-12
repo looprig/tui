@@ -20,7 +20,7 @@ import (
 // fold exactly (transcript.ApplyEvent + interaction.ApplyEvent), which is the point:
 // the repaint is correct iff the background fold equals this fold.
 func foldBacklog(primary uuid.UUID, backlog []event.Event) (transcriptModel, interactionModel) {
-	tr := transcriptModel{primaryLoopID: primary}
+	tr := transcriptModel{rootLoopID: primary}
 	in := newInteractionModel()
 	for _, ev := range backlog {
 		tr = tr.ApplyEvent(ev)
