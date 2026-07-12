@@ -66,6 +66,12 @@ type fakeAgent struct {
 	subFilter      event.EventFilter
 	subscribeCount int
 
+	// subEnqueue is pushed onto subStream at the moment Subscribe is called — modeling
+	// selections/turns that arrive during the subscription SETUP WINDOW (after the stream
+	// exists but before applySubscribed reads the ActiveLoopID baseline), so a test can
+	// prove the baseline/event reconciliation converges on the causally newest active id.
+	subEnqueue []event.Event
+
 	// gate-trio recorders: the configured error is returned, and the last call's
 	// arguments are captured so a test can assert the wrapper forwarded them.
 	approveErr    error
@@ -143,6 +149,14 @@ func (f *fakeAgent) Subscribe(filter event.EventFilter) (EventStream, error) {
 	f.subFilter = filter
 	if f.subErr != nil {
 		return nil, f.subErr
+	}
+	// Deliver the setup-window backlog onto the stream as it is created, so the events
+	// are readable immediately after applySubscribed installs it (the race the baseline
+	// reconciliation must tolerate).
+	if fs, ok := f.subStream.(*fakeSubscription); ok {
+		for _, ev := range f.subEnqueue {
+			fs.push(ev)
+		}
 	}
 	return f.subStream, nil
 }

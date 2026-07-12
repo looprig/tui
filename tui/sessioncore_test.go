@@ -318,10 +318,285 @@ func TestSessionCoreMapAction(t *testing.T) {
 	})
 }
 
+// TestSessionCoreSubscribeBaseline pins the active-selection HANDSHAKE: the authoritative
+// active baseline is read from ActiveLoopID ONLY after the subscription exists
+// (applySubscribed), and each queued ActiveLoopChanged is reconciled causally against that
+// post-subscription baseline — a matching Previous advances it, a selection the baseline
+// already reflects is a no-op, and a stale selection can never regress it.
+func TestSessionCoreSubscribeBaseline(t *testing.T) {
+	t.Parallel()
+
+	root := loopID(0xF0)
+	planner, builder, reviewer := loopID(0xA1), loopID(0xB2), loopID(0xC3)
+	session := loopID(0x99)
+
+	tests := []struct {
+		name       string
+		baseline   uuid.UUID
+		queued     []event.ActiveLoopChanged
+		wantActive uuid.UUID
+		wantStatus Status
+	}{
+		{name: "transition after baseline", baseline: planner, queued: []event.ActiveLoopChanged{{PreviousLoopID: planner, ActiveLoopID: builder}}, wantActive: builder, wantStatus: StatusIdle},
+		{name: "baseline already includes transition", baseline: builder, queued: []event.ActiveLoopChanged{{PreviousLoopID: planner, ActiveLoopID: builder}}, wantActive: builder, wantStatus: StatusIdle},
+		{name: "stale event cannot regress baseline", baseline: reviewer, queued: []event.ActiveLoopChanged{{PreviousLoopID: planner, ActiveLoopID: builder}}, wantActive: reviewer, wantStatus: StatusIdle},
+		{name: "queued chain catches up", baseline: planner, queued: []event.ActiveLoopChanged{{PreviousLoopID: planner, ActiveLoopID: builder}, {PreviousLoopID: builder, ActiveLoopID: reviewer}}, wantActive: reviewer, wantStatus: StatusIdle},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sub := newFakeSubscription()
+			agent := &fakeAgent{rootLoopID: root, activeLoopID: tt.baseline, subStream: sub}
+			c := newTestCore(agent)
+
+			// Drive the real order: run the subscription command, then apply the
+			// subscribedMsg (which reads the baseline only after the stream exists).
+			subscribeCore(t, &c)
+			if c.activeLoopID != tt.baseline {
+				t.Fatalf("post-subscription baseline = %v, want %v", c.activeLoopID, tt.baseline)
+			}
+
+			// Drain the queued selections through handleEvent, exactly as the reader would.
+			for _, ev := range tt.queued {
+				c.handleEvent(selectionEvent(session, ev))
+			}
+
+			if c.activeLoopID != tt.wantActive {
+				t.Errorf("activeLoopID = %v, want %v", c.activeLoopID, tt.wantActive)
+			}
+			if c.status != tt.wantStatus {
+				t.Errorf("status = %d, want %d", c.status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestSessionCoreSelectionFailsClosed pins the fail-closed guard: an ActiveLoopChanged that
+// arrives BEFORE the subscription handshake establishes a baseline (activeLoopID still zero)
+// is IGNORED — without an authority the selection cannot be causally ordered — leaving both
+// the baseline and the displayed status untouched.
+func TestSessionCoreSelectionFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := loopID(0xF0)
+	planner, builder := loopID(0xA1), loopID(0xB2)
+	session := loopID(0x99)
+
+	tests := []struct {
+		name        string
+		startStatus Status
+	}{
+		{name: "idle: selection before baseline is ignored", startStatus: StatusIdle},
+		{name: "running: status is left untouched", startStatus: StatusRunning},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Stream installed, but applySubscribed has NOT run — so activeLoopID is still
+			// zero (no authoritative baseline).
+			c := newTestCore(&fakeAgent{rootLoopID: root})
+			c.sub = newFakeSubscription()
+			c.status = tt.startStatus
+
+			c.handleEvent(selectionEvent(session, event.ActiveLoopChanged{PreviousLoopID: planner, ActiveLoopID: builder}))
+
+			if !c.activeLoopID.IsZero() {
+				t.Errorf("activeLoopID = %v, want zero (fail closed: no baseline)", c.activeLoopID)
+			}
+			if c.status != tt.startStatus {
+				t.Errorf("status = %d, want %d (untouched)", c.status, tt.startStatus)
+			}
+		})
+	}
+}
+
+// TestSessionCoreReopenSetupWindow pins the /clear reopen setup-window race: the replacement
+// subscription queues a selection DURING Subscribe (before applySubscribed reads the
+// baseline), and the reconciliation converges on the causally newest active id whether or
+// not the baseline read already caught the selection.
+func TestSessionCoreReopenSetupWindow(t *testing.T) {
+	t.Parallel()
+
+	root := loopID(0xF0)
+	planner, builder := loopID(0xA1), loopID(0xB2)
+	session := loopID(0x99)
+
+	tests := []struct {
+		name       string
+		baseline   uuid.UUID // fresh agent's ActiveLoopID at the moment applySubscribed reads it
+		wantActive uuid.UUID
+	}{
+		{name: "baseline read missed the setup-window selection", baseline: planner, wantActive: builder},
+		{name: "baseline read already caught the setup-window selection", baseline: builder, wantActive: builder},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			old := &fakeAgent{rootLoopID: root, subStream: newFakeSubscription()}
+			c := newTestCore(old)
+			c.sub = old.subStream
+			c.status = StatusResetting
+
+			freshSub := newFakeSubscription()
+			fresh := &fakeAgent{
+				rootLoopID:   root,
+				activeLoopID: tt.baseline,
+				subStream:    freshSub,
+				subEnqueue:   []event.Event{selectionEvent(session, event.ActiveLoopChanged{PreviousLoopID: planner, ActiveLoopID: builder})},
+			}
+
+			// Reopen swaps in the fresh agent and clears the baseline; the batch it returns
+			// re-subscribes. Drive the fresh subscribe leg directly so the setup-window
+			// enqueue (pushed inside Subscribe) precedes applySubscribed's baseline read.
+			if _, present := c.applyReopenResult(reopenResultMsg{agent: fresh}); present {
+				t.Fatal("reopen reported an error, want success")
+			}
+			if !c.activeLoopID.IsZero() {
+				t.Fatalf("activeLoopID = %v after reopen, want zero (baseline re-read on the fresh subscribe)", c.activeLoopID)
+			}
+
+			subscribeCore(t, &c)
+			drainStream(t, &c, freshSub)
+
+			if c.activeLoopID != tt.wantActive {
+				t.Errorf("activeLoopID = %v, want %v (causally newest)", c.activeLoopID, tt.wantActive)
+			}
+		})
+	}
+}
+
+// TestSessionCoreActiveRunningStatus pins the per-loop running fold: EVERY loop's turn
+// events fold its running bit, but the DISPLAYED status follows the active loop — so a
+// selection or the active loop's own terminal moves the status, while a background loop's
+// turn events fold silently.
+func TestSessionCoreActiveRunningStatus(t *testing.T) {
+	t.Parallel()
+
+	root := loopID(0xF0)
+	planner, builder := loopID(0xA1), loopID(0xB2)
+	session := loopID(0x99)
+
+	sel := func(prev, next uuid.UUID) event.Event {
+		return selectionEvent(session, event.ActiveLoopChanged{PreviousLoopID: prev, ActiveLoopID: next})
+	}
+
+	tests := []struct {
+		name        string
+		baseline    uuid.UUID
+		events      []event.Event
+		wantActive  uuid.UUID
+		wantStatus  Status
+		wantRunning map[uuid.UUID]bool
+	}{
+		{
+			name:        "active loop start then select an idle loop yields idle",
+			baseline:    planner,
+			events:      []event.Event{event.TurnStarted{Header: hdr(planner)}, sel(planner, builder)},
+			wantActive:  builder,
+			wantStatus:  StatusIdle,
+			wantRunning: map[uuid.UUID]bool{planner: true, builder: false},
+		},
+		{
+			name:        "background loop already running then select it yields running",
+			baseline:    planner,
+			events:      []event.Event{event.TurnStarted{Header: hdr(builder)}, sel(planner, builder)},
+			wantActive:  builder,
+			wantStatus:  StatusRunning,
+			wantRunning: map[uuid.UUID]bool{planner: false, builder: true},
+		},
+		{
+			name:        "late terminal on a background loop leaves the active loop running",
+			baseline:    planner,
+			events:      []event.Event{event.TurnStarted{Header: hdr(builder)}, sel(planner, builder), event.TurnDone{Header: hdr(planner)}},
+			wantActive:  builder,
+			wantStatus:  StatusRunning,
+			wantRunning: map[uuid.UUID]bool{planner: false, builder: true},
+		},
+		{
+			name:        "active loop terminal yields idle",
+			baseline:    builder,
+			events:      []event.Event{event.TurnStarted{Header: hdr(builder)}, event.TurnDone{Header: hdr(builder)}},
+			wantActive:  builder,
+			wantStatus:  StatusIdle,
+			wantRunning: map[uuid.UUID]bool{builder: false},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sub := newFakeSubscription()
+			agent := &fakeAgent{rootLoopID: root, activeLoopID: tt.baseline, subStream: sub}
+			c := newTestCore(agent)
+			subscribeCore(t, &c)
+
+			for _, ev := range tt.events {
+				c.handleEvent(ev)
+			}
+
+			if c.activeLoopID != tt.wantActive {
+				t.Errorf("activeLoopID = %v, want %v", c.activeLoopID, tt.wantActive)
+			}
+			if c.status != tt.wantStatus {
+				t.Errorf("status = %d, want %d", c.status, tt.wantStatus)
+			}
+			for id, want := range tt.wantRunning {
+				if got := c.loopRunning[id]; got != want {
+					t.Errorf("loopRunning[%v] = %v, want %v", id, got, want)
+				}
+			}
+		})
+	}
+}
+
 // hdr builds an event Header carrying only a loop id, the field the transport routing
 // (turn status, primary vs subagent) keys on.
 func hdr(loopID uuid.UUID) event.Header {
 	return event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}
+}
+
+// selectionEvent stamps an ActiveLoopChanged with a valid session header (the field the
+// session-scoped selection transition carries), leaving its Previous/Active loop ids intact.
+func selectionEvent(sessionID uuid.UUID, ev event.ActiveLoopChanged) event.ActiveLoopChanged {
+	ev.Header = event.Header{Coordinates: identity.Coordinates{SessionID: sessionID}}
+	return ev
+}
+
+// subscribeCore drives the subscription handshake on c: it runs the subscribe command,
+// asserts the yielded subscribedMsg, and applies it (installing the stream and reading the
+// authoritative active baseline). It is the shared setup the handshake tests reuse.
+func subscribeCore(t *testing.T, c *sessionCore) {
+	t.Helper()
+	msg, ok := c.subscribe()().(subscribedMsg)
+	if !ok {
+		t.Fatalf("subscribe cmd yielded %T, want subscribedMsg", msg)
+	}
+	c.applySubscribed(msg)
+}
+
+// drainStream feeds every buffered delivery on s through the core's handleEvent, exactly as
+// the continuous reader would drain the setup-window backlog after the stream is installed.
+func drainStream(t *testing.T, c *sessionCore, s *fakeSubscription) {
+	t.Helper()
+	for {
+		select {
+		case d := <-s.Events():
+			c.handleEvent(d.Event)
+		default:
+			return
+		}
+	}
 }
 
 // feedPrompt enqueues one pending prompt into the core's interaction surface so a test

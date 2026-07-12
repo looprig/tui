@@ -13,7 +13,7 @@ import (
 // scrollback-first Screen and the modern viewport Screen. It owns everything an
 // event router must own — the agent wiring, the ONE session-lifetime subscription and
 // its lifecycle (stale/nil guards), the dispatch of each event into the transcript +
-// interaction reducers, the primary-loop turn status, the /clear reopen ordering, and
+// interaction reducers, the active-loop turn status, the /clear reopen ordering, and
 // the submit/interrupt/gate command wiring — but NO presentation. Extracting it means
 // event routing cannot drift between the two modes: a new event type handled here is
 // handled by both shells at once.
@@ -23,8 +23,10 @@ import (
 // turn and loop and never EOFs per turn. Submissions are fire-and-forget (submitCmd →
 // agent.Submit); the LOOP owns queueing, so the core keeps no queue. User rows are
 // EVENT-DRIVEN (committed by the transcript reducer from the loop's TurnStarted/
-// TurnFoldedInto Message), never optimistically at submit. The primary loop's turn
-// terminals drive the turn status (for the PRIMARY loop only).
+// TurnFoldedInto Message), never optimistically at submit. EVERY loop's turn events fold a
+// per-loop running bit, but the displayed turn status follows only the ACTIVE loop's bit —
+// the session's selected loop, whose baseline is read at subscribe and advanced by each
+// ActiveLoopChanged; a background loop's turn events fold silently.
 //
 // Presentation stays in the embedding shell: the core's methods MUTATE the shared
 // transport state and return the TRANSPORT command (re-arm, submit, reopen, …) plus,
@@ -42,6 +44,17 @@ type sessionCore struct {
 
 	status Status      // Idle | Running | Interrupting | Resetting
 	sub    EventStream // the session-lifetime event subscription; nil until subscribed
+
+	// activeLoopID is the session's AUTHORITATIVE selected loop — the post-subscription
+	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
+	// each ActiveLoopChanged. It is zero until the first successful subscribe (no authority
+	// yet); selection reconciliation FAILS CLOSED while zero, and status derivation falls
+	// back to the root loop (effectiveActiveLoopID).
+	activeLoopID uuid.UUID
+	// loopRunning folds EVERY loop's turn-liveness (TurnStarted → true; any terminal →
+	// false). The DISPLAYED status follows only the active loop's bit; a background loop's
+	// turn events fold here without moving the status. Never nil (seeded in newSessionCore).
+	loopRunning map[uuid.UUID]bool
 }
 
 // newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk and
@@ -56,6 +69,11 @@ func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner Age
 		status:      StatusIdle,
 		transcript:  transcriptModel{primaryLoopID: agent.RootLoopID()},
 		interaction: newInteractionModel(),
+		// The AUTHORITATIVE active baseline is NOT established here — it is read from the
+		// agent only once the subscription is live (applySubscribed), so no selection
+		// transition can slip past the baseline read. loopRunning is seeded non-nil so the
+		// per-loop turn fold never touches a nil map.
+		loopRunning: map[uuid.UUID]bool{},
 	}
 }
 
@@ -73,27 +91,29 @@ func (c sessionCore) subscribe() tea.Cmd {
 // composition root's agentHolder through this one definition.
 func (c sessionCore) Agent() Agent { return c.agent }
 
-// turnPhase is the primary-loop turn-status transition applyTurnStatus reports so a
+// turnPhase is the ACTIVE-loop turn-status transition applyTurnStatus reports so a
 // presentation shell can react to it (Screen arms the live-tail blink on turnStarted
 // and rotates its tip on turnEnded; the modern shell pulses its focused-loop status).
 // The status STATE itself is set on the core — the phase is only the presentation cue.
 type turnPhase uint8
 
 const (
-	// turnUnchanged is a non-turn event or a subagent loop's turn event: the primary
-	// turn status did not move.
+	// turnUnchanged is a non-turn event or a background (non-active) loop's turn event:
+	// the displayed status did not move.
 	turnUnchanged turnPhase = iota
-	// turnStarted is the primary loop's TurnStarted: status went Running.
+	// turnStarted is the active loop's TurnStarted: status went Running.
 	turnStarted
-	// turnEnded is a primary-loop terminal (TurnDone/TurnFailed/TurnInterrupted): status
+	// turnEnded is an active-loop terminal (TurnDone/TurnFailed/TurnInterrupted): status
 	// returned to Idle.
 	turnEnded
 )
 
 // handleEvent applies one subscription event to BOTH reducers — the transcript (which
 // reconstructs the live segment and commits user/tool/prompt/terminal entries) and the
-// interaction model (which enqueues prompts and clears its queue on terminals) — derives
-// the turn STATUS from the primary loop's turn-lifecycle events, and re-arms the
+// interaction model (which enqueues prompts and clears its queue on terminals) —
+// reconciles an ActiveLoopChanged into the active-loop baseline (applyActiveSelection),
+// folds every loop's turn-lifecycle events into the per-loop running map and derives the
+// displayed STATUS from the ACTIVE loop's bit (applyTurnStatus), and re-arms the
 // continuous reader. It returns the re-arm command (nil while no live subscription is
 // installed — during the /clear window sub is transiently nil) plus the turn-phase cue
 // for the shell. Reading continues unconditionally: the loop is blocked on a permission
@@ -102,6 +122,9 @@ const (
 func (c *sessionCore) handleEvent(ev event.Event) (tea.Cmd, turnPhase) {
 	c.transcript = c.transcript.ApplyEvent(ev)
 	c.interaction = c.interaction.ApplyEvent(ev)
+	if sel, ok := ev.(event.ActiveLoopChanged); ok {
+		c.applyActiveSelection(sel)
+	}
 	phase := c.applyTurnStatus(ev)
 	// Re-arm only while a live subscription is installed: during the /clear window
 	// c.sub is transiently nil, and the fresh subscription's reader is (re)started by
@@ -113,29 +136,88 @@ func (c *sessionCore) handleEvent(ev event.Event) (tea.Cmd, turnPhase) {
 	return rearm, phase
 }
 
-// applyTurnStatus derives the turn status from a turn-lifecycle event for the PRIMARY
-// loop ONLY (events carry Header.LoopID; a subagent loop's turn events must NOT flip the
-// primary status — its output surfaces via Enduring StepDone, rendered collapsed). On
-// the primary loop's TurnStarted it goes Running; on any terminal (TurnDone/TurnFailed/
-// TurnInterrupted) it returns to Idle. Interrupting/Resetting are owned by their own
-// handlers and are NOT set here — but a TurnInterrupted terminal does land Idle from
-// Interrupting, completing the interrupt. It returns the phase transition so the shell
-// can drive its own presentation reaction; non-turn and subagent turn events return
-// turnUnchanged and leave the status untouched.
+// applyTurnStatus folds a turn-lifecycle event into the per-loop running map for EVERY loop
+// (events carry Header.LoopID) and, when the event belongs to the ACTIVE loop, re-derives the
+// displayed status from that loop's freshly folded bit. A background (non-active) loop's turn
+// events fold their bit but leave the displayed status untouched — the active-loop projection,
+// not the primary, owns the status now. Interrupting/Resetting are owned by their own handlers
+// and are NOT set here, but the active loop's terminal resolves Interrupting → Idle (completing
+// an in-flight interrupt). It returns the phase transition (relative to the active loop) so a
+// shell can drive its presentation reaction; non-turn and background-loop turn events return
+// turnUnchanged.
 func (c *sessionCore) applyTurnStatus(ev event.Event) turnPhase {
-	if ev.EventHeader().LoopID != c.agent.RootLoopID() {
-		return turnUnchanged
-	}
+	loopID := ev.EventHeader().LoopID
+	var terminal bool
 	switch ev.(type) {
 	case event.TurnStarted:
-		c.status = StatusRunning
-		return turnStarted
+		c.loopRunning[loopID] = true
 	case event.TurnDone, event.TurnFailed, event.TurnInterrupted:
-		c.status = StatusIdle
-		return turnEnded
+		c.loopRunning[loopID] = false
+		terminal = true
 	default:
 		return turnUnchanged
 	}
+	if loopID != c.effectiveActiveLoopID() {
+		return turnUnchanged // a background loop's bit folded; the displayed status is unmoved
+	}
+	if terminal && c.status == StatusInterrupting {
+		c.status = StatusIdle // the active loop's terminal resolves the in-flight interrupt
+		return turnEnded
+	}
+	c.deriveActiveStatus()
+	if terminal {
+		return turnEnded
+	}
+	return turnStarted
+}
+
+// applyActiveSelection reconciles one ActiveLoopChanged against the current authoritative
+// baseline. It FAILS CLOSED while no baseline exists (activeLoopID zero): without an
+// authority a selection cannot be ordered, so it is ignored rather than trusted. Otherwise it
+// advances the baseline only when the transition departs from it (Previous matches), treats a
+// selection the baseline already reflects as a no-op, and never regresses on a stale event —
+// then re-derives the displayed status for the (possibly new) active loop.
+func (c *sessionCore) applyActiveSelection(ev event.ActiveLoopChanged) {
+	if c.activeLoopID.IsZero() {
+		return // no authoritative baseline: fail closed
+	}
+	switch c.activeLoopID {
+	case ev.PreviousLoopID:
+		c.activeLoopID = ev.ActiveLoopID
+	case ev.ActiveLoopID:
+		// Baseline already includes this transition.
+	default:
+		// Stale relative to the post-subscription baseline; do not regress.
+	}
+	c.deriveActiveStatus()
+}
+
+// effectiveActiveLoopID is the loop the displayed status follows: the authoritative
+// activeLoopID once established, else the root loop as the pre-baseline fallback (so a
+// single-loop session shows its root's turn status before the first subscribe completes).
+// Status-display ONLY — the selection reconcile (applyActiveSelection) must key on
+// activeLoopID directly and fail closed when it is zero, never on this root fallback, so a
+// stale selection cannot be ordered against a synthesized baseline.
+func (c sessionCore) effectiveActiveLoopID() uuid.UUID {
+	if c.activeLoopID.IsZero() {
+		return c.agent.RootLoopID()
+	}
+	return c.activeLoopID
+}
+
+// deriveActiveStatus sets the ordinary displayed status from the active loop's running bit
+// (running → Running, else Idle). It MUST NOT clobber the two explicitly-owned statuses:
+// Interrupting is resolved only by its handler or the active loop's terminal, and Resetting
+// persists until the /clear reopen completes.
+func (c *sessionCore) deriveActiveStatus() {
+	if c.status == StatusInterrupting || c.status == StatusResetting {
+		return
+	}
+	if c.loopRunning[c.effectiveActiveLoopID()] {
+		c.status = StatusRunning
+		return
+	}
+	c.status = StatusIdle
 }
 
 // applySubscribed installs the session-lifetime subscription and reports the outcome. On
@@ -149,6 +231,11 @@ func (c *sessionCore) applySubscribed(msg subscribedMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	c.sub = msg.sub
+	// The subscription is now live, so the ActiveLoopID read cannot miss a selection that
+	// predates it: this is the AUTHORITATIVE baseline every later ActiveLoopChanged is
+	// reconciled against. Derive the displayed status for the freshly established active loop.
+	c.activeLoopID = c.agent.ActiveLoopID()
+	c.deriveActiveStatus()
 	return subNext(c.sub), false
 }
 
@@ -183,8 +270,8 @@ func (c *sessionCore) applySubmitResult(msg submitResultMsg) bool {
 
 // applyInterruptResult applies the outcome of an Interrupt call. On error the turn may
 // still be live, so the status returns to Running and a faint error entry commits (the
-// shell presents it). On success it stays Interrupting — the loop's TurnInterrupted
-// terminal on the subscription (applyTurnStatus, primary loop) returns it to Idle.
+// shell presents it). On success it stays Interrupting — the active loop's TurnInterrupted
+// terminal on the subscription (applyTurnStatus) resolves it to Idle.
 func (c *sessionCore) applyInterruptResult(msg interruptResultMsg) bool {
 	if msg.err != nil {
 		c.transcript = c.transcript.CommitError(msg.err)
@@ -224,6 +311,11 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	c.transcript = transcriptModel{primaryLoopID: c.agent.RootLoopID()}
 	c.interaction = c.interaction.ClearPrompts()
 	c.status = StatusIdle
+	// Drop the old session's authoritative active baseline and per-loop running fold. The
+	// baseline is re-read from the fresh agent only on the next applySubscribed (not here),
+	// so a selection cannot slip past the fresh subscription's setup window.
+	c.activeLoopID = uuid.UUID{}
+	c.loopRunning = map[uuid.UUID]bool{}
 	// Re-subscribe via the INJECTED filter (c.subscribe) against the freshly swapped
 	// agent, so a /clear re-attaches the all-loops scope rather than silently narrowing
 	// the post-clear session and starving every subagent projection.
