@@ -6,8 +6,12 @@ import (
 	"github.com/looprig/harness/pkg/event"
 )
 
-// eventMsg carries one event pulled from the session-lifetime subscription.
-type eventMsg struct{ ev event.Event }
+// eventMsg carries one delivery pulled from the session-lifetime subscription. JournalSeq is
+// retained across the initial restore barrier even though current reducers only consume ev.
+type eventMsg struct {
+	ev         event.Event
+	journalSeq uint64
+}
 
 // subscribedMsg carries the session-lifetime EventStream established at startup
 // (and re-established on /clear). On a non-nil err the TUI cannot observe the

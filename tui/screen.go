@@ -12,7 +12,6 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
-	"github.com/looprig/harness/pkg/identity"
 
 	"github.com/looprig/cli/tui/styles"
 )
@@ -70,6 +69,11 @@ type Screen struct {
 	// deferred until the frame has a width to render into.
 	startupPending   bool
 	startupCommitted bool
+
+	// restoring is the initial replay barrier. Subscription events continue to be read and
+	// re-armed, but reducer inputs queue in arrival order until restoredMsg installs history.
+	restoring     bool
+	restoreBuffer []eventMsg
 
 	// mouseDragging distinguishes a drag (a text selection) from a plain click (a
 	// header/body collapse toggle): a MouseMotion with the button held sets it, and a
@@ -165,6 +169,7 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) S
 		collapse:      newCollapseState(),
 		focusedLoopID: agent.ActiveLoopID(),
 		turnStartedAt: make(map[uuid.UUID]time.Time),
+		restoring:     true,
 	}
 	m.interaction = styleComposer(m.interaction)
 	return m
@@ -185,9 +190,8 @@ const composerPadV = 1
 // default height, the gray panel fill (styles.PanelBg), and one inner vertical pad row above
 // and below the text (composerPadV, matching the user card) — and returns the updated model.
 // It runs at every site that
-// installs a FRESH (default 1-line, background-free, unpadded) interaction for a Screen:
-// initial construction (NewModern) and the cold-restore install (handleRestored replaces the
-// whole interaction with a freshly-built one). The /clear reopen keeps the same input
+// installs a fresh (default 1-line, background-free, unpadded) interaction for a Screen.
+// The /clear reopen keeps the same input
 // (ClearPrompts preserves it), so it needs no re-apply. Scrollback's Screen never calls this,
 // so its composer stays byte-identical.
 func styleComposer(in interactionModel) interactionModel {
@@ -200,11 +204,9 @@ func styleComposer(in interactionModel) interactionModel {
 // Init focuses the composer (starting the cursor blink), schedules the opening banner
 // (systemReadyMsg), schedules the cold-restore repaint, and attaches the session-lifetime
 // ALL-LOOPS subscription (m.subscribe uses AllLoopsEventFilter). restoreBacklogCmd
-// folds a RESTORED session's historical Enduring backlog OFF the update loop and repaints it
-// once (restoredMsg) before any live event drives the transcript — reusing the SAME shell-
-// agnostic command Screen batches, so both modes fold restore identically. A NEW session's
-// empty backlog makes it a no-op (the viewport comes up idle, driven by live events after the
-// first Submit); a restored session comes up idle too, so there is no backlog/live overlap.
+// folds a restored session's historical Enduring backlog off the update loop. Live events may
+// arrive first; the restore barrier buffers and continuously re-arms them, then applies them in
+// arrival order after restoredMsg installs history. An empty backlog simply releases the barrier.
 func (m Screen) Init() tea.Cmd {
 	return tea.Batch(
 		m.interaction.input.Focus(),
@@ -233,6 +235,10 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleMouse(msg)
 		return m, cmd
 	case eventMsg:
+		if m.restoring {
+			cmd := m.bufferRestoreEvent(msg)
+			return m, cmd
+		}
 		cmd := m.handleEvent(msg.ev)
 		return m, cmd
 	case restoredMsg:
@@ -356,6 +362,18 @@ func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	return tea.Batch(rearm, m.maybeStartTick())
 }
 
+// bufferRestoreEvent retains one live reducer input behind the initial replay barrier while
+// immediately re-arming the subscription reader. Ephemeral timing is stamped at arrival so
+// delayed reduction does not move its clock observation.
+func (m *Screen) bufferRestoreEvent(msg eventMsg) tea.Cmd {
+	msg.ev = stampEphemeralClock(msg.ev, m.now)
+	m.restoreBuffer = append(m.restoreBuffer, msg)
+	if m.sub == nil {
+		return nil
+	}
+	return subNext(m.sub)
+}
+
 // stampEphemeralClock returns ev with the model clock stamped onto its Header.CreatedAt when
 // ev is an UNSTAMPED Ephemeral TokenDelta — the timing source for a committed thinking
 // entry's "thought for Nsec" span. The harness never stamps Ephemeral events (they are never
@@ -468,51 +486,40 @@ func (m *Screen) handleAnim() tea.Cmd {
 	return animCmd()
 }
 
-// handleRestored applies the cold-restore backlog fold's result ONCE, MIRRORING Screen's
-// handleRestored but repainting the VIEWPORT (rerender) instead of flushing scrollback. The
-// backlog was folded OFF the update loop inside restoreBacklogCmd (FoldDisplay →
-// transcript.ApplyEvent + interaction.ApplyEvent), so the arriving state already carries the
-// rebuilt committed entries, per-loop projections, loop table, and pending gates — installing
-// it and re-rendering repaints the whole history and populates loops()/collapse from it.
-//
-// On a non-nil err it commits a faint, NON-FATAL restore-error notice the viewport re-renders
-// (the live stream is unaffected; history simply did not repaint). A NEW session folds to an
-// EMPTY backlog and is a strict no-op: installing it would DISCARD commitStartup's banner (and
-// optional greeting) and reset the transcript's displayID counter, so the live transcript is
-// left untouched and a fresh session comes up idle exactly as today. For a RESTORED session it
-// installs the rebuilt transcript + interaction wholesale (no per-event work here) and
-// re-renders; the live Subscribe path attaches separately (handleSubscribed) and, since cold
-// restore comes up idle, live events only follow a user Submit — no backlog/live overlap, no
-// dedup. The startup flags are reset so a deferred banner does not later overwrite the counter.
-//
-// KEEP IN SYNC WITH Screen.handleRestored (tui/restore.go) — the restore install
-// (transcript+interaction+startup-flag reset, empty→no-op, err→notice) must stay identical;
-// only the presentation differs (rerender here vs flush there). An eventual shared
-// sessionCore.applyRestored is a deferred follow-up; until then, a fix here must land in both.
+// handleRestored releases the initial replay barrier. A non-empty historical fold installs
+// first, preserving shell-global startup/error rows and composer draft; buffered subscription
+// events then pass through the normal reducers in arrival order. Empty/error replay also drains
+// the buffer. Startup flags are deliberately untouched so message ordering cannot duplicate or
+// suppress the banner.
 func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
+	buffered := m.restoreBuffer
+	m.restoreBuffer = nil
+	m.restoring = false
 	if msg.err != nil {
 		m.transcript = m.transcript.CommitGlobalError(msg.err)
-		m.rerender()
-		return nil
+	} else if msg.eventCount != 0 {
+		m.transcript = installRestoredTranscript(m.transcript, msg.transcript)
+		m.interaction = installRestoredInteraction(m.interaction, msg.interaction)
 	}
-	if msg.eventCount == 0 {
-		return nil
+	for _, delivery := range buffered {
+		ev := delivery.ev
+		if id := ev.EventHeader().EventID; !id.IsZero() {
+			if _, replayed := msg.eventIDs[id]; replayed {
+				continue
+			}
+		}
+		_, _ = m.sessionCore.handleEvent(ev) // reader was re-armed when the delivery was buffered
+		m.commitTurnRanNotice(ev)
+		m.trackTurnClock(ev)
 	}
-	hadStartup := m.startupCommitted
-	m.transcript = mergeRestoredTranscript(m.transcript, msg.transcript)
-	m.startupPending = false
-	m.startupCommitted = hadStartup
-	// The restore fold built a FRESH (default 1-line, background-free) interaction; re-apply
-	// the modern composer treatment so a cold-restored session keeps the 2-line gray panel.
-	m.interaction = styleComposer(msg.interaction)
 	m.rerender()
-	return nil
+	return m.maybeStartTick()
 }
 
-// mergeRestoredTranscript installs restored reducer state while preserving startup-global
-// rows already committed by the shell. Restored IDs are rebased above the current allocator,
-// so lifecycle-only and ordinary restores cannot collide with banner/error row IDs.
-func mergeRestoredTranscript(current, restored transcriptModel) transcriptModel {
+// installRestoredTranscript installs historical reducer state while preserving shell-global
+// startup/error rows already committed before replay completed. Historical IDs are rebased
+// above the current allocator so preserved globals never collide with restored rows.
+func installRestoredTranscript(current, restored transcriptModel) transcriptModel {
 	offset := current.nextID
 	if offset != 0 {
 		restored.global = rebaseEntries(restored.global, offset)
@@ -532,105 +539,21 @@ func mergeRestoredTranscript(current, restored transcriptModel) transcriptModel 
 		restored.nextID += offset
 	}
 	restored.global = append(append([]entry(nil), current.global...), restored.global...)
-	if restored.projections == nil {
-		restored.projections = make(map[uuid.UUID]*loopProjection)
-	}
-	liveOffset := restored.nextID
-	hasCurrentCommitted := false
-	for id, currentProjection := range current.projections {
-		if currentProjection == nil {
-			continue
-		}
-		if historical := restored.projections[id]; historical != nil {
-			cp := *historical
-			currentEntries := rebaseEntries(currentProjection.committed, liveOffset)
-			hasCurrentCommitted = hasCurrentCommitted || len(currentEntries) != 0
-			cp.committed = append(append([]entry(nil), historical.committed...), currentEntries...)
-			cp.live = currentProjection.live
-			restored.projections[id] = &cp
-			continue
-		}
-		cp := *currentProjection
-		cp.committed = rebaseEntries(currentProjection.committed, liveOffset)
-		hasCurrentCommitted = hasCurrentCommitted || len(cp.committed) != 0
-		restored.projections[id] = &cp
-	}
-	if hasCurrentCommitted {
-		restored.nextID = liveOffset + current.nextID
-	}
-	restored.loopAgents = mergeLoopAgents(restored.loopAgents, current.loopAgents)
-	restored.loopLive = mergeLoopLive(restored.loopLive, current.loopLive)
-	restored.loopOrder = mergeLoopOrder(restored.loopOrder, current.loopOrder)
-	if current.queued != nil {
-		restored.queued = append([]queuedInput(nil), current.queued...)
-	}
-	for child, parent := range current.loopParent {
-		if restored.loopParent == nil {
-			restored.loopParent = make(map[uuid.UUID]spawnKey)
-		}
-		restored.loopParent[child] = parent
-	}
-	for key, acc := range current.subagentAccum {
-		if restored.subagentAccum == nil {
-			restored.subagentAccum = make(map[spawnKey]*subagentAccumulator)
-		}
-		restored.subagentAccum[key] = acc
-	}
-	restored.accumOrder = mergeAccumOrder(restored.accumOrder, current.accumOrder)
-	restored.fold = nil
 	return restored
 }
 
-func mergeLoopAgents(historical, current map[uuid.UUID]identity.AgentName) map[uuid.UUID]identity.AgentName {
-	next := make(map[uuid.UUID]identity.AgentName, len(historical)+len(current))
-	for id, name := range historical {
-		next[id] = name
+// installRestoredInteraction preserves the live composer/draft while installing historical
+// prompts. When history has no prompts the already-styled live interaction is authoritative;
+// buffered live prompt events are applied normally after this install.
+func installRestoredInteraction(current, restored interactionModel) interactionModel {
+	if len(restored.pending) == 0 {
+		return current
 	}
-	for id, name := range current {
-		next[id] = name
-	}
-	return next
-}
-
-func mergeLoopLive(historical, current map[uuid.UUID]bool) map[uuid.UUID]bool {
-	next := make(map[uuid.UUID]bool, len(historical)+len(current))
-	for id, live := range historical {
-		next[id] = live
-	}
-	for id, live := range current {
-		next[id] = live
-	}
-	return next
-}
-
-func mergeLoopOrder(historical, current []uuid.UUID) []uuid.UUID {
-	next := append([]uuid.UUID(nil), historical...)
-	seen := make(map[uuid.UUID]bool, len(next))
-	for _, id := range next {
-		seen[id] = true
-	}
-	for _, id := range current {
-		if !seen[id] {
-			next = append(next, id)
-			seen[id] = true
-		}
-	}
-	return next
-}
-
-func mergeAccumOrder(historical, current []spawnKey) []spawnKey {
-	next := append([]spawnKey(nil), historical...)
-	seen := make(map[spawnKey]bool, len(next))
-	for _, key := range next {
-		seen[key] = true
-	}
-	for _, key := range current {
-		if !seen[key] {
-			next = append(next, key)
-			seen[key] = true
-		}
-	}
-	return next
+	restored.input = current.input
+	restored.slash = current.slash
+	restored.files = current.files
+	restored.composeDraft = current.input.Value()
+	return restored
 }
 
 func rebaseEntries(entries []entry, offset displayID) []entry {

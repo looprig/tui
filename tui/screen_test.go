@@ -39,6 +39,7 @@ func updateScreen(t *testing.T, m Screen, msg tea.Msg) (Screen, tea.Cmd) {
 func newScreenSized(t *testing.T, agent Agent, w, h int) Screen {
 	t.Helper()
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m.restoring = false // ordinary viewport tests drive post-replay live state
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	return m
 }
@@ -1251,6 +1252,7 @@ func TestModernRestoreDoesNotOverwriteLiveEventsDuringReplay(t *testing.T) {
 	}
 	agent := &fakeAgent{activeLoopID: loopID, backlog: backlog}
 	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
 	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
 
 	// These live events arrive after subscription but before the replay result is installed.
@@ -1268,6 +1270,182 @@ func TestModernRestoreDoesNotOverwriteLiveEventsDuringReplay(t *testing.T) {
 	}
 	if len(committed) == 0 || committedText(committed[len(committed)-1]) != "live input" {
 		t.Fatalf("committed after replay merge = %+v, want live input retained", committed)
+	}
+}
+
+func TestModernRestoreBufferKeepsSubscriptionReaderArmed(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xAE)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	m.sub = newFakeSubscription()
+
+	m, cmd := updateScreen(t, m, eventMsg{ev: event.TurnStarted{Header: hdr(loopID), Message: userMsg("queued")}, journalSeq: 42})
+	if cmd == nil {
+		t.Fatal("buffered event returned nil command, want subscription re-arm")
+	}
+	if len(m.restoreBuffer) != 1 || m.transcript.committedLen() != 0 {
+		t.Fatalf("buffer = %d committed = %d, want queued but not folded", len(m.restoreBuffer), m.transcript.committedLen())
+	}
+	if m.restoreBuffer[0].journalSeq != 42 {
+		t.Fatalf("buffered journal sequence = %d, want 42", m.restoreBuffer[0].journalSeq)
+	}
+
+	m = feedRestored(t, m, restoredMsg{interaction: newInteractionModel()})
+	if len(m.restoreBuffer) != 0 || m.restoring {
+		t.Fatalf("restore barrier remained active: restoring %v buffer %d", m.restoring, len(m.restoreBuffer))
+	}
+	committed, _ := m.transcript.projectionFor(loopID)
+	if len(committed) != 1 || committedText(committed[0]) != "queued" {
+		t.Fatalf("folded buffered event = %+v", committed)
+	}
+}
+
+func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
+	t.Parallel()
+
+	loopID, eventID := callID(0xAF), callID(0xF0)
+	h := hdr(loopID)
+	h.EventID = eventID
+	ev := event.TurnStarted{Header: h, Message: userMsg("once")}
+	agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{ev}}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+	m = feed(t, m, ev)
+	m = feedRestored(t, m, msg)
+
+	committed, _ := m.transcript.projectionFor(loopID)
+	if len(committed) != 1 || committedText(committed[0]) != "once" {
+		t.Fatalf("committed duplicate replay = %+v, want one row", committed)
+	}
+}
+
+func TestModernRestoreReplaysBufferedSubagentEventsInOrder(t *testing.T) {
+	t.Parallel()
+
+	parent, child := callID(0xB1), callID(0xB2)
+	turn, step := callID(0xB3), callID(0xB4)
+	backlog := []event.Event{
+		event.TurnStarted{Header: hdr(parent), Message: userMsg("parent task")},
+		childLoopStarted(child, "explorer", parent, turn, step, "toolu_X"),
+		childTurnStarted(child, "map repo"),
+	}
+	agent := &fakeAgent{activeLoopID: parent, backlog: backlog}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+	m = feed(t, m, stepDoneFrom(child,
+		aiMessage("", "", toolUse("grep-id", "Grep", `{"q":"foo"}`)),
+		toolResult("grep-id", "hit"),
+	))
+	m = feed(t, m, event.TurnDone{Header: hdr(child)})
+	m = feed(t, m, orchestratorStepDone(parent, turn, step,
+		aiMessage("", "", toolUse("toolu_X", "Subagent", `{"agent":"explorer","message":"map repo"}`)),
+		toolResult("toolu_X", "done"),
+	))
+	m = feedRestored(t, m, msg)
+
+	card := findSubagentCard(t, m.transcript)
+	if card.Agent != "explorer" || card.Task != "map repo" || card.Steps != 1 || card.SubStatus != subDone {
+		t.Fatalf("restored buffered card = %+v", card)
+	}
+	if len(card.Children) != 1 || card.Children[0].ToolName != "Grep" {
+		t.Fatalf("restored buffered children = %+v", card.Children)
+	}
+}
+
+func TestModernRestoreReplaysBufferedPromptsAndPreservesDraft(t *testing.T) {
+	t.Parallel()
+
+	loopID, permissionID, questionID := callID(0xC1), callID(0xC2), callID(0xC3)
+	backlog := []event.Event{event.LoopStarted{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"}, DisplayName: "Operator Primer",
+	}}
+	agent := &fakeAgent{activeLoopID: loopID, backlog: backlog}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	m.interaction.input.SetValue("half-written draft")
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+	m = feed(t, m, event.PermissionRequested{Header: hdr(loopID), ToolExecutionID: permissionID, Request: tool.BashRequest{Command: "ls"}})
+	m = feed(t, m, event.UserInputRequested{Header: hdr(loopID), ToolExecutionID: questionID, Question: "Continue?"})
+	m = feedRestored(t, m, msg)
+
+	if got := m.interaction.PendingCount(); got != 2 {
+		t.Fatalf("pending prompts = %d, want 2", got)
+	}
+	if m.interaction.composeDraft != "half-written draft" {
+		t.Fatalf("composeDraft = %q, want preserved draft", m.interaction.composeDraft)
+	}
+	if entry, ok := barEntryFor(m.bar(), loopID); !ok || !entry.gate {
+		t.Fatalf("bar gate entry = %+v, present %v", entry, ok)
+	}
+	if got := m.transcript.projections[loopID].live.gateDecisions[permissionID]; got != gatePending {
+		t.Fatalf("permission decision = %v, want pending", got)
+	}
+
+	m, cmd := updateScreen(t, m, runeKey('y'))
+	if cmd == nil {
+		t.Fatal("approve command = nil")
+	}
+	drainCmd(t, cmd)
+	if !agent.approveCalled || agent.lastLoopID != loopID || agent.lastCallID != permissionID {
+		t.Fatalf("approve dispatch = (called %v loop %v call %v)", agent.approveCalled, agent.lastLoopID, agent.lastCallID)
+	}
+	if got := m.interaction.PendingCount(); got != 1 {
+		t.Fatalf("pending after approve = %d, want AskUser prompt", got)
+	}
+}
+
+func TestModernRestoreStartupOrderingCommitsBannerOnce(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xD1)
+	nonempty := []event.Event{event.LoopStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"}}}
+	for _, tt := range []struct {
+		name             string
+		backlog          []event.Event
+		systemReadyFirst bool
+	}{
+		{name: "ready restore resize empty", systemReadyFirst: true},
+		{name: "ready restore resize nonempty", backlog: nonempty, systemReadyFirst: true},
+		{name: "resize ready restore empty"},
+		{name: "resize ready restore nonempty", backlog: nonempty},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{activeLoopID: loopID, backlog: tt.backlog}
+			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+			if tt.systemReadyFirst {
+				m, _ = updateScreen(t, m, systemReadyMsg{})
+				m = feedRestored(t, m, msg)
+				m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+			} else {
+				m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+				m, _ = updateScreen(t, m, systemReadyMsg{})
+				m = feedRestored(t, m, msg)
+			}
+			if len(m.transcript.global) != 1 || !strings.Contains(committedText(m.transcript.global[0]), "swe") {
+				t.Fatalf("startup globals = %+v, want one banner", m.transcript.global)
+			}
+			if !m.startupCommitted || m.startupPending {
+				t.Fatalf("startup flags = committed %v pending %v", m.startupCommitted, m.startupPending)
+			}
+			committed, _ := m.transcript.projectionFor(loopID)
+			seen := map[displayID]bool{}
+			for _, entry := range committed {
+				if seen[entry.ID] {
+					t.Fatalf("duplicate displayID %d", entry.ID)
+				}
+				seen[entry.ID] = true
+			}
+		})
 	}
 }
 
@@ -2610,6 +2788,7 @@ func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
 	primary := callID(1)
 	agent := &fakeAgent{activeLoopID: primary}
 	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m.restoring = false // this renderer test starts after initial replay
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
 

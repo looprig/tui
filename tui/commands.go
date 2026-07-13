@@ -68,7 +68,7 @@ func subNext(sub EventStream) tea.Cmd {
 		if !ok {
 			return subClosedMsg{err: sub.Err()}
 		}
-		return eventMsg{ev: d.Event}
+		return eventMsg{ev: d.Event, journalSeq: d.JournalSeq}
 	}
 }
 

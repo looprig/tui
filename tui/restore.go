@@ -22,6 +22,7 @@ type DisplayProjection struct {
 	transcript  transcriptModel
 	interaction interactionModel
 	eventCount  int
+	eventIDs    map[uuid.UUID]struct{}
 }
 
 // FoldDisplay folds events through the SAME pure reducers the live path and the
@@ -36,11 +37,15 @@ type DisplayProjection struct {
 func FoldDisplay(events []event.Event) DisplayProjection {
 	tr := transcriptModel{}
 	in := newInteractionModel()
+	ids := make(map[uuid.UUID]struct{})
 	for _, ev := range events {
 		tr = tr.ApplyEvent(ev)
 		in = in.ApplyEvent(ev)
+		if id := ev.EventHeader().EventID; !id.IsZero() {
+			ids[id] = struct{}{}
+		}
 	}
-	return DisplayProjection{transcript: tr, interaction: in, eventCount: len(events)}
+	return DisplayProjection{transcript: tr, interaction: in, eventCount: len(events), eventIDs: ids}
 }
 
 // EqualTranscript reports whether p and other have the byte-for-byte identical committed
@@ -163,6 +168,7 @@ type restoredMsg struct {
 	transcript  transcriptModel
 	interaction interactionModel
 	eventCount  int
+	eventIDs    map[uuid.UUID]struct{}
 	err         error
 }
 
@@ -182,7 +188,7 @@ func restoreBacklogCmd(ctx context.Context, agent Agent) tea.Cmd {
 			return restoredMsg{err: &RestoreBacklogError{Cause: err}}
 		}
 		proj := FoldDisplay(backlog)
-		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, eventCount: proj.eventCount}
+		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, eventCount: proj.eventCount, eventIDs: proj.eventIDs}
 	}
 }
 
