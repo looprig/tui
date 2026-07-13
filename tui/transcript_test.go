@@ -2049,9 +2049,12 @@ func TestSubagentMixedBatchSameIndexIsolation(t *testing.T) {
 	if got := strings.Join(child.Result, "\n"); got != "CHILD bash output" {
 		t.Errorf("nested child Bash result = %q, want the CHILD's result %q (not the parent live card)", got, "CHILD bash output")
 	}
+	// Child tool nodes are no longer rendered, so the same-index isolation is asserted on
+	// the card DATA (above) rather than the rendered string. The rendered card must NOT
+	// leak the child's Bash command.
 	renderedSubagent := stripANSI(renderSubagentCard(card, false, 120))
-	if !strings.Contains(renderedSubagent, "Bash(ls)") {
-		t.Errorf("rendered subagent card = %q, want nested Bash command", renderedSubagent)
+	if strings.Contains(renderedSubagent, "Bash(ls)") {
+		t.Errorf("rendered subagent card = %q, must NOT render the nested Bash command", renderedSubagent)
 	}
 
 	var parentBash *entry
@@ -2553,6 +2556,69 @@ func TestSubagentInterruption(t *testing.T) {
 	}
 	if strings.Contains(rendered, "stopped early") {
 		t.Errorf("rendered card = %q, must NOT show a summary for an interrupted child", rendered)
+	}
+}
+
+// TestSubagentAccumClearedOnParentTurnDone reproduces the "extra subagent card after
+// turn done" bug: a child fills its accumulator, but the orchestrator's StepDone builds a
+// spawnKey that MISSES it (here the tool-use id differs), so the accumulator is never
+// reconciled. Once the PARENT turn ends, the stale accumulator must NOT keep returning
+// from pendingSubagentCards — otherwise the live tail renders it perpetually, below the
+// committed "turn ran" line.
+func TestSubagentAccumClearedOnParentTurnDone(t *testing.T) {
+	t.Parallel()
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_spawn"))
+	m = m.ApplyEvent(childTurnStarted(sub, "map the repo"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("c-grep", "Grep", `{}`)),
+		toolResult("c-grep", "hit"),
+	))
+	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}})
+	// Orchestrator StepDone whose tool-use id does NOT match the spawn id → reconcile miss.
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse("toolu_OTHER", "Subagent", `{"agent":"explorer"}`)),
+		toolResult("toolu_OTHER", "done"),
+	))
+	if got := len(m.pendingSubagentCardsFor(primary)); got == 0 {
+		t.Fatalf("precondition: expected an unreconciled pending card before turn end, got 0")
+	}
+	// Parent turn ends: the stale accumulator must be cleared.
+	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary, TurnID: turn}}})
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+		t.Errorf("pending cards after parent TurnDone = %d, want 0 (stale accumulator must not linger)", got)
+	}
+}
+
+// TestSubagentAccumClearedOnParentInterrupt: a child fills its accumulator, then the
+// PARENT turn is interrupted before the orchestrator reconciles it. The stale accumulator
+// must be cleared so it does not leak into the next turn as a lingering pending card.
+func TestSubagentAccumClearedOnParentInterrupt(t *testing.T) {
+	t.Parallel()
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_spawn"))
+	m = m.ApplyEvent(childTurnStarted(sub, "map the repo"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("c-grep", "Grep", `{}`)),
+		toolResult("c-grep", "hit"),
+	))
+	if got := len(m.pendingSubagentCardsFor(primary)); got == 0 {
+		t.Fatalf("precondition: expected a pending card while the child streams, got 0")
+	}
+	// Parent turn interrupted before any orchestrator StepDone reconciles the child.
+	m = m.ApplyEvent(event.TurnInterrupted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary, TurnID: turn}}})
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+		t.Errorf("pending cards after parent TurnInterrupted = %d, want 0 (stale accumulator must not leak)", got)
 	}
 }
 

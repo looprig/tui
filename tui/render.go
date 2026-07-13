@@ -315,23 +315,17 @@ func subagentNodeStatus(s subStatus) styles.NodeStatus {
 	}
 }
 
-// renderSubagentCard renders a reconciled Subagent as a rail node opening a NESTED
-// secondary rail: an "○" header node (tinted by the child's terminal status) at depth 0,
-// its own tool calls as depth-1 nodes, an optional "+N nested subagent steps" collapsed
-// marker, then a closing "○ verb · N steps — "summary"" node at depth 1. Every nested
-// row carries the outer "│" spine, so the timeline stays unbroken without extra connector
-// rows. expand drives the child cards' result-preview fold (unchanged).
-func renderSubagentCard(c ToolCallView, expand bool, width int) string {
+// renderSubagentCard renders a reconciled Subagent as a compact two-node rail: an "○"
+// header node "Subagent(agent) "task"" (tinted by the child's terminal status) at depth 0,
+// then a closing "○ verb · N steps — "summary"" node at depth 1 connected by the outer "│"
+// spine. The subagent's OWN nested tool calls are deliberately NOT shown — the card reports
+// the subagent and its outcome, not the individual tools it ran. status drives both nodes'
+// tint; the second bool (formerly the child-fold expand) is unused now that children are
+// elided.
+func renderSubagentCard(c ToolCallView, _ bool, width int) string {
 	status := subagentNodeStatus(c.SubStatus)
-	lines := make([]string, 0, 2+len(c.Children)*2)
-	lines = append(lines, railNodeStyled(styles.ToolNode(status), subagentHeaderText(c), styles.ToolCallStyle, 0, width)...)
-	for i := range c.Children {
-		lines = append(lines, renderToolNode(c.Children[i], 1, expand, width, false)...)
-	}
+	lines := railNodeStyled(styles.ToolNode(status), subagentHeaderText(c), styles.ToolCallStyle, 0, width)
 	lines = append(lines, railNodeStyled(styles.ToolNode(status), subagentDoneText(c), styles.ToolCallStyle, 1, width)...)
-	if c.Nested > 0 {
-		lines = append(lines, railDetail("+"+strconv.Itoa(c.Nested)+" nested subagent steps", 1, width)...)
-	}
 	return strings.Join(lines, "\n")
 }
 

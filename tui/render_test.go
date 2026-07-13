@@ -769,8 +769,8 @@ func TestRenderLiveAssistantExpandedThinkingShowsFullBody(t *testing.T) {
 }
 
 // TestRenderLiveAssistantSubagentCard (live-tail card path): a pending Subagent card in
-// the live tail renders the SAME nested "● Subagent(<agent>)" card as the committed form
-// (header + ⎿ children + "running · N steps"), and — because the only activity in the
+// the live tail renders the SAME two-node card as the committed form (header + closing
+// "running · N steps" node, no child tool nodes), and — because the only activity in the
 // step is the spawned subagent (no ordinary calls) — does NOT show a rotating
 // working-word headline.
 func TestRenderLiveAssistantSubagentCard(t *testing.T) {
@@ -784,10 +784,15 @@ func TestRenderLiveAssistantSubagentCard(t *testing.T) {
 	}}
 	got := stripANSI(renderLiveAssistant("", "", nil, subagentCards, false, 80, animState{}))
 
-	for _, w := range []string{"Subagent(explorer)", "map repo", "Glob", "running" + hintSeparator + "1 step"} {
+	for _, w := range []string{"Subagent(explorer)", "map repo", "running" + hintSeparator + "1 step"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("live subagent card = %q, want to contain %q", got, w)
 		}
+	}
+	// Child tool nodes are no longer rendered — the card reports the subagent and its
+	// outcome, not the individual tools it ran.
+	if strings.Contains(got, "Glob") {
+		t.Errorf("live subagent card = %q, must NOT render the child tool name", got)
 	}
 	// No working-word: the step only spawned a subagent, so there is no ordinary
 	// card-only headline.
@@ -1178,13 +1183,12 @@ func TestRenderAssistant_NodePresence(t *testing.T) {
 	}
 }
 
-// TestRenderEntrySubagentCard covers the committed Subagent card render (Task 6 nested
-// rail): a kindTool entry whose ToolCallView has Agent set renders as an "○" header node
-// "Subagent(<agent>)  \"<task>\"" opening a nested rail, its children as depth-1 "│ ○"
-// nodes, and a closing "│ ○ done · N steps — \"<summary>\"" node. The card's own Result
-// (the done summary) must appear ONLY in that closing node, never also as a separate
-// result body (no doubling). The "+M nested subagent steps" line shows only when
-// Nested > 0.
+// TestRenderEntrySubagentCard covers the committed Subagent card render (two-node rail):
+// a kindTool entry whose ToolCallView has Agent set renders as an "○" header node
+// "Subagent(<agent>)  \"<task>\"" and a closing "│ ○ done · N steps — \"<summary>\"" node.
+// The subagent's own child tool nodes and the "+M nested subagent steps" line are NOT
+// rendered. The card's own Result (the done summary) must appear ONLY in that closing
+// node, never also as a separate result body (no doubling).
 func TestRenderEntrySubagentCard(t *testing.T) {
 	t.Parallel()
 
@@ -1212,10 +1216,11 @@ func TestRenderEntrySubagentCard(t *testing.T) {
 			t.Errorf("subagent card = %q, want %q", got, w)
 		}
 	}
-	// Two child nodes under the header, each at depth 1 (a "│ ○" node).
-	for _, w := range []string{"│ ○ Grep", "│ ○ Read"} {
-		if !strings.Contains(got, w) {
-			t.Errorf("subagent card = %q, want the depth-1 child node %q", got, w)
+	// The subagent's own child tool nodes are NOT rendered (the card reports the
+	// subagent and its outcome, not the individual tools it ran).
+	for _, a := range []string{"Grep", "Read", "│ ○ Grep", "│ ○ Read"} {
+		if strings.Contains(got, a) {
+			t.Errorf("subagent card = %q, must NOT render the child tool %q", got, a)
 		}
 	}
 	// The closing done node: verb + step count + summary at depth 1.
@@ -1268,9 +1273,9 @@ func TestRenderSubagentCardHeaderWraps(t *testing.T) {
 	}
 }
 
-// TestRenderEntrySubagentCardTerminals covers the done-line verb per SubStatus and the
-// nested-steps line: failed shows the error text, interrupted omits the summary, and a
-// positive Nested adds the "+M nested subagent steps" line.
+// TestRenderEntrySubagentCardTerminals covers the done-line verb per SubStatus: failed
+// shows the error text, interrupted omits the summary, and a positive Nested does NOT add
+// any nested-steps line (the nested marker is no longer rendered).
 func TestRenderEntrySubagentCardTerminals(t *testing.T) {
 	t.Parallel()
 
@@ -1303,11 +1308,12 @@ func TestRenderEntrySubagentCardTerminals(t *testing.T) {
 			absent: []string{"ignored summary"},
 		},
 		{
-			name:   "nested counter shows when positive",
+			name:   "nested counter is not rendered even when positive",
 			status: subDone,
 			result: []string{"ok"},
 			nested: 3,
-			want:   []string{"+3 nested subagent steps"},
+			want:   []string{"done", "ok"},
+			absent: []string{"+3 nested subagent steps", "nested subagent steps"},
 		},
 	}
 
@@ -1366,13 +1372,12 @@ func TestSubagentNodeStatus(t *testing.T) {
 	}
 }
 
-// TestRenderSubagentCard_NestedRail covers the Task-6 nested-rail subagent render: the
-// subagent is an "○" header node at depth 0 opening a NESTED secondary rail whose children
-// are depth-1 "│ ○" nodes (with "│ │" detail rows), closed by a "│ ○ verb · N steps —
-// \"summary\"" done node at depth 1. Every point on the rail is a circle — no "⎿" children
-// and no plain done line. The interrupted variant omits the summary; a positive Nested adds
-// a "│ │ +N nested subagent steps" collapsed marker.
-func TestRenderSubagentCard_NestedRail(t *testing.T) {
+// TestRenderSubagentCard_HeaderAndDone covers the two-node subagent render: the subagent
+// is an "○" header node at depth 0, closed by a "│ ○ verb · N steps — \"summary\"" done
+// node at depth 1. The subagent's OWN child tool nodes and the "+N nested subagent steps"
+// collapsed marker are NOT rendered. Every point on the rail is a circle — no "⎿" children
+// and no plain done line. The interrupted variant omits the summary.
+func TestRenderSubagentCard_HeaderAndDone(t *testing.T) {
 	t.Parallel()
 
 	base := ToolCallView{
@@ -1388,24 +1393,26 @@ func TestRenderSubagentCard_NestedRail(t *testing.T) {
 		},
 	}
 
-	t.Run("done nested rail", func(t *testing.T) {
+	t.Run("header and done", func(t *testing.T) {
 		t.Parallel()
 		out := stripANSI(renderSubagentCard(base, true, 80))
 		for _, w := range []string{
 			"○ Subagent(explore)",
 			"find the retry logic",
-			"│ ○ Read(backoff.go)",
-			"│ │ 12 lines",
-			"│ ○ Grep(retry)",
-			"│ │ 3 matches",
 			`│ ○ done · 2 steps — "found in backoff.go"`,
 		} {
 			if !strings.Contains(out, w) {
-				t.Errorf("nested rail = \n%s\nwant it to contain %q", out, w)
+				t.Errorf("header/done rail = \n%s\nwant it to contain %q", out, w)
+			}
+		}
+		// The subagent's own child tool nodes are NOT rendered.
+		for _, a := range []string{"Read(backoff.go)", "12 lines", "Grep(retry)", "3 matches", "│ ○ Read", "│ ○ Grep"} {
+			if strings.Contains(out, a) {
+				t.Errorf("header/done rail = \n%s\nmust NOT render the child tool detail %q", out, a)
 			}
 		}
 		if strings.Contains(out, "⎿") {
-			t.Errorf("nested rail = \n%s\nmust NOT contain any ⎿ (every point is a circle)", out)
+			t.Errorf("header/done rail = \n%s\nmust NOT contain any ⎿ (every point is a circle)", out)
 		}
 		// The closing line begins with a node (its depth-1 spine then "○"), not plain text.
 		lines := strings.Split(out, "\n")
@@ -1441,13 +1448,13 @@ func TestRenderSubagentCard_NestedRail(t *testing.T) {
 		}
 	})
 
-	t.Run("nested counter collapsed marker", func(t *testing.T) {
+	t.Run("nested counter marker is not rendered", func(t *testing.T) {
 		t.Parallel()
 		c := base
 		c.Nested = 3
 		out := stripANSI(renderSubagentCard(c, true, 80))
-		if !strings.Contains(out, "│ │ +3 nested subagent steps") {
-			t.Errorf("nested rail = \n%s\nwant the '│ │ +3 nested subagent steps' marker", out)
+		if strings.Contains(out, "nested subagent steps") {
+			t.Errorf("header/done rail = \n%s\nmust NOT render a nested-steps marker even when Nested>0", out)
 		}
 	})
 }

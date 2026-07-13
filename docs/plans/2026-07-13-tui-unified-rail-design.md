@@ -63,10 +63,6 @@ low-risk.
 │    42 lines
 │
 ○  Subagent(explore) "find the retry logic"
-│  ○  Read(backoff.go)
-│  │    12 lines
-│  ○  Grep("retry")
-│  │    3 matches
 │  ○  done · 4 steps — "found in backoff.go"
 │
 ○  Bash(go test ./...)
@@ -86,27 +82,32 @@ tools step renders the thinking rail then the tool nodes directly. A tools-only 
 renders just the tool nodes. `renderPromotedTool` and the `Multiple actions` headline
 path are **removed**.
 
-### Subagents (nested rail)
+### Subagents (compact card — no nested tools)
 
-A subagent is an `○` node that **opens a nested secondary rail**: the outer `│` continues
-as the subagent's spine, and its own tool calls sit on a second column (`│  ○`), details
-in the nested `│  │ ` gutter. The subagent's terminal summary is itself the **closing
-`○` node** of the nested rail — `○ done · N steps — "<summary>"` (faint), or
-`○ failed · N steps — "<error>"` (red). Every point on a rail carries a node glyph; no
-line hangs off the rail without one.
+A subagent renders as a compact two-node rail: an `○` header node
+`Subagent(<agent>) "<task>"` at depth 0, then its terminal summary as the **closing `○`
+node** one level in — `○ done · N steps — "<summary>"` (faint), or `○ failed · N steps —
+"<error>"` (red), or `○ interrupted · N steps` (no summary). The subagent's OWN nested
+tool calls are **deliberately not shown** — the card reports the subagent and its outcome,
+not the individual tools it ran (revised 2026-07-13 per user feedback; the earlier nested
+secondary rail was dropped).
+
+```
+○  Subagent(explore) "find the retry logic"
+│  ○  done · 4 steps — "found in backoff.go"
+```
 
 Failure example:
 
 ```
-○  Subagent(explore) "find the retry logic"     ← red
-│  ○  Read(backoff.go)
-│  ○  Bash(build.sh)                             ← red
-│  │    exit 1
-│  ○  failed · 2 steps — "build error"           ← red
+○  Subagent(build) "compile the project"     ← red
+│  ○  failed · 2 steps — "build error"        ← red
 ```
 
-The existing `+M nested subagent steps` fold (depth-2 activity) is preserved as a nested
-gutter detail.
+**Lifecycle:** an accumulator that is never reconciled (a `spawnKey` that never matched, or
+a parent turn interrupted before its `StepDone`) is cleared when the parent turn reaches a
+terminal (`clearTurnAccums`), so a stale pending subagent card never lingers below the
+committed "turn ran" line or leaks into the next turn.
 
 ### Collapse / expand
 

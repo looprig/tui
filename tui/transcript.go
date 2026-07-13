@@ -532,12 +532,15 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.userInputRequested(ev)
 	case event.TurnDone:
 		m.subagentTerminal(ev.LoopID, subDone)
+		m.clearTurnAccums(ev.LoopID, ev.TurnID)
 		m.commitLive()
 	case event.TurnInterrupted:
 		m.subagentTerminal(ev.LoopID, subInterrupted)
+		m.clearTurnAccums(ev.LoopID, ev.TurnID)
 		m.turnInterrupted()
 	case event.TurnFailed:
 		m.subagentTerminal(ev.LoopID, subFailed)
+		m.clearTurnAccums(ev.LoopID, ev.TurnID)
 		m.turnFailed(ev)
 	}
 	m.fold = nil
@@ -1336,6 +1339,42 @@ func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
 	// pendingSubagentCards renders in-flight cards deterministically.
 	m.accumOrder = append(append([]spawnKey(nil), m.accumOrder...), key)
 	return acc
+}
+
+// clearTurnAccums drops every subagent accumulator spawned BY loopID DURING turnID —
+// called when that turn reaches a terminal (TurnDone/Interrupted/Failed). By the parent's
+// turn end, its Subagent StepDone has already reconciled any matching accumulator (copying
+// a FROZEN snapshot onto the committed card, so dropping the source is safe); an accumulator
+// left UNRECONCILED (a spawn whose key never matched the orchestrator's, or a turn cut short
+// before its StepDone) is now stale and must be released — otherwise pendingSubagentCards
+// keeps exposing it and the live tail renders it perpetually below the committed "turn ran"
+// line, and it leaks into the next turn. Scoped to (loopID, turnID) so a still-running
+// sibling loop's or later turn's accumulators are untouched. Clone-on-write (value-copy
+// contract): a fresh map + accumOrder omitting the turn's keys, never an in-place mutation.
+func (m *transcriptModel) clearTurnAccums(loopID, turnID uuid.UUID) {
+	drop := make(map[spawnKey]bool)
+	for k := range m.subagentAccum {
+		if k.parentLoopID == loopID && k.parentTurnID == turnID {
+			drop[k] = true
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	next := make(map[spawnKey]*subagentAccumulator, len(m.subagentAccum))
+	for k, v := range m.subagentAccum {
+		if !drop[k] {
+			next[k] = v
+		}
+	}
+	order := make([]spawnKey, 0, len(m.accumOrder))
+	for _, k := range m.accumOrder {
+		if !drop[k] {
+			order = append(order, k)
+		}
+	}
+	m.subagentAccum = next
+	m.accumOrder = order
 }
 
 // cloneLoopParent returns a fresh copy of the child→spawnKey map (nil-safe), so a
