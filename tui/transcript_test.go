@@ -1468,17 +1468,10 @@ func TestTranscriptUserRowFromTurnEvent(t *testing.T) {
 	}
 }
 
-// TestTranscriptUserRowRequiresPrimaryLoop locks the loop-scoping half of the
-// user-row decision: a TurnStarted / TurnFoldedInto whose Header.LoopID is NOT the
-// model's activeLoopID commits NO kindUser row — even with Cause.LoopID == 0
-// and a non-nil Message. This is the subagent-own-turn case: a subagent's INITIAL
-// task arrives at its loop as a command.UserInput, so its emitted TurnStarted has
-// Cause.LoopID == 0 and LoopID == <the subagent loop>; the AllLoopsEventFilter
-// delivers it (Enduring from All loops), so it reaches ApplyEvent — but it must NOT
-// become a human user row (§5/§6: subagent loops' own turns surface only via
-// StepDone). A turn whose LoopID == activeLoopID still commits the row.
+// TestTranscriptUserRowsArePerLoop proves genuine TurnStarted and TurnFoldedInto input
+// commits into whichever LoopID produced it, including a delegate loop.
 func TestTranscriptUserRowsArePerLoop(t *testing.T) {
-	primary := callID(0xA1) // the model's active loop id
+	loopA := callID(0xA1)
 	subLoop := callID(0xC2) // a different (subagent) loop id
 
 	tests := []struct {
@@ -1487,13 +1480,13 @@ func TestTranscriptUserRowsArePerLoop(t *testing.T) {
 		wantRows int
 	}{
 		{
-			name:     "TurnStarted on the active loop commits a row",
-			event:    event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}}, Message: userMsg("genuine")},
+			name:     "TurnStarted on loop A commits a row",
+			event:    event.TurnStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopA}, Cause: identity.Cause{CommandID: callID(1)}}, Message: userMsg("genuine")},
 			wantRows: 1,
 		},
 		{
-			name:     "TurnFoldedInto on the active loop commits a row",
-			event:    event.TurnFoldedInto{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}}, Message: userMsg("folded")},
+			name:     "TurnFoldedInto on loop A commits a row",
+			event:    event.TurnFoldedInto{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopA}, Cause: identity.Cause{CommandID: callID(1)}}, Message: userMsg("folded")},
 			wantRows: 1,
 		},
 		{
@@ -1586,34 +1579,34 @@ func blockTextsOf(msgs [][]content.Block) []string {
 
 // TestTranscriptQueuedInputsForLoop locks the per-loop scoping of the queued affordance:
 // QueuedInputsFor returns only the inputs queued on the given loop (in submit order), so a
-// subagent's queued message never leaks under the primary view and vice versa; the unscoped
+// one loop's queued message never leaks under another loop's view; the unscoped
 // QueuedInputs still returns every queued input (scrollback); and when a queued input's turn
 // starts it drops from its loop's queue without disturbing another loop's queue.
 func TestTranscriptQueuedInputsForLoop(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	loopA := callID(1)
 	sub := callID(2)
 	idA := callID(0x11)
 	idB := callID(0x12)
 	idC := callID(0x13)
 
 	m := transcriptModel{}
-	// Two inputs queued on the active loop; one on a subagent loop.
-	m = m.RecordSubmit(idA, userBlocks("primary one"))
-	m = m.ApplyEvent(queuedFor(idA, primary))
-	m = m.RecordSubmit(idB, userBlocks("primary two"))
-	m = m.ApplyEvent(queuedFor(idB, primary))
+	// Two inputs queued on loop A; one on a subagent loop.
+	m = m.RecordSubmit(idA, userBlocks("loop A one"))
+	m = m.ApplyEvent(queuedFor(idA, loopA))
+	m = m.RecordSubmit(idB, userBlocks("loop A two"))
+	m = m.ApplyEvent(queuedFor(idB, loopA))
 	m = m.RecordSubmit(idC, userBlocks("sub one"))
 	m = m.ApplyEvent(queuedFor(idC, sub))
 
 	joined := func(s []string) string { return strings.Join(s, "|") }
 
-	// The primary view shows only its own two, in submit order — no subagent leak.
-	if got, want := joined(blockTextsOf(m.QueuedInputsFor(primary))), "primary one|primary two"; got != want {
-		t.Errorf("QueuedInputsFor(primary) = %q, want %q", got, want)
+	// The loop A view shows only its own two, in submit order — no subagent leak.
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(loopA))), "loop A one|loop A two"; got != want {
+		t.Errorf("QueuedInputsFor(loopA) = %q, want %q", got, want)
 	}
-	// The subagent view shows only the subagent's one — no primary leak.
+	// The subagent view shows only the subagent's one — no loopA leak.
 	if got, want := joined(blockTextsOf(m.QueuedInputsFor(sub))), "sub one"; got != want {
 		t.Errorf("QueuedInputsFor(sub) = %q, want %q", got, want)
 	}
@@ -1626,17 +1619,17 @@ func TestTranscriptQueuedInputsForLoop(t *testing.T) {
 		t.Errorf("QueuedInputs() = %d, want 3 (unscoped)", got)
 	}
 
-	// The primary's first queued input's turn starts: it drops from the primary queue (and
+	// Loop A's first queued input's turn starts: it drops from the loop A queue (and
 	// commits its real user row once) — no duplicate — and the subagent queue is untouched.
 	m = m.ApplyEvent(event.TurnStarted{
-		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: idA}},
-		Message: userMsg("primary one"),
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: loopA}, Cause: identity.Cause{CommandID: idA}},
+		Message: userMsg("loop A one"),
 	})
-	if got, want := joined(blockTextsOf(m.QueuedInputsFor(primary))), "primary two"; got != want {
-		t.Errorf("QueuedInputsFor(primary) after dequeue = %q, want %q", got, want)
+	if got, want := joined(blockTextsOf(m.QueuedInputsFor(loopA))), "loop A two"; got != want {
+		t.Errorf("QueuedInputsFor(loopA) after dequeue = %q, want %q", got, want)
 	}
 	if got, want := joined(blockTextsOf(m.QueuedInputsFor(sub))), "sub one"; got != want {
-		t.Errorf("QueuedInputsFor(sub) after primary dequeue = %q, want %q (untouched)", got, want)
+		t.Errorf("QueuedInputsFor(sub) after loopA dequeue = %q, want %q (untouched)", got, want)
 	}
 	if got := kindUserCount(m); got != 1 {
 		t.Errorf("kindUser rows = %d, want exactly 1 (promoted once, no duplicate)", got)
@@ -2777,22 +2770,19 @@ func TestDelegateWithoutToolParentUsesUniformProjection(t *testing.T) {
 	}
 }
 
-// TestProjectionNonPrimaryBuildsOwnStream locks that a NON-active loop's events build
-// THAT loop's own projection (task row → assistant prose → tool card) and do NOT
-// duplicate into the primary root fold. It uses a tool-spawned subagent, whose StepDone
-// the root fold accumulates under the pending Subagent card (subagentStep) and commits
-// NOTHING to the root committed slice — so the subagent rows below can ONLY come from the
-// projection.
-func TestProjectionNonPrimaryBuildsOwnStream(t *testing.T) {
+// TestProjectionDelegateBuildsOwnStream locks that a non-active loop's events build that
+// loop's own projection (task row → assistant prose → tool card) without creating another
+// loop's projection.
+func TestProjectionDelegateBuildsOwnStream(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(0xA1)
+	initial := callID(0xA1)
 	sub := callID(0xB2)
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
 	m := transcriptModel{}
-	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", initial, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "map repo"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
 		aiMessage("", "looking around", toolUse("g", "Grep", `{"q":"x"}`)),
@@ -2816,16 +2806,14 @@ func TestProjectionNonPrimaryBuildsOwnStream(t *testing.T) {
 	if got := strings.Join(pc[2].Calls[0].Result, "\n"); got != "child grep hit" {
 		t.Errorf("projection tool result = %q, want the child's %q", got, "child grep hit")
 	}
-	if _, ok := m.projections[primary]; ok {
+	if _, ok := m.projections[initial]; ok {
 		t.Fatal("delegate events unexpectedly created an initial-loop projection")
 	}
 }
 
-// TestProjectionZeroLoopIDGuard locks the zero-LoopID guard: session-scoped and
-// zero-LoopID events are handled by the model logic and are NEVER routed into a
-// projection. activeLoopID is deliberately NON-zero so the guard being exercised is
-// the IsZero() check (zero != primary), not the primary-alias branch.
-func TestProjectionZeroLoopIDGuard(t *testing.T) {
+// TestProjectionZeroLoopIDUsesUniformKey locks legacy zero-LoopID events to the same
+// projection model as every non-zero loop ID.
+func TestProjectionZeroLoopIDUsesUniformKey(t *testing.T) {
 	t.Parallel()
 
 	m := transcriptModel{}
@@ -2842,55 +2830,50 @@ func TestProjectionZeroLoopIDGuard(t *testing.T) {
 }
 
 // TestProjectionGloballyUniqueIDs locks the single-nextID allocator: every entry across
-// the primary root fold AND a subagent projection draws from the one m.nextID, so no two
+// the initial-loop and subagent projections draws from the one m.nextID, so no two
 // entries share a displayID (a later collapse map keyed by displayID cannot collide).
 func TestProjectionGloballyUniqueIDs(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(0xA1)
+	initial := callID(0xA1)
 	sub := callID(0xB2)
 	turn := callID(0xC3)
 	step := callID(0xD4)
 
 	m := transcriptModel{}
-	// Primary stream: a genuine user row + a finalized assistant step.
+	// Initial-loop stream: a genuine user row + a finalized assistant step.
 	m = m.ApplyEvent(event.TurnStarted{
-		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: primary}, Cause: identity.Cause{CommandID: callID(1)}},
-		Message: userMsg("primary question"),
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: initial}, Cause: identity.Cause{CommandID: callID(1)}},
+		Message: userMsg("initial question"),
 	})
-	m = m.ApplyEvent(stepDoneFrom(primary, aiMessage("", "primary answer")))
+	m = m.ApplyEvent(stepDoneFrom(initial, aiMessage("", "initial answer")))
 	// Subagent stream folded into its own projection.
-	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", initial, turn, step, "toolu_X"))
 	m = m.ApplyEvent(childTurnStarted(sub, "sub task"))
 	m = m.ApplyEvent(stepDoneFrom(sub,
 		aiMessage("", "sub work", toolUse("g", "Grep", `{}`)),
 		toolResult("g", "hit"),
 	))
 
-	initial, _ := m.projectionFor(primary)
+	initialEntries, _ := m.projectionFor(initial)
 	pc, _ := m.projectionFor(sub)
-	if len(initial) == 0 || len(pc) == 0 {
-		t.Fatalf("initial=%d, delegate=%d; want both non-empty so uniqueness is meaningful", len(initial), len(pc))
+	if len(initialEntries) == 0 || len(pc) == 0 {
+		t.Fatalf("initial=%d, delegate=%d; want both non-empty so uniqueness is meaningful", len(initialEntries), len(pc))
 	}
 	seen := make(map[displayID]bool)
-	for _, group := range [][]entry{initial, pc} {
+	for _, group := range [][]entry{initialEntries, pc} {
 		for _, e := range group {
 			if e.ID == 0 {
 				t.Errorf("entry has a zero ID: %+v", e)
 			}
 			if seen[e.ID] {
-				t.Errorf("displayID %d collides across the root fold and a projection (single nextID violated)", e.ID)
+				t.Errorf("displayID %d collides across loop projections (single nextID violated)", e.ID)
 			}
 			seen[e.ID] = true
 		}
 	}
 }
 
-// TestProjectionStoredCardNoSteal is the §3a guard: a concurrent subagent step whose
-// first tool shares index 0 with the primary's OWN live tool card must rebuild its nested
-// card via storedStepToolCard (the child's durable result), NEVER stealing the primary's
-// same-index live card. The projection fold also never reads or mutates m.testLive().Calls, so
-// the primary's live card is left untouched.
 // TestTranscriptLoopLiveness covers the bi-state (live | idle) liveness the loop table
 // tracks: LoopStarted / TurnStarted mark a loop live, LoopIdle marks it idle, the state
 // toggles freely (no "done"/"exited"), and an unseen loop is absent from loops().

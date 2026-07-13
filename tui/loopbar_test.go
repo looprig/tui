@@ -87,13 +87,11 @@ func TestLoopBarRender(t *testing.T) {
 			},
 		},
 		{
-			// The idle root outranks live loops under the cap: with max=2 and four live
-			// subagents, only the focused loop and the root survive — so the root
-			// conversation is always reachable, never culled by a crowd of live subagents.
-			name: "recent live loop survives without root priority",
+			// The focused loop and most-recent live loop survive.
+			name: "focused and recent live loops survive",
 			bar: loopBar{
 				entries: []loopBarEntry{
-					{id: l0, name: "main", live: false}, // root, idle
+					{id: l0, name: "main", live: false},
 					{id: l1, name: "a", live: true},
 					{id: l2, name: "b", live: true},
 					{id: l3, name: "c", live: true},
@@ -168,12 +166,9 @@ func TestLoopBarRender(t *testing.T) {
 	}
 }
 
-// TestLoopBarPriorityActiveRoot proves the 5-band visible-cap priority keeps the focused,
-// active, and selected loops as three INDEPENDENT privileged bands above live and idle loops:
-// under a cap the survivors are focused → active → root → live → most-recent idle. It covers
-// root/active/focused all DISTINCT as well as the case where they COINCIDE on one entry (which
-// still survives via the highest band the switch picks).
-func TestLoopBarPriorityActiveRoot(t *testing.T) {
+// TestLoopBarPriorityActiveFocus proves the visible-cap priority is focused → active →
+// live → most-recent idle, including coincident focused/active selection.
+func TestLoopBarPriorityActiveFocus(t *testing.T) {
 	t.Parallel()
 
 	l0, l1, l2 := loopID(0x01), loopID(0x02), loopID(0x03)
@@ -187,12 +182,11 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 		absent  []string
 	}{
 		{
-			// root, active, focused are three DISTINCT idle loops; under max=3 they survive over
-			// the live loops — proving focused > active > root > live > idle.
+			// Focused and active survive with the most-recent live loop.
 			name: "focused active and recent live survive",
 			bar: loopBar{
 				entries: []loopBarEntry{
-					{id: l0, name: "root", live: false},
+					{id: l0, name: "idle0", live: false},
 					{id: l1, name: "active", live: false},
 					{id: l2, name: "focused", live: false},
 					{id: l3, name: "live1", live: true},
@@ -208,12 +202,11 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 				barSegOf(barUnfocusedMark, "live2", l4),
 				overflowText(3),
 			},
-			absent: []string{"root", "live1"},
+			absent: []string{"idle0", "live1"},
 		},
 		{
-			// focused == active == root all name l0: the switch picks the highest band (focused),
-			// so the single privileged loop still survives the tightest cap.
-			name: "coincident focused/active/root survive the cap",
+			// Coincident focus and active selection still survives the tightest cap.
+			name: "coincident focused and active survive the cap",
 			bar: loopBar{
 				entries: []loopBarEntry{
 					{id: l0, name: "hub", live: false},
@@ -228,11 +221,11 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 			absent:  []string{"live1", "live2", "live3"},
 		},
 		{
-			// active outranks focused + active survive, root folds.
-			name: "active outranks root under the cap",
+			// Focused and active occupy the two privileged bands.
+			name: "focused and active outrank idle under the cap",
 			bar: loopBar{
 				entries: []loopBarEntry{
-					{id: l0, name: "root", live: false},
+					{id: l0, name: "idle0", live: false},
 					{id: l1, name: "active", live: false},
 					{id: l2, name: "focused", live: false},
 				},
@@ -244,10 +237,10 @@ func TestLoopBarPriorityActiveRoot(t *testing.T) {
 				barSegOf(barUnfocusedMark, "active", l1),
 				overflowText(1),
 			},
-			absent: []string{barSegOf(barUnfocusedMark, "root", l0)},
+			absent: []string{barSegOf(barUnfocusedMark, "idle0", l0)},
 		},
 		{
-			// No focused/active/root privilege among these (they point off-list), so the live
+			// No focused/active privilege among these (they point off-list), so the live
 			// loop and the most-recent idle survive by band then recency — live outranks idle.
 			name: "live outranks idle within the lower bands",
 			bar: loopBar{

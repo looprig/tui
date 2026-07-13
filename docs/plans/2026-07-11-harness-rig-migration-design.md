@@ -21,7 +21,7 @@ The required search and broader import/call-site searches found these sites outs
 | Presentation adapter | `tui/agent.go:12-127` | `Agent` is a CLI-owned narrow interface. It adds image capability, restored-backlog, gate convenience, and UI shutdown methods that are intentionally not identical to `session.Session`. |
 | Event subscription | `tui/commands.go:37-79`; `tui/sessioncore.go:96-101`; `tui/fixtures_test.go:128-194` | CLI opens one whole-session subscription and continuously unwraps `event.Delivery.Event`. The current screen already requests all-loop ephemeral and enduring events. |
 | Loop identity/routing | `tui/agent.go:22-36`; `tui/sessioncore.go:34-170`; `tui/screen.go:51-61,152-161,654-667,1041-1080`; `tui/transcript.go:368-378` | The public adapter and internal projection still conflate “primary” with both a stable per-loop projection and the mutable active loop. Final harness has a mutable active loop and no primary-loop accessor. Focused-loop submit already uses `SubmitToLoop`. |
-| Active-loops bar | `tui/loopbar.go`; `tui/screen.go` | The bar retains focused, then active, then live/recent loops. It has no root band. |
+| Active-loops bar | `tui/loopbar.go`; `tui/screen.go` | The bar retains focused, then active, then live/recent loops, with no third identity band. |
 | Restore repaint | `tui/restore.go`; `tui/screen.go` | `ReplayBacklog` supplies all-loop enduring history, and every loop is projected uniformly. |
 | Gate replies | `tui/agent.go:63-77`; `tui/commands.go:131-162`; `tui/interaction.go:292-325` | CLI keeps ergonomic `Approve`, `Deny`, and `ProvideAnswer`. The embedding adapter translates them to `Session.RespondGate`; CLI does not need the session controller. |
 | Teardown | `tui/commands.go:165-185`; `tui/sessioncore.go:231-266`; `cli/run.go:216-227` | `Agent.Close` is the UI ownership seam and remains idempotent. An adapter that owns a `SessionController` implements it with `Shutdown`. |
@@ -215,12 +215,9 @@ Because CLI commits `vendor/`, `go mod tidy` and `go mod vendor` are mandatory. 
 - Update all CLI fake Agents to satisfy `ActiveLoopID`; remove `PrimaryLoopID` from non-vendor Go source.
 - Refresh vendor, then run unit, race, integration-tagged, security, and static build gates.
 
-CLI unit tests cover only its adapter contract with fakes. Root derivation is a deferred
-acceptance criterion owned by the embedding-adapter migration: that migration's
-fresh-session and switched-then-restored tests must prove `ActiveLoopID` derives from
-harness's durably first zero-parent `LoopStarted`. They may execute in the sibling
-`tests` repository, but are not a CLI implementation action or gate. This avoids
-importing a composition root into the presentation module.
+CLI unit tests cover only its adapter contract with fakes. `ActiveLoopID` is the adapter's
+direct current selection; initial and reopened focus copy that value, while subsequent active
+changes do not steal focus. Restored display folding consumes uniform all-loop history.
 
 ## Non-goals
 

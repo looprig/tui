@@ -268,7 +268,7 @@ git add tui/sessioncore.go tui/sessioncore_test.go tui/fixtures_test.go
 git commit -m "feat(tui): reconcile active loop after subscription"
 ```
 
-### Task 4: Separate root attribution, active retention, and focus
+### Task 4: Separate active retention and focus
 
 **Files:**
 - Modify: `tui/transcript.go:368-1600`
@@ -327,7 +327,7 @@ Run:
 GOWORK=off go test -race ./tui -run 'TestModernNewFocusesActive|TestModernReopenFocusesActive|TestModernSelectionDoesNotStealFocus|TestLoopBar|TestTranscript|TestFoldDisplay|TestReplay'
 ```
 
-Expected: PASS. Root attribution is unchanged; focus and active selection are independent.
+Expected: PASS. Uniform loop projections, focus, and active selection are independent.
 
 **Step 5: Commit**
 
@@ -476,11 +476,8 @@ CGO_ENABLED=0 GOWORK=off go build -trimpath ./...
 
 Expected: PASS.
 
-Deferred acceptance criterion, owned by the embedding-adapter migration: its
-fresh-session and switched-then-restored acceptance tests must prove `ActiveLoopID` uses
-the durably first zero-parent `LoopStarted` while `ActiveLoopID` uses the restored
-current selection. Those tests may live in the sibling `tests` repository, but creating
-them is not an action or completion gate in this CLI plan.
+The embedding adapter returns its direct current `ActiveLoopID`. Initial and reopened focus
+copy that selection, and restored display folding consumes uniform all-loop history.
 
 **Step 5: Review and commit only necessary cleanup**
 

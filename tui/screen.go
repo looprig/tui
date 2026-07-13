@@ -42,8 +42,7 @@ import (
 // (handleKey precedence (2)) and the bottom box renders the head gate via the shared surface;
 // a pending gate marks its loop with "!" in the bar WITHOUT stealing focus (bar() reads
 // pendingGateLoops). A composer submit targets the FOCUSED loop (routeToInteraction — Stage 2:
-// submitting while focused on a subagent runs a new turn on THAT loop and stays focused there;
-// on the root it is the ordinary root submit).
+// submitting while focused on any loop runs a new turn on that loop and stays focused there).
 // A cold-restore session repaints its history: Init batches restoreBacklogCmd and handleRestored
 // folds the backlog into the transcript + projections + loop table and re-renders. The remaining
 // parity items (/clear reopen, esc/ctrl+c interrupt, queued input, image @path rejection) all
@@ -156,8 +155,8 @@ const liveTailEntryID displayID = 0
 // modern mode renders any focused loop's whole live output.
 // The viewport starts pinned to the tail (atTail) so streaming content auto-follows, the
 // collapse state starts folded (dense; ctrl+t expands), and focus starts on the agent's ACTIVE
-// loop (Agent.ActiveLoopID — the session's current default target, which may differ from the
-// transcript root); a later selection event never moves it.
+// loop (Agent.ActiveLoopID — the session's current default target); a later selection event
+// never moves it.
 func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
 	m := Screen{
 		sessionCore:   newSessionCore(ctx, agent, open, banner),
@@ -380,9 +379,8 @@ func stampEphemeralClock(ev event.Event, clock time.Time) event.Event {
 
 // trackTurnClock maintains turnStartedAt from a loop's turn-lifecycle events: a TurnStarted
 // records its start time (and seeds the clock so the first pre-tick frame reads a sane
-// elapsed); any terminal (TurnDone/TurnFailed/TurnInterrupted) clears it. Both the root
-// loop's turn events (via the core) and every subagent's (via the all-loops stream) reach
-// here, so every focusable loop's timer is tracked. Non-turn events are ignored.
+// elapsed); any terminal (TurnDone/TurnFailed/TurnInterrupted) clears it. Every loop's turn
+// events reach here through the all-loops stream. Non-turn events are ignored.
 func (m *Screen) trackTurnClock(ev event.Event) {
 	h := ev.EventHeader()
 	switch ev.(type) {
@@ -399,14 +397,13 @@ func (m *Screen) trackTurnClock(ev event.Event) {
 	}
 }
 
-// commitTurnRanNotice appends a faint "○ turn ran for Ns" harness line when the selected loop's
+// commitTurnRanNotice appends a faint "○ turn ran for Ns" harness line when a loop's
 // turn completes (event.TurnDone) — the frozen form of the live status-bar timer, so a finished
 // turn leaves a record of how long it took. It MUST run before trackTurnClock clears
-// turnStartedAt: the span is the TurnDone timestamp less turnStartedAt[root] (both Enduring
+// turnStartedAt: the span is the TurnDone timestamp less turnStartedAt[loopID] (both Enduring
 // CreatedAt values, so it is the TRUE turn duration, not the possibly-stale tick clock),
 // formatted via formatElapsed ("25s" / "2m 5s"); a zero terminal timestamp falls back to the
-// tick clock (m.now). It is a no-op for a subagent loop's terminal (its completion shows on its
-// own subagent card), for a failed/interrupted turn (those commit their own error/tombstone — a
+// tick clock (m.now). It is a no-op for a failed/interrupted turn (those commit their own error/tombstone — a
 // "ran for" summary would double up), and when no turn start was recorded (a cold restore
 // carries no streaming timestamps).
 func (m *Screen) commitTurnRanNotice(ev event.Event) {
@@ -572,8 +569,8 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 		return cmd
 	}
 	// Successful reopen: reset the modern presentation to match the fresh session. Focus
-	// initializes from the REPLACEMENT agent's ActiveLoopID (the session's current default
-	// target), NOT its root — mirroring New — and is set here ONCE, never from a later
+	// initializes from the replacement agent's ActiveLoopID (the session's current default
+	// target), mirroring New, and is set here once, never from a later
 	// selection event.
 	m.focusedLoopID = m.agent.ActiveLoopID()
 	m.collapse = newCollapseState()
@@ -680,9 +677,8 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 //
 // Submit goes to the FOCUSED loop (Stage 2): a uiSubmit is intercepted here and routed to the
 // currently focused loop via the core's loop-targeted submitToLoop — a submit while focused on
-// a subagent runs a NEW turn on THAT loop and STAYS focused there (no auto-refocus), while a
-// submit on the root behaves exactly like before (submitToLoop(root) == the root
-// submit). Only uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
+// any loop runs a new turn on that loop and stays focused there (no auto-refocus). Only
+// uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
 // selected-loop submit path (mapAction → submit → Submit) is untouched.
 func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -692,9 +688,9 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var present bool
 	if action.Kind == uiSubmit {
-		// Modern override: submit to the FOCUSED loop (not the root) and do NOT refocus —
+		// Submit to the focused loop and do not refocus —
 		// the user stays on the loop they are watching. Blocks are built the same way the
-		// core's root submit does (buildBlocks from action.Text), and a build error commits
+		// core's default submit does (buildBlocks from action.Text), and a build error commits
 		// the same faint error entry.
 		cmd, present = m.sessionCore.submitToLoop(m.focusedLoopID, action.Text)
 	} else {
@@ -1050,7 +1046,7 @@ const queuedTailEntryID displayID = ^displayID(0)
 // queuedTailLines renders the FOCUSED loop's pending queued-input affordances — the user
 // messages fired while a turn is still running — to viewport lines appended below the live
 // tail. It scopes the queue to the focused loop (QueuedInputsFor) so a subagent's queued
-// message never leaks under the root view, and reuses the dim, "queued"-tagged
+// message never leaks under another loop's view, and reuses the dim, "queued"-tagged
 // renderQueued (the faint styles.QueuedStyle rows).
 // Once a queued message's turn starts it commits as a real user row and drops from the queue
 // (startTurnUser → dropQueued), so it never renders both queued and committed. An empty queue
@@ -1076,16 +1072,10 @@ func (m Screen) queuedTailLines() []renderedLine {
 // focus (design §Prompts), leaving the user to focus it. A gate on the focused loop still marks
 // (focus and gate are independent flags).
 //
-// The bar shows the loops currently doing work plus three always-kept exceptions:
+// The bar shows the loops currently doing work plus two always-kept exceptions:
 // activeBarEntries keeps the LIVE loops, the FOCUSED loop (so the current view is always
-// labeled), the ACTIVE loop (the session's current default target), and the selected loop (so the
-// user can always return to the root conversation) — dropping only idle loops that are none of
-// focused/active/root. Without the root exception, focusing a subagent and letting it go idle
-// would hide the (idle, non-focused) root, leaving no way back to it. focused, active, and root
-// are passed to the bar as three INDEPENDENT privileged ids: a selection event advances active
-// (and the bar) without moving focus. When the filter still leaves nothing (a brand-new session
-// whose root is not yet in the table), rootBarEntry is a no-op returning nil — an empty bar, the
-// pre-turn default.
+// labeled), and the ACTIVE loop (the session's current default target), dropping only idle
+// loops that are neither. A selection event advances active without moving focus.
 func (m Screen) bar() loopBar {
 	infos := m.transcript.loops()
 	gated := m.interaction.pendingGateLoops()
@@ -1095,11 +1085,8 @@ func (m Screen) bar() loopBar {
 }
 
 // activeBarEntries maps the loop table into bar entries, keeping LIVE loops plus the FOCUSED,
-// ACTIVE, and selected loops (all kept even when idle) — only an idle loop that is none of
-// focused/active/root drops off the bar. Keeping the root guarantees the root conversation is
-// always reachable, even while focus sits on a now-idle subagent; keeping the active loop keeps
-// the session's current default target visible. The entry order follows loops() (stable creation
-// order), so the bar draws loops in the order they appeared.
+// ACTIVE loops (both kept even when idle); an unrelated idle loop drops off. Entry order
+// follows loops() (stable creation order), so the bar draws loops in the order they appeared.
 func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, active uuid.UUID) []loopBarEntry {
 	entries := make([]loopBarEntry, 0, len(infos))
 	for _, li := range infos {
@@ -1111,10 +1098,6 @@ func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, activ
 	return entries
 }
 
-// rootBarEntry is the fallback shown when the active filter leaves the bar empty (nothing live
-// and the focused loop is not in the table): the selected loop's entry, so the bar always labels the
-// session. It returns nil when the root is not yet in the table (a brand-new session with no
-// loops) — an empty bar, the pre-turn default.
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
 // or a prompt control when a prompt is active) via the shared surface primitive.
 func (m Screen) bottomBoxView() string {
@@ -1137,8 +1120,8 @@ func (m Screen) surfaceInputs() surfaceInputs {
 // focusedStatus is the turn-lifecycle Status the status line reflects for the FOCUSED loop
 // (design §Status line). It follows the FOCUSED loop's OWN turn liveness, independent of which
 // primer is currently active. This matters because the core status (m.status) now tracks the
-// ACTIVE loop, not the root: reusing it for a root focus would wrongly read "running" when the
-// root is idle but a DIFFERENT active primer is mid-turn. The only exception is the two
+// ACTIVE loop: reusing it for a different focused loop would wrongly read "running" when that
+// focused loop is idle but the active primer is mid-turn. The only exception is the two
 // session-global transitions the core owns — StatusInterrupting (an interrupt in flight) and
 // StatusResetting (a /clear reopen) — which surface regardless of focus. The ordinary
 // Running/Idle is read from the focused loop's per-loop turn bit

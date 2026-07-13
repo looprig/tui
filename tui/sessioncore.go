@@ -26,7 +26,7 @@ import (
 // EVENT-DRIVEN (committed by the transcript reducer from the loop's TurnStarted/
 // TurnFoldedInto Message), never optimistically at submit. EVERY loop's turn events fold a
 // per-loop running bit, but the displayed turn status follows only the ACTIVE loop's bit —
-// the session's selected loop, whose baseline is read at subscribe and advanced by each
+// the session's active loop, whose baseline is read at subscribe and advanced by each
 // ActiveLoopChanged; a background loop's turn events fold silently.
 //
 // Presentation stays in the embedding shell: the core's methods MUTATE the shared
@@ -56,11 +56,11 @@ type sessionCore struct {
 	// result. cli.Run finalization and the Bubble Tea command share its exactly-once Close.
 	closing *agentCloseHandoff
 
-	// activeLoopID is the session's AUTHORITATIVE selected loop — the post-subscription
+	// activeLoopID is the session's authoritative current selection — the post-subscription
 	// baseline read from Agent.ActiveLoopID in applySubscribed, then advanced causally by
 	// each ActiveLoopChanged. It is zero until the first successful subscribe (no authority
 	// yet); selection reconciliation FAILS CLOSED while zero, and status derivation falls
-	// back to the selected loop (effectiveActiveLoopID).
+	// back to Agent.ActiveLoopID (effectiveActiveLoopID).
 	activeLoopID uuid.UUID
 	// loopRunning folds EVERY loop's turn-liveness (TurnStarted → true; any terminal →
 	// false). The DISPLAYED status follows only the active loop's bit; a background loop's
@@ -69,8 +69,7 @@ type sessionCore struct {
 }
 
 // newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk and
-// banner the agent metadata. The transcript is scoped to the agent's selected loop so only its
-// GENUINE user turns commit human user rows.
+// banner the agent metadata. Every delivered loop folds into its own transcript projection.
 func newSessionCore(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) sessionCore {
 	return sessionCore{
 		agent:       agent,

@@ -121,7 +121,7 @@ const (
 	// Verb; renderEntry renders it via renderSubagentLine.
 	kindSubagent
 	// kindHarness is an out-of-band, faint status line the shell (not the model) emits —
-	// e.g. "turn ran for 25s" committed when the selected loop's turn ends. It carries a
+	// e.g. "turn ran for 25s" committed when a loop's turn ends. It carries a
 	// single TextBlock and renders as a hollow-circle "○ <text>" row in the faint,
 	// out-of-focus status tone (renderHarnessLine), distinct from a leveled kindNotice
 	// (no "▌ " accent bar).
@@ -867,7 +867,7 @@ func (m transcriptModel) CommitSystem(text string) transcriptModel {
 
 // CommitHarness appends one kindHarness status line carrying text with a fresh stable ID,
 // and returns the next model. It is the shell-emitted, out-of-band status primitive (e.g.
-// the "turn ran for 25s" line committed when the selected loop's turn ends). Like a notice it
+// the "turn ran for 25s" line committed when a loop's turn ends). Like a notice it
 // does NOT touch the live segment; unlike a notice it renders as a faint "○ <text>" row (no
 // leveled accent bar). An empty text still commits one entry.
 func (m transcriptModel) CommitHarness(text string) transcriptModel {
@@ -1216,7 +1216,7 @@ func (m *transcriptModel) subagentStep(ev event.StepDone) {
 }
 
 // depth1Key walks the spawn-parent chain from loopID up to the DEPTH-1 loop — the one
-// whose spawn parent is the selected loop — and returns that loop's spawn key (design
+// whose spawn parent is the event loop — and returns that loop's spawn key (design
 // §6: attribute a deeper StepDone to the right depth-1 card by ancestry, not the spawn
 // id). It follows each loop's recorded spawnKey.parentLoopID; the chain ends at the loop
 // whose parent is m.loopID. It returns false if the chain breaks before reaching
@@ -1543,7 +1543,7 @@ func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 	m.fold.live = liveSeg{}
 }
 
-// projectionFor returns the global rows plus the selected loop's committed and live
+// projectionFor returns the global rows plus the requested loop's committed and live
 // stream. An absent projection yields only global rows and an empty live segment.
 func (m transcriptModel) projectionFor(loopID uuid.UUID) (committed []entry, live liveSeg) {
 	if p, ok := m.projections[loopID]; ok {

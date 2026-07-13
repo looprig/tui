@@ -24,12 +24,11 @@ type loopBarEntry struct {
 
 // loopBar renders the session's loops as one clickable bar line and hit-tests a click
 // column back to a loop id (design §Active-loops bar). It is a PURE view: entries are the
-// assembled rows in stable (creation) order, and focused and active are three
-// INDEPENDENT privileged loop ids the visible cap always keeps — focused is the loop the
+// assembled rows in stable (creation) order, and focused and active are two
+// independent privileged loop ids the visible cap always keeps — focused is the loop the
 // viewport renders, active is the session's current default target (a selection event advances
-// it without moving focus), and root is the stable transcript root, always kept so the user can
-// return to it. max is the VISIBLE CAP: at most max entries render, the rest fold into a "… +N"
-// overflow marker so the bar never grows unbounded. A max <= 0 means no count cap. The three
+// it without moving focus). max is the visible cap: at most max entries render, the rest fold
+// into a "… +N" overflow marker so the bar never grows unbounded. A max <= 0 means no count cap. The two
 // ids may coincide (the switch in priority then picks the highest band). The segment layout is
 // width-INDEPENDENT, so HitTest (which takes no width) can never disagree with Render.
 type loopBar struct {
@@ -134,7 +133,7 @@ func (b loopBar) cycle(dir int) uuid.UUID {
 
 // layout is the single source of the bar's geometry, shared by Render and HitTest so a drawn
 // column and a hit-tested column can never disagree. It selects the kept set — prioritizing
-// the focused, active, and selected loops, then live loops, then the most-recent idle loops, capped
+// the focused loop, then the active loop, live loops, and the most-recent idle loops, capped
 // at max — then renders those loops (in stable display order, with their cell spans) plus the
 // "… +N" overflow marker for the hidden loops. It returns the kept segments and the rendered
 // line.
@@ -147,8 +146,8 @@ func (b loopBar) layout() ([]barSeg, string) {
 
 // keptByPriority returns the loops to display, in stable creation order, capped at max
 // (max <= 0 means no cap). When the cap bites, it keeps the highest-priority loops: priority is
-// focused, then active, then root, then live, then the most-recent idle (higher index = more
-// recent), so the focused/active/root and live loops are the ones that survive the cut
+// focused, then active, then live, then the most-recent idle (higher index = more
+// recent), so the focused/active and live loops are the ones that survive the cut
 // (design §bar).
 func (b loopBar) keptByPriority() []loopBarEntry {
 	if b.max <= 0 || len(b.entries) <= b.max {
@@ -169,7 +168,7 @@ func (b loopBar) keptByPriority() []loopBarEntry {
 }
 
 // priorityOrder returns entry indices ordered highest-priority first (focused, then active,
-// then root, then live, then most-recent idle), a stable ordering used to pick the kept set
+// then live, then most-recent idle), a stable ordering used to pick the kept set
 // under a cap. It never
 // reorders the DISPLAY — only which loops survive the cut — so the bar itself stays in
 // creation order.
@@ -187,13 +186,13 @@ func (b loopBar) priorityOrder() []int {
 	return idx
 }
 
-// priority scores entry i for the visible cap across FIVE bands: focused ranks above active,
-// which ranks above root, which ranks above every live loop, which ranks above every idle loop;
+// priority scores entry i for the visible cap: focused ranks above active, which ranks above
+// every live loop, which ranks above every idle loop;
 // within a band the more-recent loop (higher index) ranks higher so recency breaks ties. The
 // bands are spaced by len(entries) so no index crosses a band. The focused and active
 // loops are each banded above live so they always survive the cap (focus stays visible, the
-// session's active target stays visible, and the root stays reachable), never culled by a crowd
-// of live subagents. When two or three of focused/active/root name the SAME entry the switch
+// session's active target stays visible), never culled by a crowd of live subagents. When
+// focused and active name the same entry the switch
 // picks the highest matching band — that entry still survives the cap.
 func (b loopBar) priority(i int) int {
 	base := i // recency: later loops rank higher within a band

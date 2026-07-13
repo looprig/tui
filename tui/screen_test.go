@@ -472,10 +472,6 @@ func TestModernSubscribeUsesAllLoopsFilter(t *testing.T) {
 	}
 }
 
-// NOTE: TestScreenSubscribeUsesPrimaryOnlyFilter (the scrollback Screen's active-only
-// Ephemeral-filter contrast case) was removed with that shell. The modern all-loops filter
-// is covered by TestModernSubscribeUsesAllLoopsFilter above.
-
 // ctrlKey builds a ctrl+<r> key press (e.g. ctrl+n / ctrl+p), the focus-cycle chords.
 func ctrlKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl}
@@ -492,9 +488,7 @@ func barSpanOf(segs []barSeg, id uuid.UUID) (barSeg, bool) {
 	return barSeg{}, false
 }
 
-// TestModernNewFocusesActive proves New initializes focusedLoopID from Agent.ActiveLoopID —
-// even when the active loop differs from the root — while the transcript's root attribution
-// stays anchored to Agent.ActiveLoopID, independent of active/focus.
+// TestModernNewFocusesActive proves New initializes focusedLoopID from Agent.ActiveLoopID.
 func TestModernNewFocusesActive(t *testing.T) {
 	t.Parallel()
 
@@ -514,15 +508,14 @@ func TestModernNewFocusesActive(t *testing.T) {
 			agent := &fakeAgent{activeLoopID: tt.activeLoopID}
 			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
 			if m.focusedLoopID != tt.wantFocus {
-				t.Errorf("focusedLoopID = %v, want %v (New must focus the active loop, not the root)", m.focusedLoopID, tt.wantFocus)
+				t.Errorf("focusedLoopID = %v, want active loop %v", m.focusedLoopID, tt.wantFocus)
 			}
 		})
 	}
 }
 
 // TestModernReopenFocusesActive proves a successful /clear reopen initializes focus from the
-// REPLACEMENT agent's ActiveLoopID (once), while root attribution follows the replacement's
-// ActiveLoopID rather than its active loop.
+// replacement agent's ActiveLoopID once.
 func TestModernReopenFocusesActive(t *testing.T) {
 	t.Parallel()
 
@@ -553,8 +546,8 @@ func TestModernReopenFocusesActive(t *testing.T) {
 
 // TestModernSelectionDoesNotStealFocus pins that a later ActiveLoopChanged advances the
 // session's active loop (and the bar's active field + status) but leaves focusedLoopID
-// unchanged — focus is set ONLY by New / clear / an explicit user action, never by a selection
-// event. The bar exposes focused, active, and root as three INDEPENDENT fields.
+// unchanged — focus is set only by New, clear, or an explicit user action, never by a selection
+// event. The bar exposes independent focused and active fields.
 func TestModernSelectionDoesNotStealFocus(t *testing.T) {
 	t.Parallel()
 
@@ -588,30 +581,30 @@ func TestModernSelectionDoesNotStealFocus(t *testing.T) {
 	}
 }
 
-// TestModernFocusRendersFocusedProjection is the core focus-swap assertion: with focus on the
-// root the viewport shows the ROOT's stream, and focusing a subagent re-renders THAT loop's
-// projection — the viewport lines equal a fresh renderFocused() of the focused loop and carry
+// TestModernFocusRendersFocusedProjection is the core focus-swap assertion: initial focus
+// shows the active loop's stream, and focusing a subagent re-renders that loop's projection.
+// The viewport lines equal a fresh renderFocused() of the focused loop and carry
 // the focused loop's content, not the other loop's.
 func TestModernFocusRendersFocusedProjection(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	initial := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{activeLoopID: primary}
+	agent := &fakeAgent{activeLoopID: initial}
 	m := newScreenSized(t, agent, 80, 24)
 
-	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("primary question")})
-	m = feed(t, m, stepDoneFrom(primary, aiMessage("", "primary answer")))
+	m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("initial question")})
+	m = feed(t, m, stepDoneFrom(initial, aiMessage("", "initial answer")))
 	m = feed(t, m, loopStarted(sub, "reviewer"))
 	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subagent task")})
 	m = feed(t, m, stepDoneFrom(sub, aiMessage("", "subagent answer")))
 
-	// Focus starts on the primary: the viewport shows the primary's stream only.
-	if !containsPlain(m.viewport.lines, "primary answer") {
-		t.Fatalf("primary focus missing primary content; got %q", plainAll(m.viewport.lines))
+	// Focus starts on the initial: the viewport shows the initial's stream only.
+	if !containsPlain(m.viewport.lines, "initial answer") {
+		t.Fatalf("initial focus missing initial content; got %q", plainAll(m.viewport.lines))
 	}
 	if containsPlain(m.viewport.lines, "subagent answer") {
-		t.Errorf("primary focus leaked subagent content; got %q", plainAll(m.viewport.lines))
+		t.Errorf("initial focus leaked subagent content; got %q", plainAll(m.viewport.lines))
 	}
 
 	// Focusing the subagent re-renders ITS projection.
@@ -622,8 +615,8 @@ func TestModernFocusRendersFocusedProjection(t *testing.T) {
 	if !containsPlain(m.viewport.lines, "subagent answer") {
 		t.Errorf("subagent focus missing subagent content; got %q", plainAll(m.viewport.lines))
 	}
-	if containsPlain(m.viewport.lines, "primary answer") {
-		t.Errorf("subagent focus leaked primary content; got %q", plainAll(m.viewport.lines))
+	if containsPlain(m.viewport.lines, "initial answer") {
+		t.Errorf("subagent focus leaked initial content; got %q", plainAll(m.viewport.lines))
 	}
 	// The rendered lines must equal a fresh render of the (now-focused) projection.
 	if got, want := plainAll(m.viewport.lines), plainAll(m.renderFocused()); got != want {
@@ -847,29 +840,29 @@ func TestModernFocusIsViewOnly(t *testing.T) {
 }
 
 // TestModernStatusReflectsFocusedLoop pins that the status line follows the FOCUSED loop: with
-// the primary idle and a subagent mid-turn streaming, the status reads "idle" on the primary
+// the initial loop idle and a subagent mid-turn streaming, the status reads "idle" initially
 // and "streaming…" once the live subagent is focused (focusedStatus derives Running from the
 // subagent projection's active live segment; statusInputs refines it to streaming).
 func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	initial := callID(1)
 	sub := callID(2)
-	agent := &fakeAgent{activeLoopID: primary}
+	agent := &fakeAgent{activeLoopID: initial}
 	m := newScreenSized(t, agent, 80, 24)
 
-	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feed(t, m, event.TurnDone{Header: hdr(primary)}) // primary parks idle
+	m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
+	m = feed(t, m, event.TurnDone{Header: hdr(initial)}) // initial parks idle
 	m = feed(t, m, loopStarted(sub, "reviewer"))
 	m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
 	m = feed(t, m, event.TokenDelta{Header: hdr(sub), Chunk: &content.TextChunk{Text: "sub streaming"}})
 
-	// Focused on the idle primary → idle.
+	// Focused on the idle initial → idle.
 	if got := m.focusedStatus(); got != StatusIdle {
-		t.Errorf("primary focus status = %d, want StatusIdle", got)
+		t.Errorf("initial focus status = %d, want StatusIdle", got)
 	}
 	if got := statusLabel(m.focusedStatus(), m.statusInputs()); got != labelIdle {
-		t.Errorf("primary focus label = %q, want %q", got, labelIdle)
+		t.Errorf("initial focus label = %q, want %q", got, labelIdle)
 	}
 
 	// Focus the live subagent → running/streaming.
@@ -884,14 +877,14 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 
 // TestFocusedStatusReflectsFocusedLoopNotActive pins the corrected §Status-line rule: the
 // status line follows the FOCUSED loop's own turn liveness, independent of which primer is
-// active — while STILL surfacing the session-global Interrupting/Resetting transitions ONLY
-// for the root focus (never a subagent's). The headline case is the regression: focus on an
-// IDLE root while a DIFFERENT active primer is Running must read idle, not the active loop's
+// active, while still surfacing session-global Interrupting/Resetting transitions. The
+// headline case is the regression: focus on an idle initial loop while a different active
+// primer is running must read idle, not the active loop's
 // running state (which m.status now follows).
 func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 	t.Parallel()
 
-	root := callID(1)
+	initial := callID(1)
 	other := callID(2)
 	sub := callID(3)
 
@@ -901,24 +894,22 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 		want  Status
 	}{
 		{
-			name: "root focus idle while a different active primer runs → idle",
+			name: "initial focus idle while a different active primer runs → idle",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root // authoritative post-subscribe baseline
-				m = feed(t, m, event.TurnStarted{Header: hdr(root), Message: userMsg("q")})
-				m = feed(t, m, event.TurnDone{Header: hdr(root)}) // root parks idle
+				m.sessionCore.activeLoopID = initial // authoritative post-subscribe baseline
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
+				m = feed(t, m, event.TurnDone{Header: hdr(initial)}) // initial parks idle
 				m = feed(t, m, loopStarted(other, "worker"))
 				m = feed(t, m, event.TurnStarted{Header: hdr(other), Message: userMsg("bg")})
-				m = feed(t, m, selectionEvent(callID(9), event.ActiveLoopChanged{PreviousLoopID: root, ActiveLoopID: other}))
-				// Real precondition: focus sits on the IDLE root (loopRunning[root] false), the
+				m = feed(t, m, selectionEvent(callID(9), event.ActiveLoopChanged{PreviousLoopID: initial, ActiveLoopID: other}))
+				// Real precondition: focus sits on the IDLE initial (loopRunning[initial] false), the
 				// OTHER primer is mid-turn (loopRunning[other] true), and the core status now
 				// follows that RUNNING active primer — the value the fix must NOT reuse for the
-				// root focus. (The transcript root live segment is also active here — a sibling
-				// primer's TurnStarted marks the shared root fold live — so it cannot be the
-				// running/idle source; the per-loop loopRunning bit is.)
-				if m.focusedLoopID != root {
-					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				// initial focus. The per-loop loopRunning bit is the running/idle source.
+				if m.focusedLoopID != initial {
+					t.Fatalf("focusedLoopID = %v, want initial %v", m.focusedLoopID, initial)
 				}
 				if m.activeLoopID != other {
 					t.Fatalf("activeLoopID = %v, want other %v", m.activeLoopID, other)
@@ -926,8 +917,8 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 				if m.status != StatusRunning {
 					t.Fatalf("core status = %d, want StatusRunning (follows active loop)", m.status)
 				}
-				if m.loopRunning[root] {
-					t.Fatal("loopRunning[root] = true, want false (root turn is idle)")
+				if m.loopRunning[initial] {
+					t.Fatal("loopRunning[initial] = true, want false (initial turn is idle)")
 				}
 				if !m.loopRunning[other] {
 					t.Fatal("loopRunning[other] = false, want true (the active primer is mid-turn)")
@@ -937,48 +928,48 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 			want: StatusIdle,
 		},
 		{
-			name: "root focus while its own turn runs → running",
+			name: "initial focus while its own turn runs → running",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root
-				m = feed(t, m, event.TurnStarted{Header: hdr(root), Message: userMsg("q")})
-				if m.focusedLoopID != root {
-					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				m.sessionCore.activeLoopID = initial
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
+				if m.focusedLoopID != initial {
+					t.Fatalf("focusedLoopID = %v, want initial %v", m.focusedLoopID, initial)
 				}
-				if _, live := m.transcript.projectionFor(root); !live.active {
-					t.Fatal("root projection live segment is idle, want active")
+				if _, live := m.transcript.projectionFor(initial); !live.active {
+					t.Fatal("initial projection live segment is idle, want active")
 				}
 				return m
 			},
 			want: StatusRunning,
 		},
 		{
-			name: "root focus surfaces session-global Interrupting even while idle",
+			name: "initial focus surfaces session-global Interrupting even while idle",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root
+				m.sessionCore.activeLoopID = initial
 				m.status = StatusInterrupting
-				if m.focusedLoopID != root {
-					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				if m.focusedLoopID != initial {
+					t.Fatalf("focusedLoopID = %v, want initial %v", m.focusedLoopID, initial)
 				}
-				if _, live := m.transcript.projectionFor(root); live.active {
-					t.Fatal("root projection live segment is active, want idle")
+				if _, live := m.transcript.projectionFor(initial); live.active {
+					t.Fatal("initial projection live segment is active, want idle")
 				}
 				return m
 			},
 			want: StatusInterrupting,
 		},
 		{
-			name: "root focus surfaces session-global Resetting even while idle",
+			name: "initial focus surfaces session-global Resetting even while idle",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root
+				m.sessionCore.activeLoopID = initial
 				m.status = StatusResetting
-				if m.focusedLoopID != root {
-					t.Fatalf("focusedLoopID = %v, want root %v", m.focusedLoopID, root)
+				if m.focusedLoopID != initial {
+					t.Fatalf("focusedLoopID = %v, want initial %v", m.focusedLoopID, initial)
 				}
 				return m
 			},
@@ -987,9 +978,9 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 		{
 			name: "subagent focus running → running",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root
+				m.sessionCore.activeLoopID = initial
 				m = feed(t, m, loopStarted(sub, "reviewer"))
 				m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
 				m.focusLoop(sub)
@@ -1006,9 +997,9 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 		{
 			name: "session-global Interrupting surfaces on a delegate focus",
 			setup: func(t *testing.T) Screen {
-				agent := &fakeAgent{activeLoopID: root}
+				agent := &fakeAgent{activeLoopID: initial}
 				m := newScreenSized(t, agent, 80, 24)
-				m.sessionCore.activeLoopID = root
+				m.sessionCore.activeLoopID = initial
 				m = feed(t, m, loopStarted(sub, "reviewer"))
 				m = feed(t, m, event.TurnStarted{Header: hdr(sub), Message: userMsg("subtask")})
 				m.focusLoop(sub)
@@ -1918,12 +1909,12 @@ func TestModernTickLifecycle(t *testing.T) {
 // TestModernCommitsTurnRanNotice pins the "turn ran for Ns" harness line: when the active loop's
 // turn completes, a faint hollow-circle "○ turn ran for Ns" row commits to the transcript — the
 // frozen form of the live status-bar timer, measured from the Enduring TurnStarted→TurnDone
-// timestamps (independent of the tick clock). A subagent's terminal, a non-Done terminal, and a
-// TurnDone with no recorded start commit nothing.
+// timestamps (independent of the tick clock). Another loop's notice stays isolated in its own
+// projection; a non-Done terminal and a TurnDone with no recorded start commit nothing.
 func TestModernCommitsTurnRanNotice(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	active := callID(1)
 	sub := callID(2)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 
@@ -1933,10 +1924,10 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		want  string // "" = no harness line expected
 	}{
 		{
-			name: "primary TurnDone commits the elapsed line",
+			name: "active TurnDone commits the elapsed line",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(25*time.Second))})
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(active, base)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(active, base.Add(25*time.Second))})
 				return m
 			},
 			want: "○ turn ran for 25s",
@@ -1944,16 +1935,16 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		{
 			name: "over a minute reads Nm Ss",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m = feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(154*time.Second))})
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(active, base)})
+				m = feed(t, m, event.TurnDone{Header: hdrAt(active, base.Add(154*time.Second))})
 				return m
 			},
 			want: "○ turn ran for 2m 34s",
 		},
 		{
-			name: "subagent TurnDone commits nothing to the primary transcript",
+			name: "other loop notice does not leak into active projection",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(active, base)})
 				m = feed(t, m, loopStarted(sub, "reviewer"))
 				m = feed(t, m, event.TurnStarted{Header: hdrAt(sub, base)})
 				m = feed(t, m, event.TurnDone{Header: hdrAt(sub, base.Add(9*time.Second))})
@@ -1964,8 +1955,8 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		{
 			name: "interrupted turn commits nothing (no 'ran for' summary)",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdrAt(primary, base)})
-				m = feed(t, m, event.TurnInterrupted{Header: hdrAt(primary, base.Add(5*time.Second))})
+				m = feed(t, m, event.TurnStarted{Header: hdrAt(active, base)})
+				m = feed(t, m, event.TurnInterrupted{Header: hdrAt(active, base.Add(5*time.Second))})
 				return m
 			},
 			want: "",
@@ -1973,7 +1964,7 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		{
 			name: "TurnDone with no recorded start commits nothing",
 			drive: func(t *testing.T, m Screen) Screen {
-				return feed(t, m, event.TurnDone{Header: hdrAt(primary, base.Add(5*time.Second))})
+				return feed(t, m, event.TurnDone{Header: hdrAt(active, base.Add(5*time.Second))})
 			},
 			want: "",
 		},
@@ -1983,7 +1974,7 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{activeLoopID: primary}
+			agent := &fakeAgent{activeLoopID: active}
 			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 
@@ -2164,7 +2155,7 @@ func realTextDelta(loopID uuid.UUID, s string) event.Event {
 
 // firstThinkDurIn returns the thinkDur of the first committed kindAssistant entry carrying a
 // ThinkingBlock in entries, and whether one exists — the seam the modern thinking-duration
-// test asserts a projection's (or the root fold's) captured span through.
+// test asserts a loop projection's captured span through.
 func firstThinkDurIn(entries []entry) (time.Duration, bool) {
 	for _, e := range entries {
 		if e.Kind != kindAssistant {
@@ -2185,29 +2176,28 @@ func firstThinkDurIn(entries []entry) (time.Duration, bool) {
 // uses — and asserts the committed thinking entry carries the measured, NON-ZERO span rendered
 // as the lowercase "thought for Ns". Because the deltas are unstamped, the PRE-FIX reducer
 // (timing from ev.CreatedAt) captures 0 → the bare "thought"; the fix stamps them from m.now.
-// Both a active loop (root fold) and a SUBAGENT loop (its own projection) are timed — the
-// subagent's Ephemeral stream flows through handleEventModern too.
+// Both the active loop and a subagent loop are timed through their own projections.
 func TestModernRealThinkingDurationFromModelClock(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	active := callID(1)
 	sub := callID(2)
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
 		name    string
-		loop    uuid.UUID     // the loop whose thinking is timed (primary → root, sub → projection)
+		loop    uuid.UUID     // the loop whose projection's thinking is timed
 		elapsed time.Duration // the model-clock span between the first thinking chunk and the text chunk
 		wantHdr string        // the committed, collapsed header the viewport must show
 	}{
-		{name: "active loop thinking timed from the model clock", loop: primary, elapsed: 8 * time.Second, wantHdr: "thought for 8s"},
+		{name: "active loop thinking timed from the model clock", loop: active, elapsed: 8 * time.Second, wantHdr: "thought for 8s"},
 		{name: "subagent loop thinking timed too", loop: sub, elapsed: 25 * time.Second, wantHdr: "thought for 25s"},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{activeLoopID: primary}
+			agent := &fakeAgent{activeLoopID: active}
 			m := newScreenSized(t, agent, 80, 24)
 
 			// TurnStarted seeds the model clock (m.now = base). The thinking chunks stream with
@@ -2389,14 +2379,12 @@ func TestModernComposerVerticalPadding(t *testing.T) {
 	}
 }
 
-// TestModernBarActiveFilter pins the modern active-loops bar's filter (m.bar()): it shows only
-// LIVE loops, ALWAYS keeps the FOCUSED loop (even when idle) so the current view is labeled,
-// drops idle non-focused loops, and falls back to the primary when the filter would leave the
-// bar empty.
+// TestModernBarActiveFilter pins the bar filter: it keeps live loops plus focused and active
+// loops even when idle, and drops unrelated idle loops.
 func TestModernBarActiveFilter(t *testing.T) {
 	t.Parallel()
 
-	primary := callID(1)
+	initial := callID(1)
 	subA := callID(2)
 	subB := callID(3)
 
@@ -2409,51 +2397,48 @@ func TestModernBarActiveFilter(t *testing.T) {
 		{
 			name: "idle non-focused loop drops off; live loops stay",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
 				m = feed(t, m, loopStarted(subA, "a"))
 				m = feed(t, m, loopStarted(subB, "b"))
 				m = feed(t, m, event.LoopIdle{Header: hdr(subB)}) // subB parks idle, not focused
 				return m
 			},
-			present: []uuid.UUID{primary, subA},
+			present: []uuid.UUID{initial, subA},
 			absent:  []uuid.UUID{subB},
 		},
 		{
 			name: "the focused loop is kept even when idle",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
 				m = feed(t, m, loopStarted(subB, "b"))
 				m = feed(t, m, event.LoopIdle{Header: hdr(subB)}) // subB idle...
 				m.focusLoop(subB)                                 // ...but focused → kept
 				return m
 			},
-			present: []uuid.UUID{primary, subB},
+			present: []uuid.UUID{initial, subB},
 		},
 		{
-			// The reported bug: focus sits on a subagent that finishes, and the (idle,
-			// non-focused) primary must NOT drop off — the focused idle subagent keeps the
-			// filter non-empty, so the primary is kept by its own always-visible exception, not
-			// the empty-filter fallback. Without it, there'd be no way back to the primary.
-			name: "primary stays visible while focus sits on a now-idle subagent",
+			// The idle active loop remains visible while focus sits on another idle loop.
+			name: "active loop stays visible while focus sits on an idle subagent",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
 				m = feed(t, m, loopStarted(subA, "a"))
-				m = feed(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
+				m = feed(t, m, event.LoopIdle{Header: hdr(initial)}) // initial parks idle
 				m = feed(t, m, event.LoopIdle{Header: hdr(subA)})    // subA finishes → idle
 				m.focusLoop(subA)                                    // user is on the now-idle subagent
 				return m
 			},
-			present: []uuid.UUID{primary, subA},
+			present: []uuid.UUID{initial, subA},
 		},
 		{
-			name: "empty filter falls back to the primary",
+			name: "active loop survives when focus is absent from the table",
 			drive: func(t *testing.T, m Screen) Screen {
-				m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-				m = feed(t, m, event.LoopIdle{Header: hdr(primary)}) // primary parks idle
+				m = feed(t, m, event.TurnStarted{Header: hdr(initial), Message: userMsg("q")})
+				m = feed(t, m, event.LoopIdle{Header: hdr(initial)}) // initial parks idle
 				m.focusedLoopID = subB                               // focus a loop absent from the table
 				return m
 			},
-			present: []uuid.UUID{primary},
+			present: []uuid.UUID{initial},
 			absent:  []uuid.UUID{subB},
 		},
 	}
@@ -2462,7 +2447,7 @@ func TestModernBarActiveFilter(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			agent := &fakeAgent{activeLoopID: primary}
+			agent := &fakeAgent{activeLoopID: initial}
 			m := newScreenSized(t, agent, 80, 24)
 			m = tt.drive(t, m)
 			bar := m.bar()
