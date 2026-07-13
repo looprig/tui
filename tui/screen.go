@@ -73,7 +73,7 @@ type Screen struct {
 	// restoring is the initial replay barrier. Subscription events continue to be read and
 	// re-armed, but reducer inputs queue in arrival order until restoredMsg installs history.
 	restoring     bool
-	restoreBuffer []eventMsg
+	restoreBuffer []restoreInput
 
 	// mouseDragging distinguishes a drag (a text selection) from a plain click (a
 	// header/body collapse toggle): a MouseMotion with the button held sets it, and a
@@ -251,6 +251,10 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleSubClosed(msg)
 		return m, cmd
 	case submitResultMsg:
+		if m.restoring {
+			m.restoreBuffer = append(m.restoreBuffer, restoreInput{kind: restoreInputSubmit, submit: msg})
+			return m, nil
+		}
 		cmd := m.handleSubmitResult(msg)
 		return m, cmd
 	case interruptResultMsg:
@@ -362,12 +366,11 @@ func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	return tea.Batch(rearm, m.maybeStartTick())
 }
 
-// bufferRestoreEvent retains one live reducer input behind the initial replay barrier while
-// immediately re-arming the subscription reader. Ephemeral timing is stamped at arrival so
-// delayed reduction does not move its clock observation.
+// bufferRestoreEvent retains one raw delivery behind the initial replay barrier while
+// immediately re-arming the subscription reader. Token timestamps are deliberately deferred:
+// ordered drain must let an earlier TurnStarted advance m.now before stamping a later delta.
 func (m *Screen) bufferRestoreEvent(msg eventMsg) tea.Cmd {
-	msg.ev = stampEphemeralClock(msg.ev, m.now)
-	m.restoreBuffer = append(m.restoreBuffer, msg)
+	m.restoreBuffer = append(m.restoreBuffer, restoreInput{kind: restoreInputEvent, delivery: msg})
 	if m.sub == nil {
 		return nil
 	}
@@ -501,19 +504,39 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 		m.transcript = installRestoredTranscript(m.transcript, msg.transcript)
 		m.interaction = installRestoredInteraction(m.interaction, msg.interaction)
 	}
-	for _, delivery := range buffered {
-		ev := delivery.ev
-		if id := ev.EventHeader().EventID; !id.IsZero() {
-			if _, replayed := msg.eventIDs[id]; replayed {
-				continue
+	for _, input := range buffered {
+		switch input.kind {
+		case restoreInputEvent:
+			ev := stampEphemeralClock(input.delivery.ev, m.now)
+			if id := ev.EventHeader().EventID; !id.IsZero() {
+				if _, replayed := msg.eventIDs[id]; replayed {
+					continue
+				}
 			}
+			_, _ = m.sessionCore.handleEvent(ev) // reader was re-armed when the delivery was buffered
+			m.commitTurnRanNotice(ev)
+			m.trackTurnClock(ev)
+		case restoreInputSubmit:
+			m.sessionCore.applySubmitResult(input.submit)
 		}
-		_, _ = m.sessionCore.handleEvent(ev) // reader was re-armed when the delivery was buffered
-		m.commitTurnRanNotice(ev)
-		m.trackTurnClock(ev)
 	}
 	m.rerender()
 	return m.maybeStartTick()
+}
+
+type restoreInputKind uint8
+
+const (
+	restoreInputEvent restoreInputKind = iota
+	restoreInputSubmit
+)
+
+// restoreInput is one reducer input observed while initial replay is pending. Event deliveries
+// and submit outcomes share one slice so their cross-kind arrival order is preserved.
+type restoreInput struct {
+	kind     restoreInputKind
+	delivery eventMsg
+	submit   submitResultMsg
 }
 
 // installRestoredTranscript installs historical reducer state while preserving shell-global

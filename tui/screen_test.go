@@ -1289,8 +1289,8 @@ func TestModernRestoreBufferKeepsSubscriptionReaderArmed(t *testing.T) {
 	if len(m.restoreBuffer) != 1 || m.transcript.committedLen() != 0 {
 		t.Fatalf("buffer = %d committed = %d, want queued but not folded", len(m.restoreBuffer), m.transcript.committedLen())
 	}
-	if m.restoreBuffer[0].journalSeq != 42 {
-		t.Fatalf("buffered journal sequence = %d, want 42", m.restoreBuffer[0].journalSeq)
+	if m.restoreBuffer[0].delivery.journalSeq != 42 {
+		t.Fatalf("buffered journal sequence = %d, want 42", m.restoreBuffer[0].delivery.journalSeq)
 	}
 
 	m = feedRestored(t, m, restoredMsg{interaction: newInteractionModel()})
@@ -1320,6 +1320,70 @@ func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
 	committed, _ := m.transcript.projectionFor(loopID)
 	if len(committed) != 1 || committedText(committed[0]) != "once" {
 		t.Fatalf("committed duplicate replay = %+v, want one row", committed)
+	}
+}
+
+func TestModernRestoreStampsBufferedThinkingInDrainOrder(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xB0)
+	base := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{loopStarted(loopID, "operator")}}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+	m = feed(t, m, event.TurnStarted{Header: hdrAt(loopID, base)})
+	m = feed(t, m, event.TokenDelta{Header: hdr(loopID), Chunk: &content.ThinkingChunk{Thinking: "reasoning"}})
+	m = feed(t, m, event.TurnInterrupted{Header: hdrAt(loopID, base.Add(5*time.Second))})
+	m = feedRestored(t, m, msg)
+
+	committed, _ := m.transcript.projectionFor(loopID)
+	duration, ok := firstThinkDurIn(committed)
+	if !ok {
+		t.Fatalf("no committed thinking entry: %+v", committed)
+	}
+	if duration != measuredFloor {
+		t.Fatalf("thinking duration = %v, want measured floor %v (not unmeasured zero)", duration, measuredFloor)
+	}
+}
+
+func TestModernRestoreBuffersSubmitResultBeforeQueuedEvent(t *testing.T) {
+	t.Parallel()
+
+	loopID, inputID := callID(0xB5), callID(0xB6)
+	agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{
+		loopStarted(loopID, "operator"),
+		queuedFor(inputID, loopID), // historical shown placeholder; buffered inputs must not duplicate it
+	}}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+	m, _ = updateScreen(t, m, submitResultMsg{inputID: inputID, blocks: userBlocks("queued draft")})
+	m = feed(t, m, queuedFor(inputID, loopID))
+	if len(m.transcript.queued) != 0 {
+		t.Fatalf("submit folded before restore: queued=%+v", m.transcript.queued)
+	}
+	m = feedRestored(t, m, msg)
+	queued := m.transcript.QueuedInputsFor(loopID)
+	if len(queued) != 1 || blockText(queued[0][0]) != "queued draft" {
+		t.Fatalf("queued affordance = %+v, want queued draft", queued)
+	}
+	if !containsPlain(m.viewport.lines, "queued draft") {
+		t.Fatalf("viewport missing queued affordance: %q", plainAll(m.viewport.lines))
+	}
+
+	m = feed(t, m, event.TurnStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, Cause: identity.Cause{CommandID: inputID}},
+		Message: userMsg("queued draft"),
+	})
+	if got := len(m.transcript.QueuedInputsFor(loopID)); got != 0 {
+		t.Fatalf("queued inputs after TurnStarted = %d, want 0", got)
+	}
+	committed, _ := m.transcript.projectionFor(loopID)
+	if committedText(committed[len(committed)-1]) != "queued draft" {
+		t.Fatalf("committed user row = %+v", committed[len(committed)-1])
 	}
 }
 
