@@ -1284,9 +1284,9 @@ func (m Screen) surfaceInputs() surfaceInputs {
 
 // focusedStatus is the turn-lifecycle Status the status line reflects for the FOCUSED loop
 // (design §Status line). It follows the FOCUSED loop's OWN turn liveness, independent of which
-// primer is currently active. This matters because the core status (m.status) now tracks the
+// loop is currently active. This matters because the core status (m.status) now tracks the
 // ACTIVE loop: reusing it for a different focused loop would wrongly read "running" when that
-// focused loop is idle but the active primer is mid-turn. The only exception is the two
+// focused loop is idle but the active loop is mid-turn. The only exception is the two
 // session-global transitions the core owns — StatusInterrupting (an interrupt in flight) and
 // StatusResetting (a /clear reopen) — which surface regardless of focus. The ordinary
 // Running/Idle is read from the focused loop's per-loop turn bit

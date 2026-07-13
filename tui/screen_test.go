@@ -877,10 +877,10 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 }
 
 // TestFocusedStatusReflectsFocusedLoopNotActive pins the corrected §Status-line rule: the
-// status line follows the FOCUSED loop's own turn liveness, independent of which primer is
+// status line follows the FOCUSED loop's own turn liveness, independent of which loop is
 // active, while still surfacing session-global Interrupting/Resetting transitions. The
 // headline case is the regression: focus on an idle initial loop while a different active
-// primer is running must read idle, not the active loop's
+// loop is running must read idle, not the active loop's
 // running state (which m.status now follows).
 func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 	t.Parallel()
@@ -906,8 +906,8 @@ func TestFocusedStatusReflectsFocusedLoopNotActive(t *testing.T) {
 				m = feed(t, m, event.TurnStarted{Header: hdr(other), Message: userMsg("bg")})
 				m = feed(t, m, selectionEvent(callID(9), event.ActiveLoopChanged{PreviousLoopID: initial, ActiveLoopID: other}))
 				// Real precondition: focus sits on the IDLE initial (loopRunning[initial] false), the
-				// OTHER primer is mid-turn (loopRunning[other] true), and the core status now
-				// follows that RUNNING active primer — the value the fix must NOT reuse for the
+				// OTHER loop is mid-turn (loopRunning[other] true), and the core status now
+				// follows that RUNNING active loop — the value the fix must NOT reuse for the
 				// initial focus. The per-loop loopRunning bit is the running/idle source.
 				if m.focusedLoopID != initial {
 					t.Fatalf("focusedLoopID = %v, want initial %v", m.focusedLoopID, initial)

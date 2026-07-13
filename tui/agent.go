@@ -22,8 +22,8 @@ type EventStream = event.Subscription
 type Agent interface {
 	// Submit sends input fire-and-forget as a queueable UserInput; the returned
 	// InputID correlates the Reply events (Cause.CommandID) that report the outcome.
-	// It targets the session's ACTIVE loop (the current active primer) — the default
-	// input target the single-loop convenience Screen and the modern viewport both use.
+	// It targets the session's ACTIVE loop — the currently selected default input
+	// target the single-loop convenience Screen and the modern viewport both use.
 	Submit(ctx context.Context, blocks []content.Block) (uuid.UUID, error)
 	// SubmitToLoop sends input fire-and-forget to a SPECIFIC loop — the modern
 	// viewport's FOCUSED loop — rather than the active loop, so a submit while focused on a
@@ -59,8 +59,8 @@ type Agent interface {
 	// returns nil/empty — the TUI then skips the repaint and behaves exactly as a
 	// fresh session. A read failure returns a typed error the fold surfaces as a
 	// non-fatal restore-error notice (history could not repaint; the live stream is
-	// unaffected). The events are Enduring-only and from the active loop's session
-	// view — never the live 256-cap hub buffer. ctx bounds the read.
+	// unaffected). The events are the session's all-loop Enduring history — never
+	// the live 256-cap hub buffer. ctx bounds the read.
 	ReplayBacklog(ctx context.Context) ([]event.Event, error)
 
 	// Approve resolves a pending tool-call permission gate, granting it at the
