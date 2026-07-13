@@ -261,6 +261,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleInterruptResult(msg)
 		return m, cmd
 	case reopenResultMsg:
+		if m.restoring {
+			return m, nil // /clear is not admitted before initial replay completes
+		}
 		cmd := m.handleReopenResult(msg)
 		return m, cmd
 	case closeForQuitResultMsg:
@@ -768,6 +771,11 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
+	if m.restoring && action.Kind == uiRunSlash && action.Slash == "/clear" {
+		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "restore in progress; /clear is unavailable")
+		m.rerender()
+		return m, nil
+	}
 	var cmd tea.Cmd
 	var present bool
 	if action.Kind == uiSubmit {

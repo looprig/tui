@@ -1889,6 +1889,62 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	}
 }
 
+func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
+	t.Parallel()
+
+	oldLoop := callID(0xE1)
+	old := &fakeAgent{activeLoopID: oldLoop, backlog: []event.Event{
+		loopStarted(oldLoop, "operator"),
+		event.TurnStarted{Header: hdr(oldLoop), Message: userMsg("old question")},
+		stepDoneFrom(oldLoop, aiMessage("", "old history")),
+	}}
+	fresh := &fakeAgent{activeLoopID: callID(0xE2)}
+	openCalls := 0
+	m := newScreenSized(t, old, 80, 24)
+	m.restoring = true
+	m.openAgent = func(context.Context) (Agent, error) {
+		openCalls++
+		return fresh, nil
+	}
+	restored := runRestoreCmd(t, restoreBacklogCmd(context.Background(), old))
+
+	m.interaction.input.SetValue("/clear")
+	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil || openCalls != 0 || old.closeCalled {
+		t.Fatalf("blocked /clear = (cmd %v, opens %d, old closed %v)", cmd != nil, openCalls, old.closeCalled)
+	}
+	if m.status != StatusIdle || m.Agent() != old || !m.restoring {
+		t.Fatalf("blocked state = (status %v, agent %p, restoring %v)", m.status, m.Agent(), m.restoring)
+	}
+	if !containsPlain(m.viewport.lines, "restore in progress") {
+		t.Fatalf("viewport missing restore rejection: %q", plainAll(m.viewport.lines))
+	}
+
+	// Even an impossible early reopen result cannot swap the session ahead of old replay.
+	m, cmd = updateScreen(t, m, reopenResultMsg{agent: fresh})
+	if cmd != nil || m.Agent() != old || !m.restoring {
+		t.Fatalf("early reopen result changed session: cmd=%v agent=%p restoring=%v", cmd != nil, m.Agent(), m.restoring)
+	}
+	m = feedRestored(t, m, restored)
+	if m.Agent() != old || m.restoring || !containsPlain(m.viewport.lines, "old history") {
+		t.Fatalf("old replay did not install before clear: agent=%p restoring=%v viewport=%q", m.Agent(), m.restoring, plainAll(m.viewport.lines))
+	}
+
+	m.interaction.input.SetValue("/clear")
+	m, cmd = updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil || m.status != StatusResetting {
+		t.Fatalf("post-restore /clear = (cmd %v status %v)", cmd != nil, m.status)
+	}
+	result := cmd()
+	if openCalls != 1 || !old.closeCalled {
+		t.Fatalf("normal reopen = (opens %d old closed %v)", openCalls, old.closeCalled)
+	}
+	m, _ = updateScreen(t, m, result)
+	if m.Agent() != fresh || containsPlain(m.viewport.lines, "old history") {
+		t.Fatalf("fresh session received stale history: agent=%p viewport=%q", m.Agent(), plainAll(m.viewport.lines))
+	}
+}
+
 // TestModernInterruptAndQuit pins the two globals: esc with NO prompt interrupts a running turn
 // (flips to Interrupting + dispatches the bounded Interrupt), and ctrl+c closes the subscription
 // and quits.
