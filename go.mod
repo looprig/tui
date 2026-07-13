@@ -13,7 +13,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.4
-	github.com/looprig/harness v0.5.2
+	github.com/looprig/harness v0.10.0
 )
 
 require github.com/looprig/inference v0.1.0 // indirect
