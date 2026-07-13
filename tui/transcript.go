@@ -532,15 +532,15 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.userInputRequested(ev)
 	case event.TurnDone:
 		m.subagentTerminal(ev.LoopID, subDone)
-		m.clearTurnAccums(ev.LoopID, ev.TurnID)
+		m.clearLoopAccums(ev.LoopID)
 		m.commitLive()
 	case event.TurnInterrupted:
 		m.subagentTerminal(ev.LoopID, subInterrupted)
-		m.clearTurnAccums(ev.LoopID, ev.TurnID)
+		m.clearLoopAccums(ev.LoopID)
 		m.turnInterrupted()
 	case event.TurnFailed:
 		m.subagentTerminal(ev.LoopID, subFailed)
-		m.clearTurnAccums(ev.LoopID, ev.TurnID)
+		m.clearLoopAccums(ev.LoopID)
 		m.turnFailed(ev)
 	}
 	m.fold = nil
@@ -1341,20 +1341,26 @@ func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
 	return acc
 }
 
-// clearTurnAccums drops every subagent accumulator spawned BY loopID DURING turnID —
-// called when that turn reaches a terminal (TurnDone/Interrupted/Failed). By the parent's
-// turn end, its Subagent StepDone has already reconciled any matching accumulator (copying
-// a FROZEN snapshot onto the committed card, so dropping the source is safe); an accumulator
-// left UNRECONCILED (a spawn whose key never matched the orchestrator's, or a turn cut short
-// before its StepDone) is now stale and must be released — otherwise pendingSubagentCards
-// keeps exposing it and the live tail renders it perpetually below the committed "turn ran"
-// line, and it leaks into the next turn. Scoped to (loopID, turnID) so a still-running
-// sibling loop's or later turn's accumulators are untouched. Clone-on-write (value-copy
-// contract): a fresh map + accumOrder omitting the turn's keys, never an in-place mutation.
-func (m *transcriptModel) clearTurnAccums(loopID, turnID uuid.UUID) {
+// clearLoopAccums drops every subagent accumulator spawned BY loopID — called when that
+// loop's turn reaches a terminal (TurnDone/Interrupted/Failed). By the parent's turn end,
+// its Subagent StepDone has already reconciled any MATCHING accumulator (copying a FROZEN
+// snapshot onto the committed card, so dropping the source is safe); an accumulator left
+// UNRECONCILED (a spawn whose turn/step/tool-use coordinates never matched the
+// orchestrator's, or a turn cut short before its StepDone) is now stale and must be
+// released — otherwise pendingSubagentCards keeps exposing it and the live tail renders it
+// perpetually below the committed "turn ran" line, and it leaks into the next turn.
+//
+// Scoped to the parent LOOP ONLY (not the turn): the very coordinate divergence that
+// defeats reconciliation also makes an accumulator's parentTurnID unreliable, but its
+// parentLoopID is the parent loop (that is how pendingSubagentCards found it under this
+// loop), which equals the terminating turn's LoopID — so loop-scope is the one match that
+// always holds. A loop runs its turns sequentially and every subagent completes before its
+// parent turn ends, so no still-running sibling accumulator is wrongly dropped. Clone-on-
+// write (value-copy contract): a fresh map + accumOrder omitting the keys, never in-place.
+func (m *transcriptModel) clearLoopAccums(loopID uuid.UUID) {
 	drop := make(map[spawnKey]bool)
 	for k := range m.subagentAccum {
-		if k.parentLoopID == loopID && k.parentTurnID == turnID {
+		if k.parentLoopID == loopID {
 			drop[k] = true
 		}
 	}

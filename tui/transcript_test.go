@@ -2595,6 +2595,36 @@ func TestSubagentAccumClearedOnParentTurnDone(t *testing.T) {
 	}
 }
 
+// TestSubagentAccumClearedDespiteTurnMismatch reproduces the REAL-WORLD failure: the
+// accumulator's spawn coordinates (from the child's Cause) do NOT match the parent's own
+// turn id — the same divergence that defeats reconciliation. Cleanup must still release
+// the stale accumulator by parent LOOP (the one coordinate that provably matches, since
+// pendingSubagentCards found it under the parent loop), so the card cannot linger after the
+// parent turn ends.
+func TestSubagentAccumClearedDespiteTurnMismatch(t *testing.T) {
+	t.Parallel()
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	spawnTurn := callID(0xC3) // turn recorded in the accumulator's spawnKey
+	step := callID(0xD4)
+	doneTurn := callID(0xEE) // DIFFERENT turn id the parent's TurnDone reports
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "explorer", primary, spawnTurn, step, "toolu_spawn"))
+	m = m.ApplyEvent(childTurnStarted(sub, "map the repo"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("c-grep", "Grep", `{}`)),
+		toolResult("c-grep", "hit"),
+	))
+	if got := len(m.pendingSubagentCardsFor(primary)); got == 0 {
+		t.Fatalf("precondition: expected a pending card, got 0")
+	}
+	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary, TurnID: doneTurn}}})
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+		t.Errorf("pending cards after parent TurnDone (turn-id mismatch) = %d, want 0 (must clear by parent loop)", got)
+	}
+}
+
 // TestSubagentAccumClearedOnParentInterrupt: a child fills its accumulator, then the
 // PARENT turn is interrupted before the orchestrator reconciles it. The stale accumulator
 // must be cleared so it does not leak into the next turn as a lingering pending card.
