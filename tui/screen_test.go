@@ -2686,6 +2686,44 @@ func toolRunFixture(t *testing.T, uses []content.ToolUseBlock, results []*conten
 	return m, 0
 }
 
+// TestThinkingOnlyThenToolsNoDoubledRail pins the committed-vs-live parity fix: a step with
+// thinking but NO narration text, followed by tools, must NOT double the rail — the thinking
+// block's own trailing "│ " gap is the sole connector into the first tool node, so exactly ONE
+// bare rail row separates them (never a thinking gap AND a railSeparator).
+func TestThinkingOnlyThenToolsNoDoubledRail(t *testing.T) {
+	t.Parallel()
+	primary := callID(1)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("go")})
+	m = feed(t, m, stepDoneFrom(primary,
+		aiMessage("planning quietly", "", toolUse("t1", "Read", `{}`)),
+		toolResult("t1", "a"),
+	))
+	m.collapse.ToggleAll() // expand so the individual tool node renders
+
+	lines := m.renderFocused()
+	// Find the first tool node ("○ Read") and count the consecutive bare "│" rows directly
+	// above it. There must be exactly one (the thinking gap), not two.
+	nodeIdx := -1
+	for i, ln := range lines {
+		if strings.HasPrefix(stripANSI(ln.styled), "○ Read") {
+			nodeIdx = i
+			break
+		}
+	}
+	if nodeIdx <= 0 {
+		t.Fatalf("no ○ Read node found; lines=%q", plainAll(lines))
+	}
+	bars := 0
+	for k := nodeIdx - 1; k >= 0 && strings.TrimSpace(stripANSI(lines[k].styled)) == "│"; k-- {
+		bars++
+	}
+	if bars != 1 {
+		t.Errorf("bare rail rows above the first tool node = %d, want 1 (no doubled rail); lines=%q", bars, plainAll(lines))
+	}
+}
+
 // TestToolRunCollapsedSummary proves a completed contiguous run of tool entries collapses,
 // under the DEFAULT (collapsed) fold, to exactly ONE "○ N tools · names" summary node whose
 // first line carries sub == 0 and entry == runID (so the existing header-click handler

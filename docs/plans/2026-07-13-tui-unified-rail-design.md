@@ -115,9 +115,10 @@ Reuse the existing `collapseState` (`globalCollapsed` default true, per-entry `o
 thinking's fold** — one unified state.
 
 - **At rest (folded):** a completed step's tool list collapses to a single summary node
-  `○ N tools · Name, Name, Name` on the rail. Failed tools are marked `✗` and the node is
-  tinted red if any failed. A collapsed subagent tucks its done summary into its own node:
-  `○ 3 tools · Read, Subagent(explore) ✓, Bash`.
+  `○ N tools · Name, Name, Name` on the rail. Only FAILED calls are marked `✗` (successes,
+  including subagents, are unmarked — a consistent rule); the node is tinted red if any
+  failed. A collapsed subagent appears by its agent name, e.g.
+  `○ 3 tools · Read, Subagent(explore), Bash` (or `Subagent(explore) ✗` on failure).
 - **Expanded:** click the `○ N tools` node (`Toggle(id)`) or `ctrl+t` (`ToggleAll`) reveals
   the full rail. Same affordance as thinking today.
 - **Active step stays expanded:** the in-flight/streaming step renders its full rail so the

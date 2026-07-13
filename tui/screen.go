@@ -1117,6 +1117,15 @@ func (m *Screen) rerender() {
 // and then gray-filled (paintUserBackground) so its message reads as a padded card — the pad
 // rows are part of the entry (gray, rail-continued), distinct from the transparent blank
 // separator that still follows the whole card.
+// endsInThinkingGap reports whether a committed assistant entry renders as thinking with
+// NO narration — so its last row is renderThinking's trailing "│ " rail gap. That gap
+// already connects into a following tool node, so renderFocused must NOT also append a
+// railSeparator (which would double the rail; design: one unbroken timeline). An entry
+// with narration text ends on its "● " body instead, and still needs the connector.
+func endsInThinkingGap(e entry) bool {
+	return e.Kind == kindAssistant && thinkingText(e.Blocks) != "" && assistantText(e.Blocks) == ""
+}
+
 func (m Screen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
@@ -1132,17 +1141,13 @@ func (m Screen) renderFocused() []renderedLine {
 			}
 			runID := committed[i].ID
 			if m.collapse.Effective(runID) {
-				// Collapsed: one summary node for the whole run. Its trailing separator uses the
-				// run's LAST entry (j-1) for the intra-turn test, so a following tool-led step keeps
-				// a connector and a turn boundary keeps its blank.
+				// Collapsed: one summary node for the whole run. A maximal tool run always ends at
+				// the first NON-tool entry (or the buffer end), so its trailing gap is never
+				// intra-turn — it's always a turn-boundary blank.
 				sum := toolRunSummaryLines(committed[i:j], width)
 				out = append(out, sum...)
 				if n := len(sum); n > 0 {
-					if intraTurnSeparator(committed, j-1) {
-						out = append(out, railSeparator(runID, n))
-					} else {
-						out = append(out, blankSeparator(runID, n))
-					}
+					out = append(out, blankSeparator(runID, n))
 				}
 				i = j
 				continue
@@ -1176,9 +1181,13 @@ func (m Screen) renderFocused() []renderedLine {
 		// entry. A gap INTERNAL to a step (intraTurnSeparator: assistant→tool or tool→tool) becomes a
 		// faint "│" rail connector so the timeline reads unbroken; every turn boundary keeps a blank.
 		if n := len(lines); n > 0 {
-			if intraTurnSeparator(committed, i) {
+			switch {
+			case intraTurnSeparator(committed, i) && endsInThinkingGap(committed[i]):
+				// A thinking-only assistant already ends in its own "│ " rail gap, which IS the
+				// connector into the following tool node — a railSeparator here would double it.
+			case intraTurnSeparator(committed, i):
 				out = append(out, railSeparator(committed[i].ID, n))
-			} else {
+			default:
 				out = append(out, blankSeparator(committed[i].ID, n))
 			}
 		}
