@@ -522,3 +522,29 @@ func TestFillLineBackgroundModernPanel(t *testing.T) {
 func stripANSI(s string) string {
 	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(s, "")
 }
+
+// TestRailNodeGlyphs verifies each unified-rail node style renders the expected glyph
+// and is exactly 2 columns wide (matching LitDot) so the timeline stays aligned.
+func TestRailNodeGlyphs(t *testing.T) {
+	tests := []struct {
+		name  string
+		got   string
+		glyph string
+	}{
+		{"lit ai node", LitDot, "●"},
+		{"tool ok node", ToolNode(NodeOK), "○"},
+		{"tool failed node", ToolNode(NodeFailed), "○"},
+		{"tool running node", ToolNode(NodeRunning), "◍"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(tt.got, tt.glyph) {
+				t.Errorf("style = %q, want glyph %q", tt.got, tt.glyph)
+			}
+			if lipgloss.Width(tt.got) != 2 {
+				t.Errorf("width = %d, want 2", lipgloss.Width(tt.got))
+			}
+		})
+	}
+}

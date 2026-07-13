@@ -111,6 +111,39 @@ var nexusChroma = ansi.Chroma{
 // Dot's (the color is zero-width ANSI), so narration alignment is unchanged.
 var LitDot = lipgloss.NewStyle().Foreground(DotColor).Render("●") + " "
 
+// NodeStatus selects a rail node's tint. A hollow-circle tool/subagent node is
+// faint when OK, red when failed, and a pulsing filled glyph while running.
+type NodeStatus uint8
+
+const (
+	NodeOK NodeStatus = iota
+	NodeFailed
+	NodeRunning
+)
+
+// dotNodeHollow is the tool/subagent node glyph; dotNodeRunning is its running form.
+const (
+	dotNodeHollow  = "○"
+	dotNodeRunning = "◍"
+)
+
+// FailColor tints a failed rail node and its header. Kept distinct from DotColor so a
+// failure reads red against the neon assistant bullet.
+var FailColor = lipgloss.Color("#FF6B6B")
+
+// ToolNode returns the COLORED node glyph (glyph + trailing space, 2 columns wide like
+// LitDot) for a tool/subagent node at the given status.
+func ToolNode(s NodeStatus) string {
+	switch s {
+	case NodeFailed:
+		return lipgloss.NewStyle().Foreground(FailColor).Render(dotNodeHollow) + " "
+	case NodeRunning:
+		return lipgloss.NewStyle().Foreground(DotColor).Render(dotNodeRunning) + " "
+	default: // NodeOK
+		return lipgloss.NewStyle().Faint(true).Render(dotNodeHollow) + " "
+	}
+}
+
 // AccentBar is the left bar marker shared by user-message rows and the input
 // prompt. AccentBarPrompt is the bar plus its trailing space, used as the prompt.
 const (
