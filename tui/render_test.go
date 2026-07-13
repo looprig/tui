@@ -646,6 +646,107 @@ func TestRenderLiveAssistant_Rail(t *testing.T) {
 	})
 }
 
+// TestRenderLiveAssistant_RailConnectors covers the live tail's inter-node "│" connector
+// rows (Task 8 follow-up): a bare "│" connector joins the "●" AI-message body to the first
+// tool node and separates consecutive tool nodes, so the live rail is continuous like the
+// committed path — WITHOUT doubling the rail after a thinking block (whose own trailing "│ "
+// already connects into the first node) or before a tools-only step's first node.
+func TestRenderLiveAssistant_RailConnectors(t *testing.T) {
+	t.Parallel()
+
+	// A bare connector row is exactly "│" (no trailing space); a thinking trailing rail
+	// line is "│ " and a detail row is "│ <text>", so this identifies connectors only.
+	strippedLines := func(s string) []string {
+		lines := strings.Split(s, "\n")
+		for i := range lines {
+			lines[i] = stripANSI(lines[i])
+		}
+		return lines
+	}
+	countConnectors := func(lines []string) int {
+		n := 0
+		for _, l := range lines {
+			if l == "│" {
+				n++
+			}
+		}
+		return n
+	}
+	firstNodeIdx := func(lines []string) int {
+		for i, l := range lines {
+			if strings.Contains(l, "◍") || strings.Contains(l, "○") {
+				return i
+			}
+		}
+		return -1
+	}
+
+	t.Run("text plus two tools has connectors between body and nodes", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{
+			{ToolName: "Read", Summary: "config.go", Status: ToolOK, Result: []string{"42 lines"}},
+			{ToolName: "Bash", Summary: "go test", Status: ToolOK, Result: []string{"ok"}},
+		}
+		lines := strippedLines(renderLiveAssistant("", "the answer", calls, nil, true, 80, animState{}))
+
+		// Exactly two bare connectors: ● body → node1, and node1 → node2.
+		if got := countConnectors(lines); got != 2 {
+			t.Errorf("text + 2 tools: got %d '│' connector rows, want 2\nlines: %#v", got, lines)
+		}
+		// The connector sits immediately after the "●" body line.
+		for i, l := range lines {
+			if strings.Contains(l, "●") {
+				if i+1 >= len(lines) || lines[i+1] != "│" {
+					t.Errorf("no '│' connector directly after the ● body line\nlines: %#v", lines)
+				}
+				break
+			}
+		}
+	})
+
+	t.Run("thinking plus tools (no text) does not double the rail before first node", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{
+			{ToolName: "Read", Summary: "config.go", Status: ToolOK, Result: []string{"42 lines"}},
+			{ToolName: "Bash", Summary: "go test", Status: ToolOK, Result: []string{"ok"}},
+		}
+		lines := strippedLines(renderLiveAssistant("weighing options", "", calls, nil, true, 80, animState{}))
+
+		idx := firstNodeIdx(lines)
+		if idx < 1 {
+			t.Fatalf("first tool node not found (or has no preceding line)\nlines: %#v", lines)
+		}
+		// The line before the first node is the thinking block's trailing "│ " rail line —
+		// NOT an added bare "│" connector (that would double the rail).
+		if lines[idx-1] == "│" {
+			t.Errorf("rail doubled: a bare '│' connector precedes the first node after thinking\nlines: %#v", lines)
+		}
+		// Only ONE bare connector overall: between the two tool nodes, none before the first.
+		if got := countConnectors(lines); got != 1 {
+			t.Errorf("thinking + 2 tools: got %d '│' connector rows, want 1 (only between nodes)\nlines: %#v", got, lines)
+		}
+	})
+
+	t.Run("tools only (no thinking, no text) has no leading connector", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{
+			{ToolName: "Read", Summary: "config.go", Status: ToolOK, Result: []string{"42 lines"}},
+			{ToolName: "Bash", Summary: "go test", Status: ToolOK, Result: []string{"ok"}},
+		}
+		lines := strippedLines(renderLiveAssistant("", "", calls, nil, true, 80, animState{}))
+
+		if idx := firstNodeIdx(lines); idx != 0 {
+			t.Errorf("tools-only step: first node at line %d, want 0 (no leading connector)\nlines: %#v", idx, lines)
+		}
+		if got := countConnectors(lines); got != 1 {
+			t.Errorf("tools-only step: got %d '│' connector rows, want 1 (only between the two nodes)\nlines: %#v", got, lines)
+		}
+	})
+}
+
 func TestRenderLiveAssistantExpandedThinkingShowsFullBody(t *testing.T) {
 	t.Parallel()
 

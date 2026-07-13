@@ -507,6 +507,14 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
+		// A "│" connector row joins the "●" AI-message body to the first tool node so the
+		// live rail is continuous (matching the committed path). It fires ONLY after a "●"
+		// text body: a thinking block already ends in its own trailing "│ " rail line, and a
+		// tools-only step's first node opens the rail itself, so neither needs a leading
+		// connector (one would double the rail).
+		if text != "" {
+			b.WriteString(railConnector(0) + "\n")
+		}
 		// Cap the live tail to the most recent liveCallCap tool nodes (keeping the running
 		// one), prefixed with a "… N earlier calls" rail detail row, so a many-tool step
 		// can't grow the managed region to fill the screen and drop the assistant bullet.
@@ -527,7 +535,9 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 			}
 			nodes = append(nodes, strings.Join(renderToolNodeGlyph(shown[i], 0, expand, width, true, glyph), "\n"))
 		}
-		b.WriteString(strings.Join(nodes, "\n"))
+		// Consecutive tool nodes are separated by a "│" connector row — the committed path's
+		// continuous rail between nodes.
+		b.WriteString(strings.Join(nodes, "\n"+railConnector(0)+"\n"))
 	}
 
 	// Each pending subagent card is its OWN "●"-level card (like the committed form),
