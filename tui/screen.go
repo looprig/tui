@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -74,6 +75,7 @@ type Screen struct {
 	// re-armed, but reducer inputs queue in arrival order until restoredMsg installs history.
 	restoring     bool
 	restoreBuffer []restoreInput
+	staleClosings []*agentCloseHandoff
 
 	// mouseDragging distinguishes a drag (a text selection) from a plain click (a
 	// header/body collapse toggle): a MouseMotion with the button held sets it, and a
@@ -262,12 +264,16 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case reopenResultMsg:
 		if m.restoring {
-			return m, nil // /clear is not admitted before initial replay completes
+			cmd := m.rejectStaleReopenResult(msg)
+			return m, cmd
 		}
 		cmd := m.handleReopenResult(msg)
 		return m, cmd
 	case closeForQuitResultMsg:
 		cmd := m.handleCloseForQuitResult(msg)
+		return m, cmd
+	case staleReopenCloseMsg:
+		cmd := m.handleStaleReopenClose(msg)
 		return m, cmd
 	case promptResultMsg:
 		cmd := m.handlePromptResult(msg)
@@ -283,6 +289,17 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// FinalizeHandoff extends the core ownership finalizer with any stale replacement cleanup
+// still in flight. agentCloseHandoff is sync.Once-backed, so a concurrent command completion
+// and finalization close each rejected replacement exactly once.
+func (m Screen) FinalizeHandoff() error {
+	err := m.sessionCore.FinalizeHandoff()
+	for _, handoff := range m.staleClosings {
+		err = errors.Join(err, handoff.close())
+	}
+	return err
 }
 
 // handleResize stores the terminal dimensions, resizes the composer, and commits a deferred
@@ -669,6 +686,35 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 		return closeAgentForQuit(m.closing)
 	}
 	return cmd
+}
+
+func (m *Screen) rejectStaleReopenResult(msg reopenResultMsg) tea.Cmd {
+	if msg.handoff != nil {
+		msg.handoff.claim()
+		if m.handoff == msg.handoff {
+			m.handoff = nil
+		}
+	}
+	if msg.agent == nil {
+		return nil
+	}
+	handoff := newAgentCloseHandoff(msg.agent)
+	m.staleClosings = append(m.staleClosings, handoff)
+	return closeStaleReopen(handoff)
+}
+
+func (m *Screen) handleStaleReopenClose(msg staleReopenCloseMsg) tea.Cmd {
+	for i, handoff := range m.staleClosings {
+		if handoff == msg.handoff {
+			m.staleClosings = append(m.staleClosings[:i], m.staleClosings[i+1:]...)
+			break
+		}
+	}
+	if msg.err != nil {
+		m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("close stale reopen replacement: %w", msg.err))
+		m.rerender()
+	}
+	return nil
 }
 
 // handleCloseForQuitResult consumes the deferred replacement close before clearing ownership.

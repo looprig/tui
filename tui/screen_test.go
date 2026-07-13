@@ -1899,6 +1899,8 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 		stepDoneFrom(oldLoop, aiMessage("", "old history")),
 	}}
 	fresh := &fakeAgent{activeLoopID: callID(0xE2)}
+	staleCloseErr := errors.New("close stale replacement")
+	staleFresh := &fakeAgent{activeLoopID: callID(0xE3), closeErr: staleCloseErr}
 	openCalls := 0
 	m := newScreenSized(t, old, 80, 24)
 	m.restoring = true
@@ -1920,10 +1922,41 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 		t.Fatalf("viewport missing restore rejection: %q", plainAll(m.viewport.lines))
 	}
 
-	// Even an impossible early reopen result cannot swap the session ahead of old replay.
-	m, cmd = updateScreen(t, m, reopenResultMsg{agent: fresh})
-	if cmd != nil || m.Agent() != old || !m.restoring {
+	// Even an impossible handoff-backed early result cannot swap the session ahead of old
+	// replay. Its replacement is closed through an exactly-once cleanup handoff.
+	handoff := newReopenHandoff()
+	stale := reopenResultMsg{agent: staleFresh, handoff: handoff}
+	handoff.complete(stale)
+	m, cmd = updateScreen(t, m, stale)
+	if cmd == nil || m.Agent() != old || !m.restoring {
 		t.Fatalf("early reopen result changed session: cmd=%v agent=%p restoring=%v", cmd != nil, m.Agent(), m.restoring)
+	}
+	cleanup := cmd()
+	m, _ = updateScreen(t, m, cleanup)
+	if staleFresh.closeCalls != 1 {
+		t.Fatalf("stale replacement Close calls = %d, want 1", staleFresh.closeCalls)
+	}
+	if !containsPlain(m.viewport.lines, staleCloseErr.Error()) {
+		t.Fatalf("viewport missing stale cleanup error: %q", plainAll(m.viewport.lines))
+	}
+	if err := handoff.finalize(); err != nil {
+		t.Fatalf("claimed stale handoff finalize = %v", err)
+	}
+	if err := m.FinalizeHandoff(); err != nil {
+		t.Fatalf("late finalizer = %v", err)
+	}
+	if staleFresh.closeCalls != 1 {
+		t.Fatalf("late finalizer double-closed stale replacement: %d", staleFresh.closeCalls)
+	}
+	nilHandoff := newReopenHandoff()
+	nilStale := reopenResultMsg{handoff: nilHandoff}
+	nilHandoff.complete(nilStale)
+	m, cmd = updateScreen(t, m, nilStale)
+	if cmd != nil || m.Agent() != old || !m.restoring {
+		t.Fatalf("nil stale result changed session: cmd=%v agent=%p restoring=%v", cmd != nil, m.Agent(), m.restoring)
+	}
+	if err := nilHandoff.finalize(); err != nil {
+		t.Fatalf("nil stale handoff finalize = %v", err)
 	}
 	m = feedRestored(t, m, restored)
 	if m.Agent() != old || m.restoring || !containsPlain(m.viewport.lines, "old history") {
