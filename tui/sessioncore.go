@@ -226,10 +226,9 @@ func (c *sessionCore) applyActiveSelection(ev event.ActiveLoopChanged) {
 }
 
 // effectiveActiveLoopID is the loop the displayed status follows: the authoritative
-// activeLoopID once established, else the selected loop as the pre-baseline fallback (so a
-// single-loop session shows its root's turn status before the first subscribe completes).
+// activeLoopID once established, else Agent.ActiveLoopID as the pre-baseline fallback.
 // Status-display ONLY — the selection reconcile (applyActiveSelection) must key on
-// activeLoopID directly and fail closed when it is zero, never on this root fallback, so a
+// activeLoopID directly and fail closed when it is zero, never on this fallback, so a
 // stale selection cannot be ordered against a synthesized baseline.
 func (c sessionCore) effectiveActiveLoopID() uuid.UUID {
 	if c.activeLoopID.IsZero() {
@@ -336,8 +335,8 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 		return tea.Quit, true
 	}
 	c.agent = msg.agent
-	// Read the NEW agent's selected loop id (the swap above happened first) so the fresh
-	// transcript scopes its committed user rows to the replacement loop.
+	// The agent swap happened first; reset the uniform transcript before subscribing to the
+	// replacement's stream.
 	c.transcript = transcriptModel{}
 	c.interaction = c.interaction.ClearPrompts()
 	c.status = StatusIdle
@@ -422,11 +421,11 @@ func (c *sessionCore) submit(text string) (tea.Cmd, bool) {
 
 // submitToLoop is submit's loop-targeted counterpart: it builds blocks from the composed
 // text exactly as submit does and sends them fire-and-forget to a SPECIFIC loop (the
-// modern viewport's focused loop) via submitToLoopCmd, rather than to the root. A
+// modern viewport's focused loop) via submitToLoopCmd, rather than the default target. A
 // buildBlocks error commits the SAME plain-user-row-plus-faint-error entries and sends
 // nothing (returning true so the shell presents them). It exists so the modern shell can
 // route a composer submit to the focused loop while reusing the one buildBlocks +
-// error-commit path — Screen never calls it (its submit stays the selected-loop submit).
+// error-commit path used by Screen.
 func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool) {
 	blocks, err := buildBlocks(text, c.agent.AcceptsImages(loopID))
 	if err != nil {

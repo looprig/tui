@@ -1216,11 +1216,11 @@ func (m *transcriptModel) subagentStep(ev event.StepDone) {
 }
 
 // depth1Key walks the spawn-parent chain from loopID up to the DEPTH-1 loop — the one
-// whose spawn parent is the event loop — and returns that loop's spawn key (design
+// whose spawn parent is the first ancestor not itself recorded as a child — and returns
+// that loop's spawn key (design
 // §6: attribute a deeper StepDone to the right depth-1 card by ancestry, not the spawn
-// id). It follows each loop's recorded spawnKey.parentLoopID; the chain ends at the loop
-// whose parent is m.loopID. It returns false if the chain breaks before reaching
-// a root-parented loop (an orphaned/unknown ancestor — fail-safe, no counter bump). A
+// id). It follows each loop's recorded spawnKey.parentLoopID; the chain ends at the
+// top-level owning loop. It returns false when the starting child is unknown. A
 // guard caps the walk at the number of known child loops so a malformed cycle cannot
 // spin.
 func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
@@ -1238,10 +1238,8 @@ func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
 }
 
 // subagentTerminal records a child loop's terminal status on its accumulator and
-// reports whether loopID was a recorded subagent child (so ApplyEvent skips the
-// selected-loop terminal handling for it — a child terminal must never flush the
-// orchestrator's live segment). A non-child loop returns false (the normal terminal
-// path runs).
+// reports whether loopID was a recorded subagent child. Each terminal still finalizes that
+// loop's own projection; this hook only updates the detached parent-card accumulator.
 func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) bool {
 	key, ok := m.loopParent[loopID]
 	if !ok {

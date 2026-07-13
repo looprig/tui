@@ -680,7 +680,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // any loop runs a new turn on that loop and stays focused there (no auto-refocus). Only
 // uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
-// selected-loop submit path (mapAction → submit → Submit) is untouched.
+// default submit path (mapAction → submit → Submit) is untouched.
 func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
