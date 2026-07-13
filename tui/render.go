@@ -177,38 +177,56 @@ func renderToolCallsGlyph(calls []ToolCallView, expandTools bool, width int, gly
 	return strings.Join(parts, "\n")
 }
 
-// renderToolCard renders one tool card: the styled header line then its styled,
-// indented result-preview lines. glyph maps the call's status to its header glyph.
-//
-// liveRunning collapses a still-RUNNING card to its header line ALONE (no result
-// body) — the live→committed handoff fix (design Option B). A running card has no
-// result yet, so its body is only the "(no output)" placeholder; dropping it in the
-// LIVE tail means the compact one-line running indicator is replaced by the full
-// committed card (which inserts above via tea.Println) without a multi-line live-tail
-// shrink, so the running→completed transition reads as a clean continuation rather
-// than a split. It applies ONLY to ToolRunning cards on the live path; resolved cards
-// (live or committed) and the committed path always render their full body.
-func renderToolCard(c ToolCallView, expandTools bool, width int, glyph func(ToolStatus) string, liveRunning bool) string {
-	header := cardIndent + styles.ToolCallStyle.Render(
-		cardConnector+toolHeaderText(c, glyph(c.Status)))
-
-	if liveRunning && c.Status == ToolRunning {
-		return header // compact one-line running indicator; body appears once, on commit
+// toolNodeStatus maps a tool's lifecycle status to its rail-node tint: error and
+// cancelled are the failed (red) node, running is the pulsing node, and OK (or any
+// unrecognised status) is the faint hollow node (fail-visible, never a panic).
+func toolNodeStatus(s ToolStatus) styles.NodeStatus {
+	switch s {
+	case ToolError, ToolCancelled:
+		return styles.NodeFailed
+	case ToolRunning:
+		return styles.NodeRunning
+	default: // ToolOK and any unknown value
+		return styles.NodeOK
 	}
-
-	lines := make([]string, 0, previewLineCap+2)
-	lines = append(lines, header)
-	for _, rl := range previewLines(c.Result, expandTools) {
-		lines = append(lines, indentWrap(rl, resultIndent, width))
-	}
-	return strings.Join(lines, "\n")
 }
 
-// toolHeaderText assembles a card header's body: "<verb >ToolName(Summary)  glyph",
-// where verb is the permission decision ("Approved "/"Denied ") for a call that
-// prompted (empty for an ungated/pre-approved call) and the args summary is shown in
-// parens. The parens and the summary gap are omitted when there is no summary.
-func toolHeaderText(c ToolCallView, glyph string) string {
+// renderToolNode renders one tool call as a rail node at depth: a status-tinted
+// "○" (ok/failed) / "◍" (running) node glyph beside its faint header, then its result
+// preview as "│ "-railed detail rows (the SAME hard-cap fold as before). A still-RUNNING
+// card on the LIVE path (liveRunning) renders header-only — its body appears once the
+// card commits to scrollback (the live→committed handoff fix, design Option B: a running
+// card has no result yet, so dropping its "(no output)" body keeps the live tail one line
+// tall and the running→completed transition reads as a clean continuation, not a
+// multi-line shrink). It applies ONLY to ToolRunning cards on the live path; resolved
+// cards (live or committed) and the committed path always render their full body. depth
+// nests the node under a parent spine — Task 6 reuses this at depth 1 for subagent
+// children.
+func renderToolNode(c ToolCallView, depth int, expandTools bool, width int, liveRunning bool) []string {
+	header := railNodeStyled(styles.ToolNode(toolNodeStatus(c.Status)), toolNodeHeaderText(c), styles.ToolCallStyle, depth, width)
+	if liveRunning && c.Status == ToolRunning {
+		return header // compact running indicator; body appears once, on commit
+	}
+	out := header
+	for _, rl := range previewLines(c.Result, expandTools) {
+		out = append(out, railDetail(rl, depth, width)...)
+	}
+	return out
+}
+
+// renderToolCard renders one tool call as a rail node (design: unified rail). It delegates
+// to renderToolNode at depth 0. The glyph resolver is no longer consulted — the rail node
+// glyph conveys status via toolNodeStatus — but the parameter is retained so the LIVE
+// caller (renderToolCallsGlyph) keeps compiling; a later task removes the indirection.
+func renderToolCard(c ToolCallView, expandTools bool, width int, _ func(ToolStatus) string, liveRunning bool) string {
+	return strings.Join(renderToolNode(c, 0, expandTools, width, liveRunning), "\n")
+}
+
+// toolNodeHeaderText assembles a tool node's header text "<verb >ToolName(detail)" — the
+// permission-decision verb ("Approved "/"Denied ") when the call prompted (empty for an
+// ungated/pre-approved call) and the args detail in parens. The parens are omitted when
+// there is no detail. It carries NO status glyph: the rail node glyph conveys status.
+func toolNodeHeaderText(c ToolCallView) string {
 	head := c.ToolName
 	if detail := toolCallDetail(c); detail != "" {
 		head = c.ToolName + "(" + detail + ")"
@@ -216,7 +234,14 @@ func toolHeaderText(c ToolCallView, glyph string) string {
 	if v := decisionVerb(c.Decision); v != "" {
 		head = v + " " + head
 	}
-	return head + "  " + glyph
+	return head
+}
+
+// toolHeaderText retains the glyph-suffixed header form ("<verb >ToolName(detail)  glyph")
+// for the remaining legacy caller(s) — renderPromotedTool, which still renders a glyph
+// beside the promoted bullet. It reuses toolNodeHeaderText for the text (DRY).
+func toolHeaderText(c ToolCallView, glyph string) string {
+	return toolNodeHeaderText(c) + "  " + glyph
 }
 
 // toolCallDetail returns the argument/target text to render inside ToolName(...).

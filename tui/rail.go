@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/looprig/cli/tui/styles"
 )
 
@@ -27,6 +29,15 @@ func railSpine(n int) string {
 // wrapped text aligns under the first line's text, never under the glyph. glyph is
 // pre-styled by the caller; text is plain. Trailing spaces are trimmed per row.
 func railNode(glyph, text string, depth, width int) []string {
+	return railNodeStyled(glyph, text, lipgloss.NewStyle(), depth, width)
+}
+
+// railNodeStyled is railNode with a per-line text style applied to each wrapped text row
+// (e.g. faint tool headers) before assembly — the glyph and rail columns are left
+// unstyled by this helper (the glyph is pre-styled by the caller; the spine carries its
+// own faint style). railNode delegates here with a no-op style. Because the styling is
+// zero-width ANSI, an ANSI-stripped assertion sees the SAME text as railNode.
+func railNodeStyled(glyph, text string, textStyle lipgloss.Style, depth, width int) []string {
 	spine := railSpine(depth)
 	rows := wrapToWidth(text, max(1, width-railWidth*(depth+1)))
 	// Continuation indent: the spine, then a railWidth blank standing in for the glyph
@@ -34,11 +45,12 @@ func railNode(glyph, text string, depth, width int) []string {
 	contIndent := spine + strings.Repeat(" ", railWidth)
 	out := make([]string, 0, len(rows))
 	for i, row := range rows {
+		styled := textStyle.Render(row)
 		if i == 0 {
-			out = append(out, strings.TrimRight(spine+glyph+row, " "))
+			out = append(out, strings.TrimRight(spine+glyph+styled, " "))
 			continue
 		}
-		out = append(out, strings.TrimRight(contIndent+row, " "))
+		out = append(out, strings.TrimRight(contIndent+styled, " "))
 	}
 	return out
 }

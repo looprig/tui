@@ -161,6 +161,97 @@ func TestToolGlyph(t *testing.T) {
 	}
 }
 
+// TestToolNodeStatus covers the tool-lifecycle → rail-node tint mapping: OK (and any
+// unknown status) is the faint hollow node, error and cancelled are the failed (red)
+// node, and running is the pulsing node. stripANSI cannot distinguish the node colors,
+// so this maps the status directly to its styles.NodeStatus.
+func TestToolNodeStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status ToolStatus
+		want   styles.NodeStatus
+	}{
+		{name: "ok is the hollow node", status: ToolOK, want: styles.NodeOK},
+		{name: "error is the failed node", status: ToolError, want: styles.NodeFailed},
+		{name: "cancelled is the failed node", status: ToolCancelled, want: styles.NodeFailed},
+		{name: "running is the pulsing node", status: ToolRunning, want: styles.NodeRunning},
+		{name: "unknown falls back to the hollow node", status: ToolStatus(99), want: styles.NodeOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := toolNodeStatus(tt.status); got != tt.want {
+				t.Errorf("toolNodeStatus(%d) = %d, want %d", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderToolCard_RailNode covers the rail-node tool-card render: a resolved card is
+// its status-tinted "○"/"◍" node glyph beside the faint header, then its result preview
+// as "│ "-railed detail rows — never the old "⎿" card connector. A still-running card on
+// the LIVE path renders header-only with the pulsing "◍" node (its body appears once
+// committed). Node color is asserted by TestToolNodeStatus, not here (stripANSI is
+// color-blind).
+func TestRenderToolCard_RailNode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		render func() string
+		want   []string // substrings that must appear
+		absent []string // substrings that must NOT appear
+	}{
+		{
+			name: "ok card is a hollow node with header and railed detail",
+			render: func() string {
+				c := ToolCallView{ToolName: "Read", Summary: "config.go", Status: ToolOK, Result: []string{"42 lines"}}
+				return stripANSI(renderToolCalls([]ToolCallView{c}, true, 40))
+			},
+			want:   []string{"○ Read(config.go)", "│ 42 lines"},
+			absent: []string{"⎿"},
+		},
+		{
+			name: "error card still renders its header and result text",
+			render: func() string {
+				c := ToolCallView{ToolName: "Bash", Summary: "boom", Status: ToolError, Result: []string{"exit 1"}}
+				return stripANSI(renderToolCalls([]ToolCallView{c}, true, 40))
+			},
+			want:   []string{"○ Bash(boom)", "│ exit 1"},
+			absent: []string{"⎿"},
+		},
+		{
+			name: "running card on the live path is header-only with the pulsing node",
+			render: func() string {
+				return stripANSI(renderToolCallsGlyph(
+					[]ToolCallView{{ToolName: "Fetch", Status: ToolRunning}}, false, 40, toolGlyph, true))
+			},
+			want:   []string{"◍ Fetch"},
+			absent: []string{"⎿", noOutput, "│ "}, // header-only: no detail rows
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.render()
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("render = %q, want to contain %q", got, w)
+				}
+			}
+			for _, a := range tt.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("render = %q, want to NOT contain %q", got, a)
+				}
+			}
+		})
+	}
+}
+
 // TestToolHeaderTextNormalizesAuditableSummaries covers live tool events whose
 // AuditSummary already includes the tool name. The card header owns the tool name,
 // so the argument display should not duplicate it.
@@ -220,28 +311,31 @@ func TestRenderToolCalls(t *testing.T) {
 		absent      []string // substrings that must NOT appear
 	}{
 		{
-			name:  "running card shows running glyph and name+summary",
+			name:  "running card shows the pulsing node glyph and name+summary",
 			calls: []ToolCallView{{ToolName: "ReadFile", Summary: "config.yaml", Status: ToolRunning}},
 			width: 80,
-			want:  []string{"ReadFile", "config.yaml", glyphRunning},
+			// Committed path (liveRunning=false): a running card maps to the pulsing "◍" node.
+			want: []string{"ReadFile", "config.yaml", "◍"},
 		},
 		{
-			name:  "ok glyph",
+			name:  "ok card shows the hollow node glyph",
 			calls: []ToolCallView{{ToolName: "ReadFile", Status: ToolOK}},
 			width: 80,
-			want:  []string{glyphOK},
+			// Color (faint vs red) is asserted by TestToolNodeStatus; stripANSI is color-blind,
+			// so both OK and failed render the same "○" glyph here.
+			want: []string{"○"},
 		},
 		{
-			name:  "error glyph",
+			name:  "error card shows the failed node glyph and its result",
 			calls: []ToolCallView{{ToolName: "Bash", Status: ToolError, Result: []string{"boom"}}},
 			width: 80,
-			want:  []string{glyphError},
+			want:  []string{"○", "boom"},
 		},
 		{
-			name:  "cancelled glyph",
+			name:  "cancelled card shows the failed node glyph",
 			calls: []ToolCallView{{ToolName: "Bash", Status: ToolCancelled}},
 			width: 80,
-			want:  []string{glyphCancelled},
+			want:  []string{"○"},
 		},
 		{
 			name:        "result over the cap is trimmed with a more-marker (no ctrl+t)",
@@ -280,7 +374,7 @@ func TestRenderToolCalls(t *testing.T) {
 			calls:       []ToolCallView{{ToolName: "Bash", Status: ToolError, Result: []string{"error: permission denied"}}},
 			expandTools: false,
 			width:       80,
-			want:        []string{glyphError, "error: permission denied"},
+			want:        []string{"○", "error: permission denied"},
 		},
 		{
 			name: "parallel batch renders all cards",

@@ -139,7 +139,7 @@ func TestRenderEntryAssistantThinkDuration(t *testing.T) {
 }
 
 // TestRenderEntryTool locks the tool-kind render: the resolved tool card with its header
-// (ToolName + Summary + status glyph), and the result preview HARD-capped to previewLineCap
+// (ToolName + Summary beside the status-tinted rail node glyph), and the result preview HARD-capped to previewLineCap
 // lines with a "… N more lines" marker — the SAME in both expand states (the ctrl+t fold no
 // longer un-caps tool output; it governs only the thinking block).
 func TestRenderEntryTool(t *testing.T) {
@@ -165,8 +165,8 @@ func TestRenderEntryTool(t *testing.T) {
 	if !strings.Contains(collapsed, "Bash") || !strings.Contains(collapsed, "ls -la") {
 		t.Errorf("tool render = %q, want the card header", collapsed)
 	}
-	if !strings.Contains(collapsed, glyphOK) {
-		t.Errorf("tool render = %q, want the OK glyph", collapsed)
+	if !strings.Contains(collapsed, "○") {
+		t.Errorf("tool render = %q, want the hollow node glyph", collapsed)
 	}
 	// Tool output is HARD-capped regardless of expand: BOTH views trim to previewLineCap
 	// lines with a "… N more lines" marker, and NEITHER carries the ctrl+t fold hint (that

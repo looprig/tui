@@ -197,38 +197,40 @@ func TestRenderLiveAssistantBlink(t *testing.T) {
 	}
 }
 
-// TestRenderLiveAssistantSpinner covers the running tool card showing the spinner
-// frame for the current animState.frame, while a RESOLVED card keeps its static
-// glyph regardless of frame.
+// TestRenderLiveAssistantSpinner covers the running tool card's rail node: a running LIVE
+// card renders header-only with the pulsing "◍" node glyph, while a RESOLVED card renders
+// the hollow "○" node. (Unified-rail Task 3: the card is now a rail node whose glyph
+// conveys status; frame-driven animation of the running node is restored in a later task,
+// so the node glyph is stable across frames and never carries a braille spinner cell.)
 func TestRenderLiveAssistantSpinner(t *testing.T) {
 	t.Parallel()
 
-	t.Run("running card shows spinner frame", func(t *testing.T) {
+	t.Run("running card shows the pulsing node glyph", func(t *testing.T) {
 		t.Parallel()
 
 		calls := []ToolCallView{{ToolName: "Bash", Summary: "ls", Status: ToolRunning}}
 		for _, frame := range []uint{0, 1, 5} {
 			got := stripANSI(renderLiveAssistant("", "checking", calls, nil, false, 80, animState{frame: frame}))
-			if !strings.Contains(got, spinnerGlyph(frame)) {
-				t.Errorf("frame %d: live render %q missing spinner glyph %q", frame, got, spinnerGlyph(frame))
+			if !strings.Contains(got, "◍") {
+				t.Errorf("frame %d: live render %q missing the running node glyph %q", frame, got, "◍")
 			}
-			if strings.Contains(got, glyphRunning) {
-				t.Errorf("frame %d: live render %q still shows the static running glyph %q, want the spinner",
-					frame, got, glyphRunning)
+			if strings.Contains(got, spinnerGlyph(frame)) {
+				t.Errorf("frame %d: live render %q carries a braille spinner cell %q; the node glyph must convey status",
+					frame, got, spinnerGlyph(frame))
 			}
 		}
 	})
 
-	t.Run("resolved card keeps static glyph", func(t *testing.T) {
+	t.Run("resolved card shows the hollow node glyph", func(t *testing.T) {
 		t.Parallel()
 
 		calls := []ToolCallView{{ToolName: "Bash", Summary: "ls", Status: ToolOK, Result: []string{"a.go"}}}
 		got := stripANSI(renderLiveAssistant("", "done", calls, nil, false, 80, animState{frame: 3}))
-		if !strings.Contains(got, glyphOK) {
-			t.Errorf("resolved card live render %q missing static OK glyph %q", got, glyphOK)
+		if !strings.Contains(got, "○") {
+			t.Errorf("resolved card live render %q missing the hollow node glyph %q", got, "○")
 		}
 		if strings.Contains(got, spinnerGlyph(3)) {
-			t.Errorf("resolved card live render %q animated the static OK glyph", got)
+			t.Errorf("resolved card live render %q carries a braille spinner cell", got)
 		}
 	})
 
