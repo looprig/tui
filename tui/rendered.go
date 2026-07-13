@@ -3,6 +3,8 @@ package tui
 import (
 	"regexp"
 	"strings"
+
+	"github.com/looprig/cli/tui/styles"
 )
 
 // renderedLine is one rendered transcript line carrying BOTH its drawn form and the
@@ -35,6 +37,32 @@ func renderEntryLines(e entry, width int, collapsed bool) []renderedLine {
 			entry:  e.ID,
 			sub:    i,
 		}
+	}
+	return out
+}
+
+// toolRunSummaryLines renders a collapsed contiguous run of tool entries as ONE "○ N
+// tools · names" summary node. Its first line carries sub == 0 and entry == the run's
+// first displayID (runID), so a click toggles the whole run's fold via the existing
+// header-click handler; ctrl+t (ToggleAll) flips it with the global default. The node is
+// red-tinted when any call failed.
+func toolRunSummaryLines(run []entry, width int) []renderedLine {
+	runID := run[0].ID
+	calls := make([]ToolCallView, 0, len(run))
+	for i := range run {
+		if len(run[i].Calls) > 0 {
+			calls = append(calls, run[i].Calls[0])
+		}
+	}
+	text, anyFailed := toolRunSummary(calls)
+	status := styles.NodeOK
+	if anyFailed {
+		status = styles.NodeFailed
+	}
+	styled := railNodeStyled(styles.ToolNode(status), text, styles.ToolCallStyle, 0, width)
+	out := make([]renderedLine, len(styled))
+	for i, line := range styled {
+		out[i] = renderedLine{styled: line, plain: plainFromStyled(line), entry: runID, sub: i}
 	}
 	return out
 }

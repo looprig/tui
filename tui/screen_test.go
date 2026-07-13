@@ -2601,6 +2601,11 @@ func TestModernRailConnectorWithinStep(t *testing.T) {
 		t.Fatalf("precondition: want assistant+2 tools+user committed; kinds=%+v", committed)
 	}
 
+	// The shared fold defaults COLLAPSED, which would aggregate the two tools into one summary
+	// node; expand it so the per-tool rail nodes (and their connectors) render, which is what
+	// this test asserts about.
+	m.collapse.ToggleAll()
+
 	lines := m.renderFocused()
 
 	// sepAfter returns the separator row that follows entry id: renderFocused appends an entry's
@@ -2654,6 +2659,148 @@ func TestModernRailConnectorWithinStep(t *testing.T) {
 	}
 	if sep := sepAfter(user); sep == nil || sep.styled != "" {
 		t.Errorf("user trailing separator = %+v, want a fully-blank row (styled empty)", sep)
+	}
+}
+
+// toolRunFixture commits a user turn then one step: an assistant message leading the given
+// tool uses, plus a completion for each. It returns the model and the runID (the first tool
+// entry's displayID), the id a collapse click / summary node keys on.
+func toolRunFixture(t *testing.T, uses []content.ToolUseBlock, results []*content.ToolResultMessage) (Screen, displayID) {
+	t.Helper()
+	primary := callID(1)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("do the thing")})
+	msgs := []content.Conversation{aiMessage("reasoning about it", "here is the plan", uses...)}
+	for _, r := range results {
+		msgs = append(msgs, r)
+	}
+	m = feed(t, m, stepDoneFrom(primary, msgs...))
+	committed, _ := m.transcript.projectionFor(primary)
+	for _, e := range committed {
+		if e.Kind == kindTool {
+			return m, e.ID
+		}
+	}
+	t.Fatalf("precondition: no committed tool entry; kinds=%+v", committed)
+	return m, 0
+}
+
+// TestToolRunCollapsedSummary proves a completed contiguous run of tool entries collapses,
+// under the DEFAULT (collapsed) fold, to exactly ONE "○ N tools · names" summary node whose
+// first line carries sub == 0 and entry == runID (so the existing header-click handler
+// toggles the whole run) — and that none of the individual tool nodes render.
+func TestToolRunCollapsedSummary(t *testing.T) {
+	t.Parallel()
+
+	m, runID := toolRunFixture(t,
+		[]content.ToolUseBlock{
+			toolUse("t1", "Read", `{}`),
+			toolUse("t2", "Bash", `{}`),
+			toolUse("t3", "Grep", `{}`),
+		},
+		[]*content.ToolResultMessage{
+			toolResult("t1", "a"),
+			toolResult("t2", "b"),
+			toolResult("t3", "c"),
+		},
+	)
+
+	lines := m.renderFocused()
+	var summaries []renderedLine
+	for _, ln := range lines {
+		if strings.HasPrefix(stripANSI(ln.styled), "○ 3 tools · ") {
+			summaries = append(summaries, ln)
+		}
+		if strings.HasPrefix(stripANSI(ln.styled), "○ Read") ||
+			strings.HasPrefix(stripANSI(ln.styled), "○ Bash") ||
+			strings.HasPrefix(stripANSI(ln.styled), "○ Grep") {
+			t.Errorf("collapsed run leaked an individual tool node: %q", stripANSI(ln.styled))
+		}
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("summary nodes = %d, want exactly 1; lines=%q", len(summaries), plainAll(lines))
+	}
+	s := summaries[0]
+	if s.sub != 0 {
+		t.Errorf("summary first line sub = %d, want 0 (clickable header)", s.sub)
+	}
+	if s.entry != runID {
+		t.Errorf("summary first line entry = %d, want runID %d (so a click toggles the run)", s.entry, runID)
+	}
+	if got := stripANSI(s.styled); got != "○ 3 tools · Read, Bash, Grep" {
+		t.Errorf("summary text = %q, want %q", got, "○ 3 tools · Read, Bash, Grep")
+	}
+}
+
+// TestToolRunExpandedShowsNodes proves that once the run's fold is toggled OPEN, the
+// individual tool nodes render and the summary node is gone.
+func TestToolRunExpandedShowsNodes(t *testing.T) {
+	t.Parallel()
+
+	m, runID := toolRunFixture(t,
+		[]content.ToolUseBlock{
+			toolUse("t1", "Read", `{}`),
+			toolUse("t2", "Bash", `{}`),
+			toolUse("t3", "Grep", `{}`),
+		},
+		[]*content.ToolResultMessage{
+			toolResult("t1", "a"),
+			toolResult("t2", "b"),
+			toolResult("t3", "c"),
+		},
+	)
+	m.collapse.Toggle(runID)
+
+	lines := m.renderFocused()
+	var haveRead, haveBash, haveGrep bool
+	for _, ln := range lines {
+		s := stripANSI(ln.styled)
+		if strings.HasPrefix(s, "○ 3 tools · ") {
+			t.Errorf("expanded run still shows the summary node: %q", s)
+		}
+		switch {
+		case strings.HasPrefix(s, "○ Read"):
+			haveRead = true
+		case strings.HasPrefix(s, "○ Bash"):
+			haveBash = true
+		case strings.HasPrefix(s, "○ Grep"):
+			haveGrep = true
+		}
+	}
+	if !haveRead || !haveBash || !haveGrep {
+		t.Errorf("expanded run missing individual nodes: Read=%v Bash=%v Grep=%v\nlines=%q", haveRead, haveBash, haveGrep, plainAll(lines))
+	}
+}
+
+// TestToolRunSummaryFailure proves a run containing a failed tool call marks that name with
+// " ✗" in the collapsed summary line.
+func TestToolRunSummaryFailure(t *testing.T) {
+	t.Parallel()
+
+	m, _ := toolRunFixture(t,
+		[]content.ToolUseBlock{
+			toolUse("t1", "Read", `{}`),
+			toolUse("t2", "Bash", `{}`),
+		},
+		[]*content.ToolResultMessage{
+			toolResult("t1", "a"),
+			toolResultErr("t2", "boom"),
+		},
+	)
+
+	lines := m.renderFocused()
+	var summary string
+	for _, ln := range lines {
+		if strings.HasPrefix(stripANSI(ln.styled), "○ 2 tools · ") {
+			summary = stripANSI(ln.styled)
+		}
+	}
+	if summary == "" {
+		t.Fatalf("no summary node found; lines=%q", plainAll(lines))
+	}
+	if !strings.Contains(summary, "Bash ✗") {
+		t.Errorf("summary = %q, want it to mark the failed Bash call with ✗", summary)
 	}
 }
 

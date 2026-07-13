@@ -1096,6 +1096,13 @@ func (m *Screen) rerender() {
 // state (per-entry override else the global default), then the in-progress live segment
 // appended after. It is the flat []renderedLine the viewport windows and selects over.
 //
+// MODERN-ONLY TOOL-RUN AGGREGATION: a maximal contiguous run of committed kindTool entries
+// folds as a UNIT sharing thinking's ctrl+t fold and keyed on the run's first displayID
+// (runID). Collapsed (the default) the run renders as ONE "○ N tools · names" summary node
+// (toolRunSummaryLines) whose first line carries sub == 0 / entry == runID, so the existing
+// header-click handler toggles the whole run; expanded, every tool entry renders on its own.
+// Non-tool entries take the unchanged per-entry path.
+//
 // MODERN-ONLY SPACING: one blank breathing-space row follows every committed entry (see
 // blankSeparator) — the opening banner/greeting included, so the first real message is not
 // glued to the header — EXCEPT within a tool-call group (see intraTurnSeparator): an assistant
@@ -1114,7 +1121,48 @@ func (m Screen) renderFocused() []renderedLine {
 	committed, live := m.transcript.projectionFor(m.focusedLoopID)
 	width := m.contentWidth()
 	var out []renderedLine
-	for i := range committed {
+	for i := 0; i < len(committed); {
+		// A contiguous run of committed tool entries folds as a UNIT: collapsed → one
+		// "○ N tools · names" summary node (keyed on the run's first id, runID), expanded →
+		// every entry individually. Non-tool entries keep the per-entry path below.
+		if committed[i].Kind == kindTool {
+			j := i + 1
+			for j < len(committed) && committed[j].Kind == kindTool {
+				j++
+			}
+			runID := committed[i].ID
+			if m.collapse.Effective(runID) {
+				// Collapsed: one summary node for the whole run. Its trailing separator uses the
+				// run's LAST entry (j-1) for the intra-turn test, so a following tool-led step keeps
+				// a connector and a turn boundary keeps its blank.
+				sum := toolRunSummaryLines(committed[i:j], width)
+				out = append(out, sum...)
+				if n := len(sum); n > 0 {
+					if intraTurnSeparator(committed, j-1) {
+						out = append(out, railSeparator(runID, n))
+					} else {
+						out = append(out, blankSeparator(runID, n))
+					}
+				}
+				i = j
+				continue
+			}
+			// Expanded: emit every entry in the run individually, each keyed on its own id.
+			for k := i; k < j; k++ {
+				lines := renderEntryLines(committed[k], width, false)
+				out = append(out, lines...)
+				if n := len(lines); n > 0 {
+					if intraTurnSeparator(committed, k) {
+						out = append(out, railSeparator(committed[k].ID, n))
+					} else {
+						out = append(out, blankSeparator(committed[k].ID, n))
+					}
+				}
+			}
+			i = j
+			continue
+		}
+
 		lines := renderEntryLines(committed[i], width, m.collapse.Effective(committed[i].ID))
 		// MODERN-ONLY: bracket the user row with rail pad rows (a padded card), then paint the
 		// gray panel behind the whole block — pads included (scrollback keeps user rows bare).
@@ -1134,6 +1182,7 @@ func (m Screen) renderFocused() []renderedLine {
 				out = append(out, blankSeparator(committed[i].ID, n))
 			}
 		}
+		i++
 	}
 	out = append(out, m.liveTailLines(live)...)
 	// The focused loop's pending queued inputs render LAST — below the live tail, where the
