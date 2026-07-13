@@ -36,21 +36,21 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // spinnerGlyph returns the running-tool spinner cell for frame, wrapping modulo the
 // frame count so any frame value is in range (the counter grows unbounded over a long
-// turn). It is used ONLY for a LIVE running tool card; a resolved card renders its
-// static ✓/✗ glyph via toolGlyph.
+// turn). It is retired from the live path (a running node now pulses via liveRunningNode);
+// it survives only for the tests that pin its absence from rail output.
 func spinnerGlyph(frame uint) string {
 	return spinnerFrames[frame%uint(len(spinnerFrames))]
 }
 
-// workingWords are the live "doing work" synonyms shown beside the dot for an
-// empty-text tool step. They are a purely LIVE affordance — the committed form is the
-// promoted tool card ("● <verb >Tool(args)") or the "● Multiple actions" umbrella — so
-// the word may rotate while the step runs; it need not survive into scrollback.
+// workingWords are the retired live "doing work" synonyms that once headlined an
+// empty-text tool step. The unified rail renders such a step's tool nodes directly (no
+// working-word umbrella — see renderLiveAssistant), so these no longer render; the set
+// survives ONLY as the sentinel words render tests assert are ABSENT from live output.
 var workingWords = []string{"Working", "Crunching", "Churning", "Toiling", "Cooking", "Whirring"}
 
-// workingWord returns the live working-word for frame, wrapping modulo the word
-// count (the live frame counter grows unbounded over a long step), mirroring
-// spinnerGlyph. It is used ONLY for a live empty-text tool step.
+// workingWord returns the working-word for frame, wrapping modulo the word count. It is
+// retired from the live path (a card-only step now shows its tool nodes directly); it
+// survives only for the tests that pin its absence.
 func workingWord(frame uint) string {
 	return workingWords[frame%uint(len(workingWords))]
 }

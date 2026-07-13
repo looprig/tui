@@ -135,32 +135,6 @@ func itoa(i int) string {
 	return string(b[p:])
 }
 
-// TestToolGlyph covers the status→glyph mapping (design §3).
-func TestToolGlyph(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		status ToolStatus
-		want   string
-	}{
-		{name: "running", status: ToolRunning, want: glyphRunning},
-		{name: "ok", status: ToolOK, want: glyphOK},
-		{name: "error", status: ToolError, want: glyphError},
-		{name: "cancelled", status: ToolCancelled, want: glyphCancelled},
-		{name: "unknown falls back to running glyph", status: ToolStatus(99), want: glyphRunning},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := toolGlyph(tt.status); got != tt.want {
-				t.Errorf("toolGlyph(%d) = %q, want %q", tt.status, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestToolNodeStatus covers the tool-lifecycle → rail-node tint mapping: OK (and any
 // unknown status) is the faint hollow node, error and cancelled are the failed (red)
 // node, and running is the pulsing node. stripANSI cannot distinguish the node colors,
@@ -226,8 +200,8 @@ func TestRenderToolCard_RailNode(t *testing.T) {
 		{
 			name: "running card on the live path is header-only with the pulsing node",
 			render: func() string {
-				return stripANSI(renderToolCallsGlyph(
-					[]ToolCallView{{ToolName: "Fetch", Status: ToolRunning}}, false, 40, toolGlyph, true))
+				return stripANSI(strings.Join(renderToolNode(
+					ToolCallView{ToolName: "Fetch", Status: ToolRunning}, 0, false, 40, true), "\n"))
 			},
 			want:   []string{"◍ Fetch"},
 			absent: []string{"⎿", noOutput, "│ "}, // header-only: no detail rows
@@ -441,11 +415,12 @@ func TestRenderToolCallsWidthWrap(t *testing.T) {
 	}
 }
 
-// TestRenderAssistantNestsCards covers an assistant segment rendering its markdown
-// text followed by its tool-call cards indented beneath; a segment with empty text
-// but cards renders a bare dot bullet plus its cards (no empty markdown block); and
-// a text-only segment carries no card connector. This exercises the live
-// renderAssistant primitive that the kindAssistant entry render (entryrender.go) drives.
+// TestRenderAssistantNestsCards covers a committed assistant segment under the
+// node-presence rule: narration renders the "●" bullet and never the old "⎿" card
+// connector (committed tool calls are their OWN kindTool rail nodes, not inline here);
+// a thinking-only segment renders just its "│" rail with no bullet; a fully empty
+// segment renders nothing. This exercises the renderAssistant primitive that the
+// kindAssistant entry render (entryrender.go) drives.
 func TestRenderAssistantNestsCards(t *testing.T) {
 	t.Parallel()
 

@@ -176,17 +176,6 @@ type entry struct {
 	// nil for every other kind. Kept as a pointer so non-prompt entries pay no
 	// per-entry cost and a nil here is an unambiguous "not a prompt record".
 	Prompt *promptContext
-	// headline is the bold bullet text of a kindAssistant entry that has NO narration
-	// (empty TextBlock) — currently "Multiple actions", the umbrella for an empty-text
-	// step that ran more than one tool call. Empty for every other assistant entry
-	// (narration entries render their text; a single-tool empty-text step promotes its
-	// one card to the bullet instead — see promoted). Renders as "● <headline>".
-	headline string
-	// promoted marks a kindTool entry whose single card is rendered AS the assistant
-	// bullet ("● <verb >ToolName(args)" + result) rather than an indented "⎿ …" card —
-	// the committed form of an empty-text step that ran exactly one tool call. Set ONLY
-	// by stepDone for that case; every other kindTool entry renders as a normal card.
-	promoted bool
 	// Agent is the attribution label of a kindSubagent line — the agent name driving the
 	// producing subagent loop, or that loop's id short form when the name is unknown/
 	// empty. Meaningful ONLY for kindSubagent; empty for every other kind.
@@ -1118,21 +1107,6 @@ func (m *transcriptModel) stepDone(ev event.StepDone) {
 	m.fold.live = liveSeg{active: active}
 }
 
-// subagentVerbDone is the activity word of a committed subagent StepDone line: a
-// finalized step reads "done".
-const subagentVerbDone = "done"
-
-// commitSubagentLine appends one collapsed legacy subagent activity entry.
-func (m *transcriptModel) commitSubagentLine(loopID uuid.UUID, verb string) {
-	m.nextID++
-	m.fold.committed = append(m.fold.committed, entry{
-		ID:    m.nextID,
-		Kind:  kindSubagent,
-		Agent: m.agentLabel(loopID),
-		Verb:  verb,
-	})
-}
-
 // loopSpawned records a TOOL-spawned subagent's spawn relationship at its child
 // LoopStarted: a non-empty ParentToolUseID means the loop was spawned by a Subagent
 // call, so it maps child loopID → spawnKey{Cause.LoopID,Cause.TurnID,Cause.StepID,
@@ -1394,8 +1368,8 @@ const subagentLineCap = 80
 // When both are empty it commits NOTHING — a pure-tool step has no assistant entry; its
 // tool calls stand alone as their own kindTool rail nodes. So a thinking-only step
 // commits just the thinking rail, a narration step commits the "●" node (plus rail), and
-// an empty-text tool step commits no assistant entry at all (no "Multiple actions"
-// umbrella, no promotion).
+// an empty-text tool step commits no assistant entry at all — its tool calls stand alone
+// as their own kindTool rail nodes.
 func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage) {
 	if ai == nil {
 		return

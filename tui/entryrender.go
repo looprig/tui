@@ -29,8 +29,9 @@ func renderEntry(e entry, expand bool, width int) []string {
 		// duration was captured (a cold restore has no streaming timestamps).
 		return splitNonEmpty(renderAssistant(thinkingText(e.Blocks), assistantText(e.Blocks), expand, width, formatThought(e.thinkDur)))
 	case kindTool:
-		// A reconciled Subagent card (Agent set) renders as its OWN "●"-level card with
-		// "⎿" children and a done line (design §5), never as an ordinary "⎿" card.
+		// A reconciled Subagent card (Agent set) renders as its OWN rail node opening a
+		// nested secondary rail — its child tool nodes and a closing done node (design §5),
+		// never as an ordinary tool node.
 		if len(e.Calls) == 1 && e.Calls[0].Agent != "" {
 			return splitNonEmpty(renderSubagentCard(e.Calls[0], expand, width))
 		}
@@ -66,8 +67,8 @@ func renderHarnessLine(text string, width int) []string {
 
 // renderSubagentLine renders a collapsed subagent activity entry as one faint
 // "▸ <agent>: <verb>" row (design §6d Option B), width-truncated. agent is the resolved
-// attribution label (the agent name, or the loopID short form — never empty, set by
-// commitSubagentLine), so the row never reads "▸ : verb". An empty agent (defensive)
+// attribution label (the agent name, or the loopID short form via agentLabel — normally
+// non-empty), so the row never reads "▸ : verb". An empty agent (defensive)
 // still renders the cursor + verb rather than a dangling colon.
 func renderSubagentLine(agent, verb string, width int) []string {
 	label := agent

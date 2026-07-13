@@ -1244,10 +1244,8 @@ func intraTurnSeparator(committed []entry, i int) bool {
 // the blink/spinner phase).
 func (m Screen) liveTailLines(live liveSeg) []renderedLine {
 	width := m.contentWidth()
-	calls := live.Calls
-	var pending []ToolCallView
-	calls = nonSubagentCalls(live.Calls)
-	pending = m.transcript.pendingSubagentCardsFor(m.focusedLoopID)
+	calls := nonSubagentCalls(live.Calls)
+	pending := m.transcript.pendingSubagentCardsFor(m.focusedLoopID)
 	if live.empty() && len(pending) == 0 {
 		return nil
 	}

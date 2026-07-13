@@ -35,25 +35,11 @@ const noOutput = "(no output)"
 // stays consistent.
 const hintSeparator = " · "
 
-// cardConnector is the tree connector that prefixes each tool-call card line. It is
-// dotWidth (2) columns — the "⎿" glyph plus a space — so a card's body aligns under it.
+// cardConnector is the RETIRED "⎿ " tree connector of the old indented tool-card
+// layout. The unified rail renders tool calls as rail nodes ("○"/"◍" beside a "│ "
+// detail rail — see renderToolNode), never this connector. It survives ONLY as the
+// sentinel a render test asserts is ABSENT from rail output.
 const cardConnector = "⎿ "
-
-// cardIndent / resultIndent are the leading indents for a card line and for its
-// result-preview lines (design §3: cards indent 2, result lines 4).
-const (
-	cardIndent   = "  "
-	resultIndent = "    "
-)
-
-// Status glyphs for a tool card (design §3). A tick-driven spinner is a future
-// enhancement; v1 uses the static running glyph.
-const (
-	glyphRunning   = "⋯"
-	glyphOK        = "✓"
-	glyphError     = "✗"
-	glyphCancelled = "⊘"
-)
 
 // dotWidth is the display width of the assistant bullet prefix ("● "), which also
 // matches glamour's "dark" document left margin. Narration wraps to this much less
@@ -125,46 +111,22 @@ func dedentDocument(s string) []string {
 	return out
 }
 
-// toolGlyph maps a tool-call status to its single-rune display glyph (design §3).
-// An unrecognised status falls back to the running glyph (fail-visible, not panic).
-func toolGlyph(s ToolStatus) string {
-	switch s {
-	case ToolOK:
-		return glyphOK
-	case ToolError:
-		return glyphError
-	case ToolCancelled:
-		return glyphCancelled
-	default: // ToolRunning and any unknown value
-		return glyphRunning
-	}
-}
-
-// renderToolCalls renders a segment's tool-call children as indented cards, each a
-// header line ("⎿ ToolName(Summary)  <glyph>") followed by its result preview. The
-// preview is HARD-capped to previewLineCap lines plus a "… N more lines" marker
+// renderToolCalls renders a segment's tool-call children as rail nodes on the committed
+// (scrollback) path: each call becomes a status-tinted "○"/"◍" node beside its faint
+// header, then its result preview as "│ "-railed detail rows (renderToolNode at depth 0).
+// The preview is HARD-capped to previewLineCap lines plus a "… N more lines" marker
 // regardless of expandTools (the ctrl+t fold governs only the thinking block now), so a
 // huge result can never fill the live tail. An empty result renders "(no output)". An
-// error card's result is capped the same way, never hidden. Lines are width-wrapped so a
-// long card never blows the viewport. Returns "" when there are no calls.
+// error node's result is capped the same way, never hidden. Detail rows are width-wrapped
+// so a long node never blows the viewport. Committed nodes always render their full body
+// (liveRunning=false). Returns "" when there are no calls.
 func renderToolCalls(calls []ToolCallView, expandTools bool, width int) string {
-	// Committed/scrollback path: full cards, static glyphs, never header-only (a
-	// stray running card committed at a terminal still shows its body).
-	return renderToolCallsGlyph(calls, expandTools, width, toolGlyph, false)
-}
-
-// renderToolCallsGlyph is the shared card renderer: it maps each call's status to a
-// glyph via glyph, the indirection that lets the LIVE path animate a running card's
-// glyph (spinnerGlyph) while the committed path keeps the static toolGlyph. When
-// liveRunning is true (the LIVE tail only), a still-RUNNING card renders header-only
-// — see renderToolCard. Returns "" when there are no calls.
-func renderToolCallsGlyph(calls []ToolCallView, expandTools bool, width int, glyph func(ToolStatus) string, liveRunning bool) string {
 	if len(calls) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(calls))
 	for i := range calls {
-		parts = append(parts, renderToolCard(calls[i], expandTools, width, glyph, liveRunning))
+		parts = append(parts, strings.Join(renderToolNode(calls[i], 0, expandTools, width, false), "\n"))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -213,14 +175,6 @@ func renderToolNodeGlyph(c ToolCallView, depth int, expandTools bool, width int,
 		out = append(out, railDetail(rl, depth, width)...)
 	}
 	return out
-}
-
-// renderToolCard renders one tool call as a rail node (design: unified rail). It delegates
-// to renderToolNode at depth 0. The glyph resolver is no longer consulted — the rail node
-// glyph conveys status via toolNodeStatus — but the parameter is retained so the LIVE
-// caller (renderToolCallsGlyph) keeps compiling; a later task removes the indirection.
-func renderToolCard(c ToolCallView, expandTools bool, width int, _ func(ToolStatus) string, liveRunning bool) string {
-	return strings.Join(renderToolNode(c, 0, expandTools, width, liveRunning), "\n")
 }
 
 // toolNodeHeaderText assembles a tool node's header text "<verb >ToolName(detail)" — the
@@ -306,23 +260,6 @@ func previewLines(result []string, _ bool) []string {
 	return shown
 }
 
-// indentWrap word-wraps s to the column budget left after the indent, then prefixes
-// every wrapped row with indent. A non-positive width skips wrapping (the indent is
-// still applied). Trailing wrap padding is trimmed so output stays clean for tests
-// and copy/paste.
-func indentWrap(s, indent string, width int) string {
-	avail := width - len(indent)
-	if avail <= 0 {
-		return indent + s
-	}
-	wrapped := lipgloss.NewStyle().Width(avail).Render(s)
-	rows := strings.Split(wrapped, "\n")
-	for i := range rows {
-		rows[i] = styles.ToolResultStyle.Render(indent + strings.TrimRight(rows[i], " "))
-	}
-	return strings.Join(rows, "\n")
-}
-
 // renderAssistant renders a committed assistant segment under the node-presence rule:
 // the thinking rail first (when the segment has reasoning), then the neon "●" AI-message
 // node — via renderMD, which prefixes styles.LitDot — ONLY when the narration text is
@@ -398,26 +335,6 @@ func renderSubagentCard(c ToolCallView, expand bool, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// wrapHeadline renders a "● <text>" bullet headline width-wrapped to the viewport: the
-// first row carries the lit "● " bullet, every continuation row a barWidth-wide blank
-// indent so the wrapped text hangs under the header rather than under the bullet. Each row
-// is bold (HeadlineStyle) — the text is wrapped on its PLAIN form (no ANSI in the wrap
-// input) before styling. A non-empty text always yields at least one row.
-func wrapHeadline(text string, width int) []string {
-	bullet := strings.TrimRight(styles.LitDot, " ") + " " // colored "● "
-	hangingIndent := strings.Repeat(" ", barWidth)
-	rows := wrapToWidth(text, max(1, width-barWidth))
-	out := make([]string, 0, len(rows))
-	for i, row := range rows {
-		prefix := bullet
-		if i > 0 {
-			prefix = hangingIndent
-		}
-		out = append(out, prefix+styles.HeadlineStyle.Render(row))
-	}
-	return out
-}
-
 // subagentHeaderText assembles a Subagent card's header body: the standard tool-card
 // form "Subagent(<agent>)" (tool name + the agent as its argument) plus the task in
 // quotes when present. The task quotes are omitted for an empty task.
@@ -454,8 +371,8 @@ func plural(n int, unit string) string {
 // subagentToolName). The LIVE tail suppresses the orchestrator's own raw Subagent running
 // card (a generic "Subagent(Subagent)" row) because that activity is shown by the nested
 // pending Subagent card instead (pendingSubagentCards → renderSubagentCard); rendering
-// both would double it. It returns nil when every call is a Subagent call (so the
-// working-word headline path is also suppressed for a subagent-only step). The result is a
+// both would double it. It returns nil when every call is a Subagent call (so a
+// subagent-only step renders no ordinary tool nodes). The result is a
 // fresh slice; the input is not mutated.
 func nonSubagentCalls(calls []ToolCallView) []ToolCallView {
 	var out []ToolCallView
@@ -549,19 +466,6 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 		b.WriteString(renderSubagentCard(subagentCards[i], expand, width))
 	}
 	return b.String()
-}
-
-// liveToolGlyph returns a status→glyph resolver for the LIVE path: a running call
-// shows the animated spinner cell for frame; every other (resolved) status falls
-// through to the static toolGlyph. It closes over frame so renderToolCallsGlyph can
-// stay frame-agnostic.
-func liveToolGlyph(frame uint) func(ToolStatus) string {
-	return func(s ToolStatus) string {
-		if s == ToolRunning {
-			return spinnerGlyph(frame)
-		}
-		return toolGlyph(s)
-	}
 }
 
 // barWidth is the display columns a left-bar prefix ("▌ " / "│ ") consumes.
