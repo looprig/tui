@@ -252,10 +252,10 @@ func TestRenderToolCard_RailNode(t *testing.T) {
 	}
 }
 
-// TestToolHeaderTextNormalizesAuditableSummaries covers live tool events whose
-// AuditSummary already includes the tool name. The card header owns the tool name,
+// TestToolNodeHeaderTextNormalizesAuditableSummaries covers live tool events whose
+// AuditSummary already includes the tool name. The node header owns the tool name,
 // so the argument display should not duplicate it.
-func TestToolHeaderTextNormalizesAuditableSummaries(t *testing.T) {
+func TestToolNodeHeaderTextNormalizesAuditableSummaries(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -266,22 +266,22 @@ func TestToolHeaderTextNormalizesAuditableSummaries(t *testing.T) {
 		{
 			name: "bash colon prefix",
 			call: ToolCallView{ToolName: "Bash", Summary: "Bash: curl -p https://example.com"},
-			want: "Bash(curl -p https://example.com)  ✓",
+			want: "Bash(curl -p https://example.com)",
 		},
 		{
 			name: "readfile space prefix",
 			call: ToolCallView{ToolName: "ReadFile", Summary: "ReadFile pkg/tui/render.go"},
-			want: "ReadFile(pkg/tui/render.go)  ✓",
+			want: "ReadFile(pkg/tui/render.go)",
 		},
 		{
 			name: "fetch summary without tool prefix",
 			call: ToolCallView{ToolName: "Fetch", Summary: "GET google.com"},
-			want: "Fetch(GET google.com)  ✓",
+			want: "Fetch(GET google.com)",
 		},
 		{
 			name: "summary equal to tool name is omitted",
 			call: ToolCallView{ToolName: "Subagent", Summary: "Subagent"},
-			want: "Subagent  ✓",
+			want: "Subagent",
 		},
 	}
 
@@ -289,8 +289,8 @@ func TestToolHeaderTextNormalizesAuditableSummaries(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := toolHeaderText(tt.call, glyphOK); got != tt.want {
-				t.Errorf("toolHeaderText() = %q, want %q", got, tt.want)
+			if got := toolNodeHeaderText(tt.call); got != tt.want {
+				t.Errorf("toolNodeHeaderText() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -453,7 +453,6 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 		name     string
 		thinking string
 		text     string
-		headline string
 		want     []string
 		absent   []string
 	}{
@@ -463,11 +462,6 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 			want: []string{strings.TrimSpace(styles.Dot), "let me read the config"},
 			// committed cards are their OWN kindTool entries — never nested here.
 			absent: []string{cardConnector},
-		},
-		{
-			name:     "empty text with a headline renders the umbrella bullet",
-			headline: multipleActionsHeadline,
-			want:     []string{strings.TrimSpace(styles.Dot), multipleActionsHeadline},
 		},
 		{
 			// A committed thinking-only segment renders the rail'd header "│ thought"
@@ -487,7 +481,7 @@ func TestRenderAssistantNestsCards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stripANSI(renderAssistant(tt.thinking, tt.text, tt.headline, false, 80, formatThought(0)))
+			got := stripANSI(renderAssistant(tt.thinking, tt.text, false, 80, formatThought(0)))
 			for _, w := range tt.want {
 				if !strings.Contains(got, w) {
 					t.Errorf("renderAssistant() = %q, want to contain %q", got, w)
@@ -897,8 +891,8 @@ func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 	// The thinking fold (renderAssistant) honors the ctrl+t expand flag. The tool-result
 	// preview (renderToolCalls) is HARD-capped to previewLineCap lines regardless of expand,
 	// so a huge result can never fill the live tail or strand a commit-time gap.
-	thinkCollapsed := stripANSI(renderAssistant(thinking, "the answer", "", false, 80, formatThought(0)))
-	thinkExpanded := stripANSI(renderAssistant(thinking, "the answer", "", true, 80, formatThought(0)))
+	thinkCollapsed := stripANSI(renderAssistant(thinking, "the answer", false, 80, formatThought(0)))
+	thinkExpanded := stripANSI(renderAssistant(thinking, "the answer", true, 80, formatThought(0)))
 	toolCollapsed := stripANSI(renderToolCalls(calls, false, 80))
 	toolExpanded := stripANSI(renderToolCalls(calls, true, 80))
 
@@ -942,7 +936,7 @@ func TestExpandFoldsThinkingNotToolOutput(t *testing.T) {
 func TestRenderAssistantThinkingBlock(t *testing.T) {
 	t.Parallel()
 
-	got := stripANSI(renderAssistant("my reasoning", "the final answer", "", true, 80, formatThought(0))) // expanded
+	got := stripANSI(renderAssistant("my reasoning", "the final answer", true, 80, formatThought(0))) // expanded
 
 	for _, w := range []string{"│ thought", "│ my reasoning", "the final answer"} {
 		if !strings.Contains(got, w) {
@@ -954,64 +948,66 @@ func TestRenderAssistantThinkingBlock(t *testing.T) {
 	}
 }
 
-// TestRenderAssistantHeadline covers the empty-text MULTI-tool umbrella: an assistant
-// entry with no narration but a headline renders a bold "● Multiple actions" beside the
-// dot. With neither narration nor headline it renders nothing (no bare lone "●") — a
-// single-tool empty-text step promotes its one card to the bullet instead.
-func TestRenderAssistantHeadline(t *testing.T) {
+// TestRenderAssistant_NodePresence pins the node-presence rule: the thinking rail
+// renders iff the segment reasoned; the neon "●" AI-message node renders iff the
+// narration text is non-empty; empty text yields no "●" node and NEVER a "Multiple
+// actions" umbrella. It covers content-only, thinking-only, thinking+empty-text, and
+// the all-three case.
+func TestRenderAssistant_NodePresence(t *testing.T) {
 	t.Parallel()
 
-	dot := strings.TrimSpace(styles.Dot)
+	dot := strings.TrimSpace(styles.Dot) // the "●" AI-message node glyph
 
-	got := stripANSI(renderAssistant("", "", multipleActionsHeadline, false, 80, formatThought(0)))
-	if !strings.Contains(got, dot) {
-		t.Errorf("renderAssistant(headline) = %q, want the dot glyph %q", got, dot)
-	}
-	if !strings.Contains(got, multipleActionsHeadline) {
-		t.Errorf("renderAssistant(headline) = %q, want the %q headline beside the dot", got, multipleActionsHeadline)
+	tests := []struct {
+		name     string
+		thinking string
+		text     string
+		want     []string
+		absent   []string
+	}{
+		{
+			name:   "content only renders the ● node, no thinking rail",
+			text:   "hi",
+			want:   []string{dot, "hi"},
+			absent: []string{"│ thought", "Multiple actions"},
+		},
+		{
+			name:     "thinking only renders the rail, no ● node",
+			thinking: "mulling",
+			want:     []string{"│"},
+			absent:   []string{dot, "Multiple actions"},
+		},
+		{
+			name:     "thinking plus empty text renders the rail only, no ● node",
+			thinking: "mulling",
+			text:     "",
+			want:     []string{"│ thought"},
+			absent:   []string{dot, "Multiple actions"},
+		},
+		{
+			name:     "thinking and text renders both the rail and the ● node",
+			thinking: "mulling",
+			text:     "the answer",
+			want:     []string{"│ thought", dot, "the answer"},
+			absent:   []string{"Multiple actions"},
+		},
 	}
 
-	empty := stripANSI(renderAssistant("", "", "", false, 80, formatThought(0)))
-	if strings.Contains(empty, dot) {
-		t.Errorf("renderAssistant(no text, no headline) = %q, want no bullet", empty)
-	}
-}
-
-// TestRenderEntryPromotedTool covers a single-tool empty-text step's promoted card: a
-// kindTool entry with promoted set renders AS the assistant bullet
-// ("● <verb >ToolName(args)" + result), never an indented "⎿ …" card.
-func TestRenderEntryPromotedTool(t *testing.T) {
-	t.Parallel()
-
-	e := entry{
-		Kind:     kindTool,
-		promoted: true,
-		Calls:    []ToolCallView{{ToolName: "Bash", Summary: "date", Status: ToolOK, Result: []string{"Fri"}, Decision: gateApproved}},
-	}
-	got := stripANSI(strings.Join(renderEntry(e, false, 80), "\n"))
-	for _, w := range []string{strings.TrimSpace(styles.Dot), "Approved", "Bash(date)", "Fri"} {
-		if !strings.Contains(got, w) {
-			t.Errorf("renderEntry(promoted) = %q, want %q", got, w)
-		}
-	}
-	if strings.Contains(got, cardConnector) {
-		t.Errorf("renderEntry(promoted) = %q, must NOT use the ⎿ card connector", got)
-	}
-}
-
-// TestRenderEntryHeadline covers the committed-entry threading: a kindAssistant entry
-// with a headline renders the bold "● Multiple actions" bullet. Pins entryrender →
-// renderAssistant wiring.
-func TestRenderEntryHeadline(t *testing.T) {
-	t.Parallel()
-
-	e := entry{Kind: kindAssistant, headline: multipleActionsHeadline}
-	got := stripANSI(strings.Join(renderEntry(e, false, 80), "\n"))
-	if !strings.Contains(got, multipleActionsHeadline) {
-		t.Errorf("renderEntry(headline) = %q, want the %q headline", got, multipleActionsHeadline)
-	}
-	if strings.TrimSpace(got) == strings.TrimSpace(styles.Dot) {
-		t.Errorf("renderEntry(headline) = %q, want a headline, not a bare lone dot", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := stripANSI(renderAssistant(tt.thinking, tt.text, false, 80, formatThought(0)))
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("renderAssistant() = %q, want to contain %q", got, w)
+				}
+			}
+			for _, a := range tt.absent {
+				if strings.Contains(got, a) {
+					t.Errorf("renderAssistant() = %q, want to NOT contain %q", got, a)
+				}
+			}
+		})
 	}
 }
 

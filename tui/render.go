@@ -61,14 +61,6 @@ const (
 // line — still fit.
 const dotWidth = 2
 
-// multipleActionsHeadline is the committed bullet headline for an empty-text step that
-// ran MORE THAN ONE tool call: a single "● Multiple actions" umbrella, with each call
-// committed below it as its own card (carrying the per-tool name, args, ✓/✗ and any
-// Approved/Denied verb). A single-tool empty-text step has no umbrella — its one card
-// is promoted to the bullet directly (renderPromotedTool). The LIVE counterpart of an
-// empty-text step is a rotating workingWord.
-const multipleActionsHeadline = "Multiple actions"
-
 // renderMD renders markdown to ANSI behind the static committed bullet (styles.LitDot,
 // the DotColor-foregrounded "●"). It is the committed/scrollback path: a frozen
 // assistant "●" never animates, so it always uses the lit dot. The live tail uses
@@ -237,13 +229,6 @@ func toolNodeHeaderText(c ToolCallView) string {
 	return head
 }
 
-// toolHeaderText retains the glyph-suffixed header form ("<verb >ToolName(detail)  glyph")
-// for the remaining legacy caller(s) — renderPromotedTool, which still renders a glyph
-// beside the promoted bullet. It reuses toolNodeHeaderText for the text (DRY).
-func toolHeaderText(c ToolCallView, glyph string) string {
-	return toolNodeHeaderText(c) + "  " + glyph
-}
-
 // toolCallDetail returns the argument/target text to render inside ToolName(...).
 // A permission prompt body is preferred because it is what the user approved.
 // Otherwise the redacted audit summary is normalized to avoid duplicating the
@@ -329,52 +314,29 @@ func indentWrap(s, indent string, width int) string {
 	return strings.Join(rows, "\n")
 }
 
-// renderAssistant renders a committed assistant segment in order: its reasoning
-// (thinking) block, then its markdown narration OR a bold bullet headline. When the
-// narration is non-empty it renders "● <text>"; when it is empty and headline is set —
-// the empty-text MULTI-tool step's "● Multiple actions" umbrella — it renders
-// "● <headline>". When both are empty it renders the thinking rail alone with no
-// bullet (a thinking-only message, or a single-tool empty-text step whose one card is
-// promoted to the bullet separately by renderPromotedTool). Committed tool cards are
-// their OWN kindTool entries, so this never renders cards inline. expand drives the
-// thinking block's compact/full fold. thinkHeader is the reasoning block's header label —
-// the committed caller (renderEntry) passes formatThought(duration) so the rail reads
+// renderAssistant renders a committed assistant segment under the node-presence rule:
+// the thinking rail first (when the segment has reasoning), then the neon "●" AI-message
+// node — via renderMD, which prefixes styles.LitDot — ONLY when the narration text is
+// non-empty. Empty text renders no "●" node and no umbrella: a thinking-only segment is
+// just its rail, and a pure-tool step commits no assistant entry at all (its tool calls
+// stand alone as their own kindTool rail nodes). Committed tool cards are their OWN
+// kindTool entries, so this never renders cards inline. expand drives the thinking
+// block's compact/full fold. thinkHeader is the reasoning block's header label — the
+// committed caller (renderEntry) passes formatThought(duration) so the rail reads
 // "│ thought for Nsec" / "│ thought"; the live-spill caller passes styles.ThinkingHeader.
-func renderAssistant(thinking, text, headline string, expand bool, width int, thinkHeader string) string {
+func renderAssistant(thinking, text string, expand bool, width int, thinkHeader string) string {
 	var b strings.Builder
-
 	if t := renderThinking(thinking, expand, width, thinkHeader); t != "" {
 		b.WriteString(t)
 	}
-
-	body := renderMD(text, width)
-	if body == "" && headline != "" {
-		body = strings.TrimRight(styles.LitDot, " ") + " " + styles.HeadlineStyle.Render(headline) // "● <headline>"
-	}
-	if body != "" {
+	if text != "" {
+		body := renderMD(text, width)
 		if b.Len() > 0 {
-			b.WriteString("\n") // no blank line: the AI message follows its thinking block directly
+			b.WriteString("\n") // AI message follows its thinking block directly, no blank line
 		}
 		b.WriteString(body)
 	}
 	return b.String()
-}
-
-// renderPromotedTool renders a single tool card promoted to the assistant bullet — the
-// committed form of an empty-text step that ran exactly ONE tool call. Instead of a
-// "Multiple actions" umbrella plus a child card, the one call IS the headline:
-// "● <verb >ToolName(args)  glyph" beside the lit dot, with its result preview indented
-// below (same fold as a normal card). It is the committed counterpart of the live
-// working-word for the single-tool case.
-func renderPromotedTool(c ToolCallView, expand bool, width int) string {
-	header := strings.TrimRight(styles.LitDot, " ") + " " +
-		styles.HeadlineStyle.Render(toolHeaderText(c, toolGlyph(c.Status)))
-	lines := make([]string, 0, previewLineCap+2)
-	lines = append(lines, header)
-	for _, rl := range previewLines(c.Result, expand) {
-		lines = append(lines, indentWrap(rl, resultIndent, width))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // subagentTerminalVerb maps a child loop's terminal status to its done-line verb

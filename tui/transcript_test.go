@@ -108,16 +108,6 @@ func findLoop(loops []loopInfo, id uuid.UUID) (loopInfo, bool) {
 	return loopInfo{}, false
 }
 
-func committedHeadlines(m transcriptModel) []string {
-	var out []string
-	for _, e := range m.testCommitted() {
-		if e.Kind == kindAssistant {
-			out = append(out, e.headline)
-		}
-	}
-	return out
-}
-
 // thinkingChunk builds a real *content.ThinkingChunk TokenDelta event carrying s.
 func thinkingChunk(s string) event.Event {
 	return event.TokenDelta{Chunk: &content.ThinkingChunk{Thinking: s}}
@@ -607,21 +597,21 @@ func TestTranscriptToolCalls(t *testing.T) {
 				),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				// bare assistant (card-only) + two tool entries.
-				if len(m.testCommitted()) != 3 {
-					t.Fatalf("committed = %d, want 3 (bare assistant, tool, tool)", len(m.testCommitted()))
+				// empty-text step: NO assistant entry — just the two stand-alone tool nodes.
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (tool, tool)", len(m.testCommitted()))
 				}
-				if m.testCommitted()[1].Kind != kindTool || m.testCommitted()[2].Kind != kindTool {
-					t.Errorf("kinds = %v,%v, want kindTool both", m.testCommitted()[1].Kind, m.testCommitted()[2].Kind)
+				if m.testCommitted()[0].Kind != kindTool || m.testCommitted()[1].Kind != kindTool {
+					t.Errorf("kinds = %v,%v, want kindTool both", m.testCommitted()[0].Kind, m.testCommitted()[1].Kind)
 				}
-				if m.testCommitted()[1].ID == m.testCommitted()[2].ID {
-					t.Errorf("tool entry IDs not distinct: both %d", m.testCommitted()[1].ID)
+				if m.testCommitted()[0].ID == m.testCommitted()[1].ID {
+					t.Errorf("tool entry IDs not distinct: both %d", m.testCommitted()[0].ID)
 				}
 				// The committed cards reuse the LIVE cards' redacted Summary by position.
-				if got := m.testCommitted()[1].Calls[0].Summary; got != "a" {
+				if got := m.testCommitted()[0].Calls[0].Summary; got != "a" {
 					t.Errorf("tool[0] Summary = %q, want the redacted live summary %q", got, "a")
 				}
-				if got := m.testCommitted()[2].Calls[0].Summary; got != "b" {
+				if got := m.testCommitted()[1].Calls[0].Summary; got != "b" {
 					t.Errorf("tool[1] Summary = %q, want the redacted live summary %q", got, "b")
 				}
 				if !m.testLive().empty() {
@@ -641,12 +631,12 @@ func TestTranscriptToolCalls(t *testing.T) {
 				),
 			},
 			want: func(t *testing.T, m transcriptModel) {
-				// single empty-text tool → the one card is promoted to the bullet (no umbrella).
+				// single empty-text tool → one stand-alone tool node, no assistant entry.
 				if len(m.testCommitted()) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 1 (tool node)", len(m.testCommitted()))
 				}
-				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
+				if m.testCommitted()[0].Kind != kindTool {
+					t.Errorf("committed[0] = %+v, want a kindTool node", m.testCommitted()[0])
 				}
 				if len(m.testCommitted()[0].Calls) != 1 {
 					t.Fatalf("committed[0].Calls = %d, want 1", len(m.testCommitted()[0].Calls))
@@ -667,10 +657,10 @@ func TestTranscriptToolCalls(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				if len(m.testCommitted()) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 1 (tool node)", len(m.testCommitted()))
 				}
-				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
+				if m.testCommitted()[0].Kind != kindTool {
+					t.Errorf("committed[0] = %+v, want a kindTool node", m.testCommitted()[0])
 				}
 				if len(m.testCommitted()[0].Calls) != 1 {
 					t.Fatalf("committed[0].Calls = %d, want 1", len(m.testCommitted()[0].Calls))
@@ -979,7 +969,7 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 			},
 		},
 		{
-			name: "tool-use-only step (single tool, no narration) promotes the one card to the bullet",
+			name: "tool-use-only step (single tool, no narration) commits a stand-alone tool node",
 			events: []event.Event{
 				event.TurnStarted{},
 				stepDone(
@@ -989,10 +979,10 @@ func TestTranscriptStepDoneSelfHeal(t *testing.T) {
 			},
 			want: func(t *testing.T, m transcriptModel) {
 				if len(m.testCommitted()) != 1 {
-					t.Fatalf("committed = %d, want 1 (promoted card, no umbrella)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 1 (stand-alone tool node, no umbrella)", len(m.testCommitted()))
 				}
-				if m.testCommitted()[0].Kind != kindTool || !m.testCommitted()[0].promoted {
-					t.Errorf("committed[0] = %+v, want a promoted kindTool", m.testCommitted()[0])
+				if m.testCommitted()[0].Kind != kindTool {
+					t.Errorf("committed[0] = %+v, want a kindTool node", m.testCommitted()[0])
 				}
 				if m.testCommitted()[0].Calls[0].ToolName != "ReadFile" {
 					t.Errorf("tool name = %q, want ReadFile", m.testCommitted()[0].Calls[0].ToolName)
@@ -1273,87 +1263,93 @@ func TestTranscriptGatePrompts(t *testing.T) {
 	}
 }
 
-// TestStepDoneHeadlineAndPromotion covers how an empty-text tool step commits: a
-// SINGLE-tool step promotes its one card to the assistant bullet (a promoted kindTool
-// entry, no umbrella) — with a thinking-only kindAssistant entry above it when the step
-// reasoned; a MULTI-tool step commits a "● Multiple actions" umbrella (kindAssistant
-// headline) then its plain cards; and a step WITH narration commits a narration bullet
-// and leaves its cards un-promoted.
-func TestStepDoneHeadlineAndPromotion(t *testing.T) {
+// TestStepDoneNodePresence covers how a step commits under the node-presence rule (no
+// "Multiple actions" umbrella, no promotion): an empty-text SINGLE-tool step commits
+// just the one stand-alone tool node; the same step WITH thinking commits a thinking-only
+// kindAssistant entry above the tool node; an empty-text MULTI-tool step commits NO
+// assistant entry and each tool as its own stand-alone node; and a step WITH narration
+// commits the "●" narration entry plus its stand-alone tool nodes.
+func TestStepDoneNodePresence(t *testing.T) {
 	tests := []struct {
 		name   string
 		events []event.Event
 		check  func(t *testing.T, m transcriptModel)
 	}{
 		{
-			name: "single empty-text tool → one promoted card, no umbrella entry",
+			name: "single empty-text tool → one stand-alone tool node, no assistant entry",
 			events: []event.Event{
 				event.TurnStarted{},
 				stepDone(aiMessage("", "", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
 				if len(m.testCommitted()) != 1 {
-					t.Fatalf("committed = %d, want 1 (just the promoted card)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 1 (just the tool node)", len(m.testCommitted()))
 				}
-				if e := m.testCommitted()[0]; e.Kind != kindTool || !e.promoted {
-					t.Errorf("committed[0] = {kind %v, promoted %v}, want {kindTool, true}", e.Kind, e.promoted)
+				if e := m.testCommitted()[0]; e.Kind != kindTool {
+					t.Errorf("committed[0] = %+v, want a kindTool node", e)
+				}
+				// The stand-alone node renders as a "○ ToolName" rail node, never a promoted
+				// "●" bullet.
+				got := stripANSI(strings.Join(renderEntry(m.testCommitted()[0], false, 80), "\n"))
+				if !strings.Contains(got, "○ Bash") {
+					t.Errorf("rendered node = %q, want a %q rail node", got, "○ Bash")
+				}
+				if strings.Contains(got, "●") {
+					t.Errorf("rendered node = %q, must NOT be a promoted %q bullet", got, "●")
 				}
 			},
 		},
 		{
-			name: "single empty-text tool WITH thinking → thinking entry then promoted card",
+			name: "single empty-text tool WITH thinking → thinking entry then tool node",
 			events: []event.Event{
 				event.TurnStarted{},
 				stepDone(aiMessage("plan it", "", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
 				if len(m.testCommitted()) != 2 {
-					t.Fatalf("committed = %d, want 2 (thinking entry, promoted card)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 2 (thinking entry, tool node)", len(m.testCommitted()))
 				}
-				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != "" || thinkingText(e.Blocks) == "" {
-					t.Errorf("committed[0] = %+v, want a thinking-only kindAssistant (no headline)", e)
+				if e := m.testCommitted()[0]; e.Kind != kindAssistant || thinkingText(e.Blocks) == "" || textOnly(e.Blocks) != "" {
+					t.Errorf("committed[0] = %+v, want a thinking-only kindAssistant", e)
 				}
-				if e := m.testCommitted()[1]; e.Kind != kindTool || !e.promoted {
-					t.Errorf("committed[1] = %+v, want the promoted kindTool card", e)
+				if e := m.testCommitted()[1]; e.Kind != kindTool {
+					t.Errorf("committed[1] = %+v, want the kindTool node", e)
 				}
 			},
 		},
 		{
-			name: "multi empty-text tools → Multiple actions umbrella then plain cards",
+			name: "multi empty-text tools → no assistant entry, two stand-alone tool nodes",
 			events: []event.Event{
 				event.TurnStarted{},
 				stepDone(aiMessage("", "", toolUse("tu-1", "Bash", `{}`), toolUse("tu-2", "Fetch", `{}`)),
 					toolResult("tu-1", "a"), toolResult("tu-2", "b")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
-				if len(m.testCommitted()) != 3 {
-					t.Fatalf("committed = %d, want 3 (umbrella + 2 cards)", len(m.testCommitted()))
+				if len(m.testCommitted()) != 2 {
+					t.Fatalf("committed = %d, want 2 (2 tool nodes, no umbrella)", len(m.testCommitted()))
 				}
-				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != multipleActionsHeadline {
-					t.Errorf("committed[0] = %+v, want kindAssistant headline %q", e, multipleActionsHeadline)
-				}
-				for i := 1; i <= 2; i++ {
-					if e := m.testCommitted()[i]; e.Kind != kindTool || e.promoted {
-						t.Errorf("committed[%d] = %+v, want a plain (non-promoted) kindTool card", i, e)
+				for i := 0; i <= 1; i++ {
+					if e := m.testCommitted()[i]; e.Kind != kindTool {
+						t.Errorf("committed[%d] = %+v, want a kindTool node", i, e)
 					}
 				}
 			},
 		},
 		{
-			name: "text + tool → narration bullet, card not promoted",
+			name: "text + tool → narration node plus a stand-alone tool node",
 			events: []event.Event{
 				event.TurnStarted{},
 				stepDone(aiMessage("", "reading config", toolUse("tu-1", "Bash", `{}`)), toolResult("tu-1", "out")),
 			},
 			check: func(t *testing.T, m transcriptModel) {
 				if len(m.testCommitted()) != 2 {
-					t.Fatalf("committed = %d, want 2 (narration, card)", len(m.testCommitted()))
+					t.Fatalf("committed = %d, want 2 (narration, tool node)", len(m.testCommitted()))
 				}
-				if e := m.testCommitted()[0]; e.Kind != kindAssistant || e.headline != "" || textOnly(e.Blocks) == "" {
-					t.Errorf("committed[0] = %+v, want a narration kindAssistant (no headline)", e)
+				if e := m.testCommitted()[0]; e.Kind != kindAssistant || textOnly(e.Blocks) == "" {
+					t.Errorf("committed[0] = %+v, want a narration kindAssistant", e)
 				}
-				if e := m.testCommitted()[1]; e.Kind != kindTool || e.promoted {
-					t.Errorf("committed[1] = %+v, want a plain (non-promoted) kindTool card", e)
+				if e := m.testCommitted()[1]; e.Kind != kindTool {
+					t.Errorf("committed[1] = %+v, want a kindTool node", e)
 				}
 			},
 		},
@@ -1774,9 +1770,9 @@ func TestGateDecisionFlow(t *testing.T) {
 			m = m.ApplyEvent(toolCompleted(callID(1), tt.decision == gateDenied, "out"))
 			m = m.ApplyEvent(stepDone(aiMessage("let me run it", "", toolUse("tu-1", tt.toolName, `{}`)), toolResult("tu-1", "out")))
 
-			// committed: a thinking-only entry then the promoted card carrying the decision.
+			// committed: a thinking-only entry then the stand-alone tool node carrying the decision.
 			if len(m.testCommitted()) != 2 {
-				t.Fatalf("committed = %d, want 2 (thinking, promoted card)", len(m.testCommitted()))
+				t.Fatalf("committed = %d, want 2 (thinking, tool node)", len(m.testCommitted()))
 			}
 			thinkCount := 0
 			for _, e := range m.testCommitted() {
@@ -1788,8 +1784,8 @@ func TestGateDecisionFlow(t *testing.T) {
 				t.Errorf("committed thinking entries = %d, want exactly 1 (no gate duplicate)", thinkCount)
 			}
 			card := m.testCommitted()[1]
-			if card.Kind != kindTool || !card.promoted {
-				t.Fatalf("committed[1] = %+v, want the promoted card", card)
+			if card.Kind != kindTool {
+				t.Fatalf("committed[1] = %+v, want the tool node", card)
 			}
 			if got := card.Calls[0].Decision; got != tt.decision {
 				t.Errorf("card Decision = %v, want %v", got, tt.decision)
@@ -2178,13 +2174,15 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 		toolResult("toolu_B", "B done"),
 	))
 
-	for _, h := range committedHeadlines(m) {
-		if h == multipleActionsHeadline {
-			t.Errorf("all-subagent step committed a %q umbrella, want none; committed=%+v", multipleActionsHeadline, m.testCommitted())
+	// An all-subagent empty-text step commits NO assistant entry at all (no umbrella): the
+	// named "●" Subagent cards stack directly as their own kindTool entries.
+	for _, e := range m.testCommitted() {
+		if e.Kind == kindAssistant {
+			t.Errorf("all-subagent step committed a kindAssistant entry, want none; committed=%+v", m.testCommitted())
 		}
 	}
-	// Two Subagent cards committed as their own kindTool entries, neither promoted (each
-	// renders as a "●" Subagent card via Agent != "").
+	// Two Subagent cards committed as their own kindTool entries (each renders as a "●"
+	// Subagent card via Agent != "").
 	subCards := 0
 	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
@@ -2193,9 +2191,6 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 		for _, c := range e.Calls {
 			if c.Agent != "" {
 				subCards++
-				if e.promoted {
-					t.Errorf("Subagent card entry marked promoted; want a plain Subagent-card entry: %+v", e)
-				}
 			}
 		}
 	}
@@ -2206,8 +2201,8 @@ func TestSubagentAllSubagentStepNoUmbrella(t *testing.T) {
 
 // TestSubagentMixedStepTopology (Task 7 / design §5): a mixed step — narration + an
 // ordinary Bash tool + a Subagent call — commits the narration as the "●" assistant
-// bullet, the Bash as an ordinary (non-promoted) "⎿" card, and the Subagent as its OWN
-// "●" card. No "Multiple actions" umbrella (there IS narration).
+// node, the Bash as its own ordinary tool node, and the Subagent as its OWN "●" card.
+// No "Multiple actions" umbrella (there never is one anymore).
 func TestSubagentMixedStepTopology(t *testing.T) {
 	t.Parallel()
 
@@ -2231,23 +2226,19 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 		toolResult("toolu_X", "subagent summary"),
 	))
 
-	// Narration bullet, no umbrella.
+	// Narration node, and NO empty-text umbrella: the only kindAssistant entry carries the
+	// narration text.
 	sawNarration := false
 	for _, e := range m.testCommitted() {
-		if e.Kind == kindAssistant {
-			if e.headline == multipleActionsHeadline {
-				t.Errorf("mixed step committed a %q umbrella, want none", multipleActionsHeadline)
-			}
-			if textOnly(e.Blocks) == "looking into it" {
-				sawNarration = true
-			}
+		if e.Kind == kindAssistant && textOnly(e.Blocks) == "looking into it" {
+			sawNarration = true
 		}
 	}
 	if !sawNarration {
-		t.Errorf("mixed step did not commit the narration bullet; committed=%+v", m.testCommitted())
+		t.Errorf("mixed step did not commit the narration node; committed=%+v", m.testCommitted())
 	}
 
-	// The ordinary Bash card: a non-promoted kindTool with no Agent.
+	// The ordinary Bash card: a kindTool with no Agent; the Subagent: a kindTool with Agent.
 	sawBash, sawSub := false, false
 	for _, e := range m.testCommitted() {
 		if e.Kind != kindTool {
@@ -2257,14 +2248,8 @@ func TestSubagentMixedStepTopology(t *testing.T) {
 			switch {
 			case c.Agent != "":
 				sawSub = true
-				if e.promoted {
-					t.Errorf("Subagent card entry marked promoted: %+v", e)
-				}
 			case c.ToolName == "Bash":
 				sawBash = true
-				if e.promoted {
-					t.Errorf("ordinary Bash card promoted in a mixed step: %+v", e)
-				}
 			}
 		}
 	}

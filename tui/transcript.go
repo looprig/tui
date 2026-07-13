@@ -1009,7 +1009,7 @@ func (m *transcriptModel) commitLive() {
 // reset the whole live segment afterward.
 func (m *transcriptModel) flushCalls(transform func(ToolCallView) ToolCallView) {
 	for i := range m.fold.live.Calls {
-		m.commitCall(transform(m.fold.live.Calls[i]), false)
+		m.commitCall(transform(m.fold.live.Calls[i]))
 	}
 }
 
@@ -1093,37 +1093,24 @@ func (m *transcriptModel) toolCompleted(ev event.ToolCallCompleted) {
 // block's card (reusing the resolved
 // LIVE card — with its redacted Summary, capped preview, and permission Decision — or
 // falling back to the stored block + ToolResultMessage when no live card streamed),
-// commits the step's AIMessage prose / headline as one kindAssistant entry, then
-// commits each card as its own kindTool entry. An empty-text step that ran exactly ONE
-// tool promotes that single card to the assistant bullet (promoted=true, no umbrella
-// entry); an empty-text step with MORE than one tool gets a "Multiple actions"
-// umbrella headline above its cards. A multi-step turn renders as separate per-step
-// groups, never merged. After committing, the provisional live segment is reset
-// (active preserved): the dropped/partial TokenDeltas of this step vanish — the
-// self-heal — and the step's gate decisions are cleared.
+// commits the step's AIMessage (thinking + narration, under the node-presence rule) as
+// one kindAssistant entry, then commits each card as its own kindTool entry. An
+// empty-text step commits no assistant entry at all — its tool nodes stand alone. A
+// multi-step turn renders as separate per-step groups, never merged. After committing,
+// the provisional live segment is reset (active preserved): the dropped/partial
+// TokenDeltas of this step vanish — the self-heal — and the step's gate decisions are
+// cleared.
 func (m *transcriptModel) stepDone(ev event.StepDone) {
 	ai, results := splitStepGroup(ev.Messages)
 	uses := toolUsesOf(ai)
 	cards := make([]ToolCallView, len(uses))
-	ordinary := 0 // cards that render as ordinary "⎿" cards (NOT promoted Subagent "●" cards)
 	for i := range uses {
 		cards[i] = m.stepToolCard(uses[i], results, i)
 		cards[i] = m.reconcileSubagent(ev, uses[i], results, cards[i])
-		if cards[i].Agent == "" {
-			ordinary++
-		}
 	}
-	// Topology (design §5): a reconciled Subagent card (Agent set) is ALWAYS its own
-	// "●"-level card — never an indented "⎿" card and never under a "Multiple actions"
-	// umbrella — so the umbrella / single-promotion decisions count ONLY the ordinary
-	// cards. An all-Subagent empty-text step therefore commits no umbrella; its named
-	// cards stack directly.
-	m.commitStepAssistant(ai, ordinary)
-	promotedSingle := ai != nil && textOnly(ai.Blocks) == "" && ordinary == 1
+	m.commitStepAssistant(ai)
 	for i := range cards {
-		// A Subagent card never promotes-to-the-bullet via renderPromotedTool: it renders
-		// as its OWN "●" Subagent card (renderSubagentCard, keyed on Agent != "").
-		m.commitCall(cards[i], promotedSingle && cards[i].Agent == "")
+		m.commitCall(cards[i])
 	}
 	// SNAP: drop the provisional live for this step; active stays so the turn's next
 	// step (or its terminal) is still seen as in-progress.
@@ -1401,18 +1388,15 @@ func subagentTruncate(s string) string {
 // subagentLineCap is the ~80-col cap for a subagent task/summary line (design §Definitions).
 const subagentLineCap = 80
 
-// commitStepAssistant commits the AIMessage's prose / headline as one kindAssistant
-// entry. A nil AIMessage commits nothing. It commits the thinking rail (if any) and
-// the narration (if any); when there is NO narration it sets a bullet headline only
-// for an empty-text step that ran MORE than one ORDINARY tool ("Multiple actions") — a
-// single-tool empty-text step commits no umbrella here (its one card is promoted to
-// the bullet by stepDone). ordinaryCards is the count of cards that render as ordinary
-// "⎿" cards — reconciled Subagent cards are EXCLUDED (each is its own "●" card, design
-// §5), so an all-Subagent empty-text step has ordinaryCards == 0 and commits no
-// umbrella. So a thinking-only message renders just the rail, a single-ordinary-tool
-// empty-text step with no thinking commits nothing here at all, and a
-// multi-ordinary-tool empty-text step gets the "● Multiple actions" umbrella.
-func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCards int) {
+// commitStepAssistant commits the AIMessage's reasoning + narration as one kindAssistant
+// entry, under the node-presence rule. A nil AIMessage commits nothing. It commits the
+// thinking rail (when the step reasoned) and the narration (when the text is non-empty).
+// When both are empty it commits NOTHING — a pure-tool step has no assistant entry; its
+// tool calls stand alone as their own kindTool rail nodes. So a thinking-only step
+// commits just the thinking rail, a narration step commits the "●" node (plus rail), and
+// an empty-text tool step commits no assistant entry at all (no "Multiple actions"
+// umbrella, no promotion).
+func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage) {
 	if ai == nil {
 		return
 	}
@@ -1425,23 +1409,17 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage, ordinaryCar
 		// (e.g. a cold restore) yields 0 → the bare "thought" fallback.
 		thinkDur = m.fold.live.thinkDuration()
 	}
-	text := textOnly(ai.Blocks)
-	if text != "" {
+	if text := textOnly(ai.Blocks); text != "" {
 		blocks = append(blocks, &content.TextBlock{Text: text})
 	}
-	headline := ""
-	if text == "" && ordinaryCards > 1 {
-		headline = multipleActionsHeadline
-	}
-	if len(blocks) == 0 && headline == "" {
-		return // nothing to show here (a single-tool empty-text step, or a fully empty message)
+	if len(blocks) == 0 {
+		return // pure-tool step: no thinking, no text — the tool nodes stand alone
 	}
 	m.nextID++
 	m.fold.committed = append(m.fold.committed, entry{
 		ID:       m.nextID,
 		Kind:     kindAssistant,
 		Blocks:   blocks,
-		headline: headline,
 		thinkDur: thinkDur,
 	})
 }
@@ -1492,16 +1470,13 @@ func storedStepToolCard(use content.ToolUseBlock, results map[string]*content.To
 
 // commitCall appends one resolved tool call as its own kindTool entry with a fresh
 // stable ID. The single-element Calls slice carries the terminal ToolCallView so the
-// renderer can reuse the existing tool-card rendering. promoted marks the lone card of
-// an empty-text single-tool step: it renders AS the assistant bullet ("● <verb >
-// ToolName(args)" + result) instead of an indented "⎿ …" card (renderPromotedTool).
-func (m *transcriptModel) commitCall(call ToolCallView, promoted bool) {
+// renderer can reuse the existing tool-node rendering.
+func (m *transcriptModel) commitCall(call ToolCallView) {
 	m.nextID++
 	m.fold.committed = append(m.fold.committed, entry{
-		ID:       m.nextID,
-		Kind:     kindTool,
-		Calls:    []ToolCallView{call},
-		promoted: promoted,
+		ID:    m.nextID,
+		Kind:  kindTool,
+		Calls: []ToolCallView{call},
 	})
 }
 
