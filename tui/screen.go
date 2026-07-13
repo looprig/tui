@@ -75,7 +75,11 @@ type Screen struct {
 	// re-armed, but reducer inputs queue in arrival order until restoredMsg installs history.
 	restoring     bool
 	restoreBuffer []restoreInput
-	staleClosings []*agentCloseHandoff
+	staleClosings []*staleReopenClose
+	// sessionGeneration advances after each successful replacement. Async stale-close
+	// diagnostics may only render into the generation that rejected the replacement.
+	sessionGeneration uint64
+	staleCloseErr     error
 
 	// mouseDragging distinguishes a drag (a text selection) from a plain click (a
 	// header/body collapse toggle): a MouseMotion with the button held sets it, and a
@@ -295,9 +299,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // still in flight. agentCloseHandoff is sync.Once-backed, so a concurrent command completion
 // and finalization close each rejected replacement exactly once.
 func (m Screen) FinalizeHandoff() error {
-	err := m.sessionCore.FinalizeHandoff()
-	for _, handoff := range m.staleClosings {
-		err = errors.Join(err, handoff.close())
+	err := errors.Join(m.sessionCore.FinalizeHandoff(), m.staleCloseErr)
+	for _, closing := range m.staleClosings {
+		err = errors.Join(err, closing.handoff.close())
 	}
 	return err
 }
@@ -675,6 +679,7 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	// initializes from the replacement agent's ActiveLoopID (the session's current default
 	// target), mirroring New, and is set here once, never from a later
 	// selection event.
+	m.sessionGeneration++
 	m.focusedLoopID = m.agent.ActiveLoopID()
 	m.collapse = newCollapseState()
 	m.viewport = viewportModel{atTail: true}
@@ -695,40 +700,48 @@ func (m *Screen) rejectStaleReopenResult(msg reopenResultMsg) tea.Cmd {
 			m.handoff = nil
 		}
 	}
+	if msg.err != nil {
+		m.commitStaleReopenDiagnostic(fmt.Errorf("reject stale reopen result: %w", msg.err))
+	}
 	if msg.agent == nil {
-		m.commitStaleReopenDiagnostic(msg.err, nil)
 		return nil
 	}
-	handoff := newAgentCloseHandoff(msg.agent)
-	m.staleClosings = append(m.staleClosings, handoff)
-	return closeStaleReopen(handoff, msg.err)
+	closing := &staleReopenClose{
+		handoff:    newAgentCloseHandoff(msg.agent),
+		generation: m.sessionGeneration,
+	}
+	m.staleClosings = append(m.staleClosings, closing)
+	return closeStaleReopen(closing)
 }
 
 func (m *Screen) handleStaleReopenClose(msg staleReopenCloseMsg) tea.Cmd {
-	for i, handoff := range m.staleClosings {
-		if handoff == msg.handoff {
+	for i, closing := range m.staleClosings {
+		if closing == msg.closing {
 			m.staleClosings = append(m.staleClosings[:i], m.staleClosings[i+1:]...)
 			break
 		}
 	}
-	m.commitStaleReopenDiagnostic(msg.reopenErr, msg.closeErr)
+	if msg.closeErr == nil {
+		return nil
+	}
+	diagnostic := fmt.Errorf("close stale reopen replacement: %w", msg.closeErr)
+	if msg.closing.generation != m.sessionGeneration {
+		// Preserve a cleanup failure for runtime finalization without painting a
+		// predecessor-session diagnostic into the successor transcript.
+		m.staleCloseErr = errors.Join(m.staleCloseErr, diagnostic)
+		return nil
+	}
+	m.commitStaleReopenDiagnostic(diagnostic)
 	return nil
 }
 
-func (m *Screen) commitStaleReopenDiagnostic(reopenErr, closeErr error) {
-	var diagnostic error
-	if reopenErr != nil {
-		diagnostic = errors.Join(diagnostic, fmt.Errorf("reject stale reopen result: %w", reopenErr))
-	}
-	if closeErr != nil {
-		diagnostic = errors.Join(diagnostic, fmt.Errorf("close stale reopen replacement: %w", closeErr))
-	}
-	if diagnostic == nil {
+func (m *Screen) commitStaleReopenDiagnostic(err error) {
+	if err == nil {
 		return
 	}
 	// This is a defense-in-depth diagnostic only: the valid old restore remains
 	// authoritative, so rejecting a stale result must not become a terminal error.
-	m.transcript = m.transcript.CommitGlobalError(diagnostic)
+	m.transcript = m.transcript.CommitGlobalError(err)
 	m.rerender()
 }
 

@@ -33,6 +33,13 @@ type agentCloseHandoff struct {
 	err   error
 }
 
+// staleReopenClose binds rejected-replacement ownership to the session generation
+// whose restore barrier rejected it.
+type staleReopenClose struct {
+	handoff    *agentCloseHandoff
+	generation uint64
+}
+
 func newAgentCloseHandoff(agent Agent) *agentCloseHandoff {
 	return &agentCloseHandoff{agent: agent, done: make(chan struct{})}
 }

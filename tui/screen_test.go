@@ -1989,6 +1989,77 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 	}
 }
 
+func TestModernStaleReopenCloseDoesNotLeakIntoSuccessorSession(t *testing.T) {
+	t.Parallel()
+
+	oldLoop := callID(0xE4)
+	old := &fakeAgent{activeLoopID: oldLoop, backlog: []event.Event{
+		loopStarted(oldLoop, "operator"),
+		stepDoneFrom(oldLoop, aiMessage("", "old history")),
+	}}
+	fresh := &fakeAgent{activeLoopID: callID(0xE5)}
+	staleOpenErr := errors.New("stale blocked reopen failed")
+	staleCloseErr := errors.New("stale blocked replacement close failed")
+	closeEntered := make(chan struct{})
+	closeRelease := make(chan struct{})
+	staleFresh := &fakeAgent{
+		activeLoopID: callID(0xE6),
+		closeErr:     staleCloseErr,
+		closeEntered: closeEntered,
+		closeRelease: closeRelease,
+	}
+	m := newScreenSized(t, old, 80, 24)
+	m.restoring = true
+	m.openAgent = func(context.Context) (Agent, error) { return fresh, nil }
+	restored := runRestoreCmd(t, restoreBacklogCmd(context.Background(), old))
+
+	handoff := newReopenHandoff()
+	stale := reopenResultMsg{agent: staleFresh, err: staleOpenErr, handoff: handoff}
+	handoff.complete(stale)
+	m, closeCmd := updateScreen(t, m, stale)
+	if closeCmd == nil {
+		t.Fatal("stale replacement close command = nil")
+	}
+	if !containsPlain(m.viewport.lines, staleOpenErr.Error()) {
+		t.Fatalf("restoring transcript missing immediate stale reopen error: %q", plainAll(m.viewport.lines))
+	}
+	closeResult := make(chan tea.Msg, 1)
+	go func() { closeResult <- closeCmd() }()
+	<-closeEntered
+
+	m = feedRestored(t, m, restored)
+	if !containsPlain(m.viewport.lines, staleOpenErr.Error()) {
+		t.Fatalf("restored transcript lost immediate stale reopen error: %q", plainAll(m.viewport.lines))
+	}
+	m.interaction.input.SetValue("/clear")
+	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("successor /clear command = nil")
+	}
+	m, _ = updateScreen(t, m, cmd())
+	if m.Agent() != fresh {
+		t.Fatalf("successor agent = %p, want %p", m.Agent(), fresh)
+	}
+	if containsPlain(m.viewport.lines, staleOpenErr.Error()) {
+		t.Fatalf("fresh transcript retained stale reopen error: %q", plainAll(m.viewport.lines))
+	}
+
+	close(closeRelease)
+	m, _ = updateScreen(t, m, <-closeResult)
+	if containsPlain(m.viewport.lines, staleOpenErr.Error()) || containsPlain(m.viewport.lines, staleCloseErr.Error()) {
+		t.Fatalf("fresh transcript painted stale close diagnostic: %q", plainAll(m.viewport.lines))
+	}
+	if staleFresh.closeCalls != 1 {
+		t.Fatalf("stale replacement Close calls = %d, want 1", staleFresh.closeCalls)
+	}
+	if err := m.FinalizeHandoff(); !errors.Is(err, staleCloseErr) {
+		t.Fatalf("FinalizeHandoff = %v, want retained stale close error", err)
+	}
+	if staleFresh.closeCalls != 1 {
+		t.Fatalf("FinalizeHandoff double-closed stale replacement: %d", staleFresh.closeCalls)
+	}
+}
+
 // TestModernInterruptAndQuit pins the two globals: esc with NO prompt interrupts a running turn
 // (flips to Interrupting + dispatches the bounded Interrupt), and ctrl+c closes the subscription
 // and quits.
