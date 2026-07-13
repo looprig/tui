@@ -1098,12 +1098,13 @@ func (m *Screen) rerender() {
 //
 // MODERN-ONLY SPACING: one blank breathing-space row follows every committed entry (see
 // blankSeparator) — the opening banner/greeting included, so the first real message is not
-// glued to the header — EXCEPT within a tool-call group (see suppressSeparator): an assistant
-// message and the (possibly parallel) tool calls it led render glued together with no blank,
-// so the group reads as one cohesive action rather than a ladder of separated rows. Because
-// every group's LAST entry still carries its trailing blank, the streaming live tail sits
-// exactly one blank below the last committed entry (one gap, never two), so no special-casing
-// is needed at the tail seam. Scrollback's renderEntry owns its own spacing and is untouched.
+// glued to the header — EXCEPT within a tool-call group (see intraTurnSeparator): an assistant
+// message and the (possibly parallel) tool calls it led are joined by a faint "│" rail connector
+// (railSeparator) instead of a blank, so the group reads as one continuous action rather than a
+// ladder of separated rows. Because every group's LAST entry still carries its trailing blank,
+// the streaming live tail sits exactly one blank below the last committed entry (one gap, never
+// two), so no special-casing is needed at the tail seam. Scrollback's renderEntry owns its own
+// spacing and is untouched.
 //
 // MODERN-ONLY USER CARD: a kindUser entry is first bracketed with rail pad rows (padUserCard)
 // and then gray-filled (paintUserBackground) so its message reads as a padded card — the pad
@@ -1123,10 +1124,15 @@ func (m Screen) renderFocused() []renderedLine {
 		}
 		out = append(out, lines...)
 		// A zero-line entry (an unknown/empty kind) has no last sub and nothing to set off, so it
-		// gets no blank — which also keeps the blank's sub non-header (>= 1) for every real entry.
-		// A tool call glued to its leading message/sibling (suppressSeparator) also gets no blank.
-		if n := len(lines); n > 0 && !suppressSeparator(committed, i) {
-			out = append(out, blankSeparator(committed[i].ID, n))
+		// gets no separator — which also keeps each separator's sub non-header (>= 1) for every real
+		// entry. A gap INTERNAL to a step (intraTurnSeparator: assistant→tool or tool→tool) becomes a
+		// faint "│" rail connector so the timeline reads unbroken; every turn boundary keeps a blank.
+		if n := len(lines); n > 0 {
+			if intraTurnSeparator(committed, i) {
+				out = append(out, railSeparator(committed[i].ID, n))
+			} else {
+				out = append(out, blankSeparator(committed[i].ID, n))
+			}
 		}
 	}
 	out = append(out, m.liveTailLines(live)...)
@@ -1151,14 +1157,25 @@ func blankSeparator(id displayID, lineCount int) renderedLine {
 	return renderedLine{styled: "", plain: "", entry: id, sub: lineCount}
 }
 
-// suppressSeparator reports whether the breathing-space blank after committed entry i should
-// be OMITTED so the entry glues to the next one. It suppresses the blank when the NEXT entry is
-// a tool call led by this assistant message or a preceding tool call (kindAssistant→kindTool or
-// kindTool→kindTool) — so a step's narration and its (possibly parallel) tool calls read as one
-// cohesive group, the assistant message visibly leading its calls, rather than a ladder of
-// blank-separated rows. Every other adjacency keeps its blank, and the last entry (no next, so
-// i+1 is out of range) always keeps its blank — preserving the one-gap seam to the live tail.
-func suppressSeparator(committed []entry, i int) bool {
+// railSeparator is the intra-turn connector row: a faint "│" that continues the rail
+// between a step's nodes (assistant→tool, tool→tool) so the timeline reads unbroken,
+// in place of the blank that would otherwise glue them. Like blankSeparator it is tagged
+// with the PRECEDING entry's id and its lineCount sub (a non-header sub >= 1), so a
+// collapse-click that lands on it never toggles and a selection includes the newline.
+// Its plain form is empty, so copied text carries no stray bar.
+func railSeparator(id displayID, lineCount int) renderedLine {
+	return renderedLine{styled: railConnector(0), plain: "", entry: id, sub: lineCount}
+}
+
+// intraTurnSeparator reports whether the gap after committed entry i is INTERNAL to a step and
+// should therefore be a rail connector (railSeparator) rather than a blank. The gap is internal
+// when the NEXT entry is a tool call led by this assistant message or a preceding tool call
+// (kindAssistant→kindTool or kindTool→kindTool) — so a step's narration and its (possibly
+// parallel) tool calls read as one cohesive group, the assistant message visibly leading its
+// calls, the rail continuing unbroken between their nodes. Every other adjacency is a turn
+// boundary and keeps its blank, and the last entry (no next, so i+1 is out of range) is always a
+// boundary — preserving the one-gap seam to the live tail.
+func intraTurnSeparator(committed []entry, i int) bool {
 	if i+1 >= len(committed) || committed[i+1].Kind != kindTool {
 		return false
 	}

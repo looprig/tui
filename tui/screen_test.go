@@ -2481,12 +2481,12 @@ func TestModernCommitsTurnRanNotice(t *testing.T) {
 	}
 }
 
-// TestSuppressSeparator pins the tool-call grouping rule (issue: parallel tool calls should read
-// as one cohesive group led by their assistant message): the breathing-space blank after a
-// committed entry is omitted (glued) ONLY when the next entry is a tool call led by an assistant
-// message or a preceding tool call. Every other adjacency, the last entry (seam to the live
-// tail), and an empty slice keep the blank.
-func TestSuppressSeparator(t *testing.T) {
+// TestIntraTurnSeparator pins the tool-call grouping rule (issue: parallel tool calls should read
+// as one cohesive group led by their assistant message): the gap after a committed entry is
+// INTERNAL to a step — a rail connector rather than a blank — ONLY when the next entry is a tool
+// call led by an assistant message or a preceding tool call. Every other adjacency, the last entry
+// (seam to the live tail), and an empty slice are turn boundaries that keep the blank.
+func TestIntraTurnSeparator(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -2495,9 +2495,9 @@ func TestSuppressSeparator(t *testing.T) {
 		i         int
 		want      bool
 	}{
-		{name: "assistant leads a tool call: glued", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}}, i: 0, want: true},
-		{name: "tool followed by a sibling tool: glued", committed: []entry{{Kind: kindTool}, {Kind: kindTool}}, i: 0, want: true},
-		{name: "assistant leads parallel tools: a middle tool stays glued", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}, {Kind: kindTool}, {Kind: kindTool}}, i: 1, want: true},
+		{name: "assistant leads a tool call: connector", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}}, i: 0, want: true},
+		{name: "tool followed by a sibling tool: connector", committed: []entry{{Kind: kindTool}, {Kind: kindTool}}, i: 0, want: true},
+		{name: "assistant leads parallel tools: a middle tool stays connected", committed: []entry{{Kind: kindAssistant}, {Kind: kindTool}, {Kind: kindTool}, {Kind: kindTool}}, i: 1, want: true},
 		{name: "tool followed by an assistant: blank kept", committed: []entry{{Kind: kindTool}, {Kind: kindAssistant}}, i: 0, want: false},
 		{name: "assistant followed by an assistant: blank kept", committed: []entry{{Kind: kindAssistant}, {Kind: kindAssistant}}, i: 0, want: false},
 		{name: "user followed by a tool call: blank kept", committed: []entry{{Kind: kindUser}, {Kind: kindTool}}, i: 0, want: false},
@@ -2511,10 +2511,149 @@ func TestSuppressSeparator(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := suppressSeparator(tt.committed, tt.i); got != tt.want {
-				t.Errorf("suppressSeparator(i=%d) = %v, want %v", tt.i, got, tt.want)
+			if got := intraTurnSeparator(tt.committed, tt.i); got != tt.want {
+				t.Errorf("intraTurnSeparator(i=%d) = %v, want %v", tt.i, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRailSeparator pins the intra-turn connector row: a faint "│" that continues the rail
+// between a step's nodes. Its styled bytes carry the bar (stripANSI == "│"), its plain is EMPTY
+// (copied text gains no stray bar), and it is provenance-tagged with the preceding entry's id and
+// its lineCount sub (non-header, >= 1) exactly like blankSeparator so a collapse-click never toggles.
+func TestRailSeparator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		id        displayID
+		lineCount int
+	}{
+		{name: "depth-0 connector for entry 1", id: displayID(1), lineCount: 3},
+		{name: "single-line entry", id: displayID(7), lineCount: 1},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := railSeparator(tt.id, tt.lineCount)
+			if stripped := stripANSI(got.styled); stripped != "│" {
+				t.Errorf("railSeparator styled (stripped) = %q, want %q", stripped, "│")
+			}
+			if got.plain != "" {
+				t.Errorf("railSeparator plain = %q, want empty (copy gains no bar)", got.plain)
+			}
+			if got.entry != tt.id {
+				t.Errorf("railSeparator entry = %d, want %d", got.entry, tt.id)
+			}
+			if got.sub != tt.lineCount {
+				t.Errorf("railSeparator sub = %d, want %d", got.sub, tt.lineCount)
+			}
+		})
+	}
+}
+
+// TestModernRailConnectorWithinStep proves the continuous rail across a committed step: within a
+// turn, the gap between a step's nodes (assistant→tool, tool→tool) renders as a faint "│" connector
+// row (a railSeparator: stripANSI styled == "│", plain empty) instead of the fully-blank breathing
+// row — so the timeline reads unbroken — while a turn boundary (assistant→user) still renders a
+// fully-blank separator. Copied text stays bar-free because every connector's plain is empty.
+func TestModernRailConnectorWithinStep(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+
+	// A user turn, then a committed step: assistant(thinking+text) leading two tool calls, then a
+	// FOLLOWING user turn (the turn boundary). splitStepGroup + flushCalls commit the step as
+	// [kindAssistant, kindTool, kindTool]; the follow-up user commits a kindUser entry.
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("do the thing")})
+	m = feed(t, m, stepDoneFrom(primary,
+		aiMessage("reasoning about it", "here is the plan",
+			toolUse("t1", "Grep", `{"q":"foo"}`),
+			toolUse("t2", "Read", `{"path":"bar"}`)),
+		toolResult("t1", "hit"),
+		toolResult("t2", "content"),
+	))
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("follow up")})
+
+	committed, _ := m.transcript.projectionFor(primary)
+	// Locate the step's assistant + its two tool entries and the trailing user entry by kind.
+	var asst, tool1, tool2, user displayID
+	var haveA, haveT1, haveT2, haveU bool
+	for _, e := range committed {
+		switch e.Kind {
+		case kindAssistant:
+			asst, haveA = e.ID, true
+		case kindTool:
+			if !haveT1 {
+				tool1, haveT1 = e.ID, true
+			} else if !haveT2 {
+				tool2, haveT2 = e.ID, true
+			}
+		case kindUser:
+			user, haveU = e.ID, true // last user wins (the follow-up boundary)
+		}
+	}
+	if !haveA || !haveT1 || !haveT2 || !haveU {
+		t.Fatalf("precondition: want assistant+2 tools+user committed; kinds=%+v", committed)
+	}
+
+	lines := m.renderFocused()
+
+	// sepAfter returns the separator row that follows entry id: renderFocused appends an entry's
+	// own lines then its single trailing separator (all tagged to id) before moving to the next
+	// entry's (distinct, monotonic) id, so the LAST line tagged to id is that separator. (Finding
+	// the FIRST empty-plain line would wrongly match a user card's gray pad row, whose plain is
+	// also empty.)
+	sepAfter := func(id displayID) *renderedLine {
+		var found *renderedLine
+		for i := range lines {
+			if lines[i].entry == id {
+				ln := lines[i]
+				found = &ln
+			}
+		}
+		return found
+	}
+
+	// assistant→tool and tool→tool gaps are rail connectors (faint "│", empty plain), NOT blanks.
+	for _, tc := range []struct {
+		name string
+		id   displayID
+	}{
+		{"assistant→tool1", asst},
+		{"tool1→tool2", tool1},
+	} {
+		sep := sepAfter(tc.id)
+		if sep == nil {
+			t.Fatalf("%s: no separator row tagged to entry %d", tc.name, tc.id)
+		}
+		if stripped := stripANSI(sep.styled); stripped != "│" {
+			t.Errorf("%s: separator styled (stripped) = %q, want %q (rail connector)", tc.name, stripped, "│")
+		}
+		if sep.plain != "" {
+			t.Errorf("%s: separator plain = %q, want empty", tc.name, sep.plain)
+		}
+	}
+
+	// No fully-blank (styled=="") separator sits inside the step: the assistant and tool1 gaps are
+	// connectors, so neither trailing separator is a bare blank row.
+	for _, id := range []displayID{asst, tool1} {
+		if sep := sepAfter(id); sep != nil && sep.styled == "" {
+			t.Errorf("entry %d has a fully-blank separator inside the step; want a rail connector", id)
+		}
+	}
+
+	// The turn boundary (the last tool → the follow-up user, i.e. the tool2 gap) keeps a blank, and
+	// so does the user card's own trailing gap.
+	if sep := sepAfter(tool2); sep == nil || sep.styled != "" {
+		t.Errorf("tool2→user boundary separator = %+v, want a fully-blank row (styled empty)", sep)
+	}
+	if sep := sepAfter(user); sep == nil || sep.styled != "" {
+		t.Errorf("user trailing separator = %+v, want a fully-blank row (styled empty)", sep)
 	}
 }
 
