@@ -517,15 +517,20 @@ func TestRenderLiveAssistantCards(t *testing.T) {
 		}
 	})
 
-	t.Run("cards with empty text render the working-word bullet", func(t *testing.T) {
+	t.Run("cards with empty text render the running node directly", func(t *testing.T) {
 		t.Parallel()
 
+		// Node presence: empty text → no "●" bullet umbrella; the running call shows its
+		// pulsing "◍" node directly.
 		calls := []ToolCallView{{ToolName: "Bash", Status: ToolRunning}}
-		got := stripANSI(renderLiveAssistant("", "", calls, nil, false, 80, a))
-		for _, w := range []string{strings.TrimSpace(styles.Dot), "Bash"} {
+		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, a))
+		for _, w := range []string{"◍", "Bash"} {
 			if !strings.Contains(got, w) {
 				t.Errorf("renderLiveAssistant() = %q, want to contain %q", got, w)
 			}
+		}
+		if strings.Contains(got, strings.TrimSpace(styles.Dot)) {
+			t.Errorf("renderLiveAssistant() = %q, must not show the %q bullet umbrella for a tools-only step", got, styles.Dot)
 		}
 	})
 
@@ -551,6 +556,92 @@ func TestRenderLiveAssistantCards(t *testing.T) {
 		}
 		if last := "cmd" + strconv.Itoa(len(calls)-1); !strings.Contains(got, last) { // newest shows
 			t.Errorf("most recent card %q missing in %q", last, got)
+		}
+	})
+}
+
+// TestRenderLiveAssistant_Rail covers the LIVE tail brought to rail parity with the
+// committed path (Task 8): the AI-message "●"/"◦" bullet under the node-presence rule, the
+// running tool call as a pulsing "◍" rail node, resolved calls as "○" nodes with "│ "-railed
+// detail rows, the over-cap elision as a rail detail row — and NEVER the old "⎿" connector
+// or a working-word umbrella.
+func TestRenderLiveAssistant_Rail(t *testing.T) {
+	t.Parallel()
+
+	hasBullet := func(s string) bool { return strings.Contains(s, "●") || strings.Contains(s, "◦") }
+
+	t.Run("text plus running and resolved calls use the rail", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{
+			{ToolName: "Bash", Summary: "ls", Status: ToolRunning},
+			{ToolName: "Read", Summary: "main.go", Status: ToolOK, Result: []string{"package main"}},
+		}
+		got := stripANSI(renderLiveAssistant("", "checking now", calls, nil, true, 80, animState{}))
+		if !hasBullet(got) {
+			t.Errorf("live step %q missing the blinking assistant bullet (● / ◦)", got)
+		}
+		if !strings.Contains(got, "◍") {
+			t.Errorf("live step %q missing the pulsing running node ◍", got)
+		}
+		if !strings.Contains(got, "○") {
+			t.Errorf("live step %q missing the resolved hollow node ○", got)
+		}
+		if !strings.Contains(got, "│ ") {
+			t.Errorf("live step %q missing the │ rail (resolved node detail rows)", got)
+		}
+		if strings.Contains(got, "⎿") {
+			t.Errorf("live step %q must not carry the old ⎿ card connector", got)
+		}
+	})
+
+	t.Run("empty text with a running call shows no working-word umbrella", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{{ToolName: "Bash", Summary: "ls", Status: ToolRunning}}
+		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, animState{frame: 3}))
+		for _, w := range workingWords {
+			if strings.Contains(got, w) {
+				t.Errorf("live tools-only step %q must not show a working-word (%q)", got, w)
+			}
+		}
+		if hasBullet(got) {
+			t.Errorf("live tools-only step %q must not show the ●/◦ bullet umbrella (no text → no bullet node)", got)
+		}
+		if !strings.Contains(got, "◍") {
+			t.Errorf("live tools-only step %q missing the running node ◍", got)
+		}
+	})
+
+	t.Run("more than the cap shows a rail earlier-calls row", func(t *testing.T) {
+		t.Parallel()
+
+		calls := make([]ToolCallView, 0, liveCallCap+2)
+		for i := 0; i < liveCallCap+2; i++ {
+			calls = append(calls, ToolCallView{ToolName: "Bash", Summary: "cmd" + strconv.Itoa(i), Status: ToolOK, Result: []string{"out"}})
+		}
+		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, animState{}))
+		hidden := len(calls) - liveCallCap
+		if !strings.Contains(got, "… ") || !strings.Contains(got, "earlier calls") {
+			t.Errorf("live step %q missing the '… %d earlier calls' rail row", got, hidden)
+		}
+		if strings.Contains(got, "⎿") {
+			t.Errorf("live step %q must not carry the old ⎿ connector on the earlier-calls row", got)
+		}
+	})
+
+	t.Run("resolved call shows its node with detail rows", func(t *testing.T) {
+		t.Parallel()
+
+		calls := []ToolCallView{{ToolName: "Bash", Summary: "ls", Status: ToolOK, Result: []string{"file-a", "file-b"}}}
+		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, animState{}))
+		if !strings.Contains(got, "○") {
+			t.Errorf("resolved live node %q missing the hollow ○ node glyph", got)
+		}
+		for _, w := range []string{"file-a", "file-b"} {
+			if !strings.Contains(got, w) {
+				t.Errorf("resolved live node %q missing detail row %q (not header-only)", got, w)
+			}
 		}
 	})
 }
@@ -682,19 +773,19 @@ func TestRenderLiveRunningCardIsHeaderOnly(t *testing.T) {
 
 		calls := []ToolCallView{{ToolName: "Fetch", Summary: "GET weather.com", Status: ToolRunning}}
 		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, a))
-		// The bare bullet (●/◦) is its own line; the running card is exactly one more.
+		// Node presence: empty text → no "●" bullet line; the running node is the sole line.
 		lines := strings.Split(got, "\n")
-		if len(lines) != 2 {
-			t.Fatalf("live running card: got %d lines %q, want 2 (bullet + one-line card)", len(lines), lines)
+		if len(lines) != 1 {
+			t.Fatalf("live running node: got %d lines %q, want 1 (header-only node, no bullet)", len(lines), lines)
 		}
-		card := lines[1]
-		for _, w := range []string{"Fetch", "GET weather.com"} {
+		card := lines[0]
+		for _, w := range []string{"◍", "Fetch", "GET weather.com"} {
 			if !strings.Contains(card, w) {
-				t.Errorf("live running card = %q, want to contain %q", card, w)
+				t.Errorf("live running node = %q, want to contain %q", card, w)
 			}
 		}
 		if strings.Contains(got, noOutput) {
-			t.Errorf("live running card must NOT show the %q body placeholder; got %q", noOutput, got)
+			t.Errorf("live running node must NOT show the %q body placeholder; got %q", noOutput, got)
 		}
 	})
 
@@ -1285,30 +1376,26 @@ func TestRenderSubagentCard_NestedRail(t *testing.T) {
 	})
 }
 
-// TestRenderLiveAssistantWorkingWord covers the LIVE empty-text tool step (design §3
-// rule 4): a card-only live segment renders a working-word from workingWords beside the
-// blinking dot — a live "doing work" affordance — rather than a bare bullet. The
-// committed form (TestRenderAssistantDoneHeadline) is the static "Done"; this is the
-// provisional, pre-StepDone surface.
-func TestRenderLiveAssistantWorkingWord(t *testing.T) {
+// TestRenderLiveAssistantNoWorkingWord pins the Task 8 removal of the live working-word
+// umbrella: a card-only (empty-text) live step now shows its tool nodes DIRECTLY with no
+// rotating "Working"/"Whirring" headline, matching the committed node-presence rule (no
+// text → no "●" bullet, the running node's pulsing "◍" stands on its own).
+func TestRenderLiveAssistantNoWorkingWord(t *testing.T) {
 	t.Parallel()
 
 	calls := []ToolCallView{{ToolName: "Bash", Status: ToolRunning}}
 	for _, frame := range []uint{0, 1, 5} {
-		got := stripANSI(renderLiveAssistant("", "", calls, nil, false, 80, animState{frame: frame}))
-		headline := got
-		if i := strings.IndexByte(got, '\n'); i >= 0 {
-			headline = got[:i] // the headline is the first line; cards follow below
-		}
-		found := false
+		got := stripANSI(renderLiveAssistant("", "", calls, nil, true, 80, animState{frame: frame}))
 		for _, w := range workingWords {
-			if strings.Contains(headline, w) {
-				found = true
-				break
+			if strings.Contains(got, w) {
+				t.Errorf("frame %d: live step %q must not show a working-word (%q)", frame, got, w)
 			}
 		}
-		if !found {
-			t.Errorf("frame %d: live headline = %q, want one of the working words %v", frame, headline, workingWords)
+		if strings.Contains(got, "●") || strings.Contains(got, "◦") {
+			t.Errorf("frame %d: live tools-only step %q must not show a ●/◦ bullet umbrella", frame, got)
+		}
+		if !strings.Contains(got, "◍") {
+			t.Errorf("frame %d: live step %q missing the pulsing running node ◍", frame, got)
 		}
 	}
 }

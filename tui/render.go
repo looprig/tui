@@ -195,7 +195,16 @@ func toolNodeStatus(s ToolStatus) styles.NodeStatus {
 // nests the node under a parent spine — Task 6 reuses this at depth 1 for subagent
 // children.
 func renderToolNode(c ToolCallView, depth int, expandTools bool, width int, liveRunning bool) []string {
-	header := railNodeStyled(styles.ToolNode(toolNodeStatus(c.Status)), toolNodeHeaderText(c), styles.ToolCallStyle, depth, width)
+	return renderToolNodeGlyph(c, depth, expandTools, width, liveRunning, styles.ToolNode(toolNodeStatus(c.Status)))
+}
+
+// renderToolNodeGlyph renders a tool call as a rail node using an explicit pre-styled node
+// glyph — the seam that lets the LIVE path animate a running node's pulse (liveRunningNode)
+// while the committed path uses the static status glyph (styles.ToolNode). Behaviour is
+// otherwise identical to renderToolNode: a still-RUNNING card on the LIVE path (liveRunning)
+// renders header-only; every resolved card and the committed path render the full body.
+func renderToolNodeGlyph(c ToolCallView, depth int, expandTools bool, width int, liveRunning bool, glyph string) []string {
+	header := railNodeStyled(glyph, toolNodeHeaderText(c), styles.ToolCallStyle, depth, width)
 	if liveRunning && c.Status == ToolRunning {
 		return header // compact running indicator; body appears once, on commit
 	}
@@ -459,19 +468,20 @@ func nonSubagentCalls(calls []ToolCallView) []ToolCallView {
 	return out
 }
 
-// renderLiveAssistant renders the in-progress (live) assistant segment with the
-// animation state threaded in: the leading bullet blinks (liveDot) and a still-running
-// tool card's glyph cycles through the spinner (spinnerGlyph), while resolved cards
-// keep their static ✓/✗. It mirrors renderAssistant's ordering (thinking → narration
-// → cards) but is the LIVE path ONLY — the committed renderAssistant stays static and
-// is never given an anim. Empty parts are omitted.
+// renderLiveAssistant renders the in-progress (live) assistant segment on the unified rail,
+// with the animation state threaded in: the leading AI-message bullet blinks (liveDot) and a
+// still-running tool node pulses (liveRunningNode's "◍"), while resolved nodes keep their
+// static "○"/tinted glyph. It mirrors renderAssistant's ordering (thinking → narration →
+// tool nodes) but is the LIVE path ONLY — the committed renderAssistant stays static and is
+// never given an anim. Empty parts are omitted, and the live tail is always expanded.
 //
-// calls is the NON-Subagent live tool list (the caller filters the raw Subagent call out
-// via nonSubagentCalls); subagentCards are the in-flight nested Subagent cards
-// (pendingSubagentCards), each rendered as its own "●"-level card (renderSubagentCard)
-// below the ordinary calls, separated by a blank line. The working-word headline shows
-// ONLY when there is no narration AND at least one ORDINARY call (len(calls) > 0) — a step
-// that only spawned subagents does NOT show "◦ Whirring", its activity is the nested card.
+// The AI-message "●" bullet renders under the node-presence rule — ONLY when there is
+// narration text; a tools-only live step shows its tool nodes directly with no working-word
+// umbrella. calls is the NON-Subagent live tool list (the caller filters the raw Subagent
+// call out via nonSubagentCalls), capped to the most recent liveCallCap with a rail
+// "… N earlier calls" detail row for the remainder; subagentCards are the in-flight nested
+// Subagent cards (pendingSubagentCards), each rendered as its own "●"-level card
+// (renderSubagentCard) below the ordinary calls, separated by a blank line.
 func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallView, expand bool, width int, a animState) string {
 	var b strings.Builder
 
@@ -482,17 +492,13 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 		b.WriteString(t)
 	}
 
-	body := renderMDDot(text, width, liveDot(a.blink))
-	if body == "" && len(calls) > 0 {
-		// Live empty-text tool step: a rotating working-word beside the blinking dot —
-		// the provisional, pre-StepDone counterpart of the committed promoted-tool /
-		// "Multiple actions" headline. The word may rotate while the step runs. It is
-		// keyed on the NON-Subagent calls, so a subagent-only step shows no working-word.
-		body = strings.TrimRight(liveDot(a.blink), " ") + " " + styles.HeadlineStyle.Render(workingWord(a.frame))
-	}
-	if body != "" {
+	// AI-message node: the blinking "●" bullet, rendered ONLY when there is narration text
+	// (node presence — no working-word umbrella; a tools-only live step shows its tool
+	// nodes directly, not a bullet).
+	if text != "" {
+		body := renderMDDot(text, width, liveDot(a.blink))
 		if b.Len() > 0 {
-			b.WriteString("\n") // no blank line: the message follows its thinking block directly
+			b.WriteString("\n") // the message follows its thinking block directly, no blank line
 		}
 		b.WriteString(body)
 	}
@@ -501,19 +507,27 @@ func renderLiveAssistant(thinking, text string, calls, subagentCards []ToolCallV
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		// Cap the live tail to the most recent liveCallCap tool cards (keeping the running
-		// one), prefixed with a "… N earlier calls" marker, so a many-tool step can't grow
-		// the managed region to fill the screen and drop the assistant bullet. The full set
-		// commits to scrollback at StepDone.
+		// Cap the live tail to the most recent liveCallCap tool nodes (keeping the running
+		// one), prefixed with a "… N earlier calls" rail detail row, so a many-tool step
+		// can't grow the managed region to fill the screen and drop the assistant bullet.
+		// The full set commits to scrollback at StepDone.
 		shown := calls
 		if hidden := len(calls) - liveCallCap; hidden > 0 {
 			shown = calls[hidden:]
-			b.WriteString(cardIndent + styles.ToolCallStyle.Render(cardConnector+"… "+strconv.Itoa(hidden)+" earlier calls") + "\n")
+			b.WriteString(strings.Join(railDetail("… "+strconv.Itoa(hidden)+" earlier calls", 0, width), "\n") + "\n")
 		}
-		// liveRunning=true: a still-running card renders header-only in the live tail
-		// so the live→committed handoff is a one-line→full-card continuation, not a
-		// multi-line live shrink (see renderToolCard).
-		b.WriteString(renderToolCallsGlyph(shown, expand, width, liveToolGlyph(a.frame), true))
+		// Each live call renders as a rail node; a still-RUNNING call uses the pulsing "◍"
+		// glyph (liveRunningNode) and is header-only (liveRunning=true) so the live→committed
+		// handoff is a one-line→full-card continuation, not a multi-line live shrink.
+		nodes := make([]string, 0, len(shown))
+		for i := range shown {
+			glyph := styles.ToolNode(toolNodeStatus(shown[i].Status))
+			if shown[i].Status == ToolRunning {
+				glyph = liveRunningNode(a.blink)
+			}
+			nodes = append(nodes, strings.Join(renderToolNodeGlyph(shown[i], 0, expand, width, true, glyph), "\n"))
+		}
+		b.WriteString(strings.Join(nodes, "\n"))
 	}
 
 	// Each pending subagent card is its OWN "●"-level card (like the committed form),

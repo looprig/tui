@@ -55,6 +55,18 @@ func workingWord(frame uint) string {
 	return workingWords[frame%uint(len(workingWords))]
 }
 
+// liveRunningNode is the pulsing "◍" node glyph for a still-running tool call in the live
+// tail: it alternates the lit (DotColor) and white phases on the blink tick, matching the
+// status line's working pulse. 2 columns wide like the other node glyphs so rail alignment
+// holds. The pulse is a colour change only, so an ANSI-stripped assertion sees a stable "◍".
+func liveRunningNode(blink bool) string {
+	style := styles.StatusWorkingStyle
+	if blink {
+		style = styles.StatusWorkingAltStyle
+	}
+	return style.Render("◍") + " "
+}
+
 // liveDotLit / liveDotDim are the two glyphs the live (streaming) assistant bullet
 // alternates between on each blink tick: the normal lit colored "● " (styles.LitDot,
 // the same DotColor-foregrounded bullet the committed path renders) and a dimmed hollow

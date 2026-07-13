@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/core/content"
 )
@@ -129,6 +131,40 @@ func TestWorkingWord(t *testing.T) {
 	}
 }
 
+// TestLiveRunningNode covers the pulsing "◍" running-node glyph for the live tail: both
+// blink phases carry the "◍" glyph and are 2 columns wide (like the other node glyphs, so
+// rail alignment holds), and the two phases differ at the raw-string level — the pulse is
+// a color change (lit DotColor ↔ white), which is ANSI-only and invisible to stripANSI.
+func TestLiveRunningNode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		blink bool
+	}{
+		{name: "blink off (lit phase)", blink: false},
+		{name: "blink on (alt phase)", blink: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := liveRunningNode(tt.blink)
+			if !strings.Contains(got, "◍") {
+				t.Errorf("liveRunningNode(%v) = %q, want to contain the running glyph %q", tt.blink, got, "◍")
+			}
+			if w := lipgloss.Width(got); w != 2 {
+				t.Errorf("liveRunningNode(%v) width = %d columns, want 2 (rail alignment)", tt.blink, w)
+			}
+		})
+	}
+
+	if liveRunningNode(true) == liveRunningNode(false) {
+		t.Errorf("liveRunningNode phases identical (%q); they must differ to pulse", liveRunningNode(true))
+	}
+}
+
 // TestLiveDot covers the blink phase of the live assistant bullet: lit when blink is
 // off, dimmed when on, and both 2 columns wide so narration alignment is unchanged.
 func TestLiveDot(t *testing.T) {
@@ -197,11 +233,11 @@ func TestRenderLiveAssistantBlink(t *testing.T) {
 	}
 }
 
-// TestRenderLiveAssistantSpinner covers the running tool card's rail node: a running LIVE
-// card renders header-only with the pulsing "◍" node glyph, while a RESOLVED card renders
-// the hollow "○" node. (Unified-rail Task 3: the card is now a rail node whose glyph
-// conveys status; frame-driven animation of the running node is restored in a later task,
-// so the node glyph is stable across frames and never carries a braille spinner cell.)
+// TestRenderLiveAssistantSpinner covers the running tool call's rail node: a running LIVE
+// call renders header-only with the pulsing "◍" node glyph, while a RESOLVED call renders
+// the hollow "○" node. (Unified-rail Task 8: the running node's pulse is a blink-driven
+// colour change (liveRunningNode), so the node glyph is stable across FRAMES and never
+// carries a braille spinner cell — the old spinnerGlyph is no longer on the live path.)
 func TestRenderLiveAssistantSpinner(t *testing.T) {
 	t.Parallel()
 
@@ -234,14 +270,21 @@ func TestRenderLiveAssistantSpinner(t *testing.T) {
 		}
 	})
 
-	t.Run("card-only segment blinks bare bullet", func(t *testing.T) {
+	t.Run("card-only segment pulses the running node", func(t *testing.T) {
 		t.Parallel()
 
+		// A tools-only step has no "●" bullet (node presence); the pulse is the running
+		// node's colour alternating (liveRunningNode), which is ANSI-only — so the RAW
+		// (unstripped) render must differ across blink phases while the stripped text is
+		// stable (still the "◍" node).
 		calls := []ToolCallView{{ToolName: "Bash", Status: ToolRunning}}
-		lit := stripANSI(renderLiveAssistant("", "", calls, nil, false, 80, animState{blink: false}))
-		dim := stripANSI(renderLiveAssistant("", "", calls, nil, false, 80, animState{blink: true, frame: 1}))
+		lit := renderLiveAssistant("", "", calls, nil, true, 80, animState{blink: false})
+		dim := renderLiveAssistant("", "", calls, nil, true, 80, animState{blink: true, frame: 1})
 		if lit == dim {
-			t.Errorf("card-only live segment identical across blink phases (%q); the bare bullet must blink", lit)
+			t.Errorf("card-only live segment identical across blink phases (%q); the running node must pulse", lit)
+		}
+		if a, b := stripANSI(lit), stripANSI(dim); a != b {
+			t.Errorf("card-only live text changed across blink phases (%q vs %q); the pulse must be colour-only", a, b)
 		}
 	})
 }
