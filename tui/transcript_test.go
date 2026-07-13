@@ -1769,7 +1769,7 @@ func TestGateDecisionFlow(t *testing.T) {
 				t.Fatalf("committed after gate = %d, want 0", len(m.testCommitted()))
 			}
 			// Screen records the keypress decision, then the loop runs the tool.
-			m = m.ResolveGate(callID(1), tt.decision)
+			m = m.ResolveGate(uuid.UUID{}, callID(1), tt.decision)
 			m = m.ApplyEvent(toolStarted(callID(1), tt.toolName, tt.summary))
 			m = m.ApplyEvent(toolCompleted(callID(1), tt.decision == gateDenied, "out"))
 			m = m.ApplyEvent(stepDone(aiMessage("let me run it", "", toolUse("tu-1", tt.toolName, `{}`)), toolResult("tu-1", "out")))
@@ -2726,7 +2726,7 @@ func TestUniformProjectionsIsolateLiveToolsAndGates(t *testing.T) {
 	m = m.ApplyEvent(loopToolStarted(initial, initialCall, "Read", "initial read"))
 	m = m.ApplyEvent(loopToolStarted(delegate, delegateCall, "Bash", "delegate command"))
 	m = m.ApplyEvent(event.PermissionRequested{Header: hdr(delegate), ToolExecutionID: delegateCall, Request: tool.BashRequest{Command: "pwd"}})
-	m = m.ResolveGate(delegateCall, gateApproved)
+	m = m.ResolveGate(delegate, delegateCall, gateApproved)
 
 	_, initialLive := m.projectionFor(initial)
 	_, delegateLive := m.projectionFor(delegate)

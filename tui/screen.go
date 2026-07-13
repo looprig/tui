@@ -12,6 +12,7 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/identity"
 
 	"github.com/looprig/cli/tui/styles"
 )
@@ -494,17 +495,153 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 		m.rerender()
 		return nil
 	}
-	if msg.transcript.committedLen() == 0 {
+	if msg.eventCount == 0 {
 		return nil
 	}
+	hadStartup := m.startupCommitted
+	m.transcript = mergeRestoredTranscript(m.transcript, msg.transcript)
 	m.startupPending = false
-	m.startupCommitted = false
-	m.transcript = msg.transcript
+	m.startupCommitted = hadStartup
 	// The restore fold built a FRESH (default 1-line, background-free) interaction; re-apply
 	// the modern composer treatment so a cold-restored session keeps the 2-line gray panel.
 	m.interaction = styleComposer(msg.interaction)
 	m.rerender()
 	return nil
+}
+
+// mergeRestoredTranscript installs restored reducer state while preserving startup-global
+// rows already committed by the shell. Restored IDs are rebased above the current allocator,
+// so lifecycle-only and ordinary restores cannot collide with banner/error row IDs.
+func mergeRestoredTranscript(current, restored transcriptModel) transcriptModel {
+	offset := current.nextID
+	if offset != 0 {
+		restored.global = rebaseEntries(restored.global, offset)
+		if restored.projections != nil {
+			next := make(map[uuid.UUID]*loopProjection, len(restored.projections))
+			for id, p := range restored.projections {
+				if p == nil {
+					next[id] = nil
+					continue
+				}
+				cp := *p
+				cp.committed = rebaseEntries(cp.committed, offset)
+				next[id] = &cp
+			}
+			restored.projections = next
+		}
+		restored.nextID += offset
+	}
+	restored.global = append(append([]entry(nil), current.global...), restored.global...)
+	if restored.projections == nil {
+		restored.projections = make(map[uuid.UUID]*loopProjection)
+	}
+	liveOffset := restored.nextID
+	hasCurrentCommitted := false
+	for id, currentProjection := range current.projections {
+		if currentProjection == nil {
+			continue
+		}
+		if historical := restored.projections[id]; historical != nil {
+			cp := *historical
+			currentEntries := rebaseEntries(currentProjection.committed, liveOffset)
+			hasCurrentCommitted = hasCurrentCommitted || len(currentEntries) != 0
+			cp.committed = append(append([]entry(nil), historical.committed...), currentEntries...)
+			cp.live = currentProjection.live
+			restored.projections[id] = &cp
+			continue
+		}
+		cp := *currentProjection
+		cp.committed = rebaseEntries(currentProjection.committed, liveOffset)
+		hasCurrentCommitted = hasCurrentCommitted || len(cp.committed) != 0
+		restored.projections[id] = &cp
+	}
+	if hasCurrentCommitted {
+		restored.nextID = liveOffset + current.nextID
+	}
+	restored.loopAgents = mergeLoopAgents(restored.loopAgents, current.loopAgents)
+	restored.loopLive = mergeLoopLive(restored.loopLive, current.loopLive)
+	restored.loopOrder = mergeLoopOrder(restored.loopOrder, current.loopOrder)
+	if current.queued != nil {
+		restored.queued = append([]queuedInput(nil), current.queued...)
+	}
+	for child, parent := range current.loopParent {
+		if restored.loopParent == nil {
+			restored.loopParent = make(map[uuid.UUID]spawnKey)
+		}
+		restored.loopParent[child] = parent
+	}
+	for key, acc := range current.subagentAccum {
+		if restored.subagentAccum == nil {
+			restored.subagentAccum = make(map[spawnKey]*subagentAccumulator)
+		}
+		restored.subagentAccum[key] = acc
+	}
+	restored.accumOrder = mergeAccumOrder(restored.accumOrder, current.accumOrder)
+	restored.fold = nil
+	return restored
+}
+
+func mergeLoopAgents(historical, current map[uuid.UUID]identity.AgentName) map[uuid.UUID]identity.AgentName {
+	next := make(map[uuid.UUID]identity.AgentName, len(historical)+len(current))
+	for id, name := range historical {
+		next[id] = name
+	}
+	for id, name := range current {
+		next[id] = name
+	}
+	return next
+}
+
+func mergeLoopLive(historical, current map[uuid.UUID]bool) map[uuid.UUID]bool {
+	next := make(map[uuid.UUID]bool, len(historical)+len(current))
+	for id, live := range historical {
+		next[id] = live
+	}
+	for id, live := range current {
+		next[id] = live
+	}
+	return next
+}
+
+func mergeLoopOrder(historical, current []uuid.UUID) []uuid.UUID {
+	next := append([]uuid.UUID(nil), historical...)
+	seen := make(map[uuid.UUID]bool, len(next))
+	for _, id := range next {
+		seen[id] = true
+	}
+	for _, id := range current {
+		if !seen[id] {
+			next = append(next, id)
+			seen[id] = true
+		}
+	}
+	return next
+}
+
+func mergeAccumOrder(historical, current []spawnKey) []spawnKey {
+	next := append([]spawnKey(nil), historical...)
+	seen := make(map[spawnKey]bool, len(next))
+	for _, key := range next {
+		seen[key] = true
+	}
+	for _, key := range current {
+		if !seen[key] {
+			next = append(next, key)
+			seen[key] = true
+		}
+	}
+	return next
+}
+
+func rebaseEntries(entries []entry, offset displayID) []entry {
+	if entries == nil {
+		return nil
+	}
+	next := append([]entry(nil), entries...)
+	for i := range next {
+		next[i].ID += offset
+	}
+	return next
 }
 
 // handleSubscribed installs the session-lifetime subscription via the core and starts the

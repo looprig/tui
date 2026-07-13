@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -328,6 +329,57 @@ func TestSessionCoreMapAction(t *testing.T) {
 		cmd, present := c.mapAction(uiAction{Kind: uiNoop})
 		if present || cmd != nil {
 			t.Errorf("uiNoop = (cmd %v, present %v), want (nil, false)", cmd != nil, present)
+		}
+	})
+
+	t.Run("gate decisions are scoped by loop and call id", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{}
+		c := newTestCore(agent)
+		loopA, loopB, sharedCall := callID(20), callID(21), callID(22)
+		c.transcript = c.transcript.ApplyEvent(event.PermissionRequested{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopA}}, ToolExecutionID: sharedCall,
+		})
+		c.transcript = c.transcript.ApplyEvent(event.PermissionRequested{
+			Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopB}}, ToolExecutionID: sharedCall,
+		})
+
+		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: loopB, ToolExecutionID: sharedCall, Scope: tool.ScopeOnce})
+		if present {
+			t.Fatal("present = true, want false")
+		}
+		if got := c.transcript.projections[loopA].live.gateDecisions[sharedCall]; got != gatePending {
+			t.Errorf("loop A decision = %v, want pending", got)
+		}
+		if got := c.transcript.projections[loopB].live.gateDecisions[sharedCall]; got != gateApproved {
+			t.Errorf("loop B decision = %v, want approved", got)
+		}
+		cmd()
+		if !agent.approveCalled || agent.lastLoopID != loopB || agent.lastCallID != sharedCall {
+			t.Errorf("Approve dispatch = (called %v, loop %v, call %v), want loop B/call", agent.approveCalled, agent.lastLoopID, agent.lastCallID)
+		}
+
+		c.transcript.projections[loopB].live.gateDecisions[sharedCall] = gatePending
+		cmd, present = c.mapAction(uiAction{Kind: uiDeny, LoopID: loopB, ToolExecutionID: sharedCall})
+		if present {
+			t.Fatal("deny present = true, want false")
+		}
+		if got := c.transcript.projections[loopA].live.gateDecisions[sharedCall]; got != gatePending {
+			t.Errorf("loop A decision after deny = %v, want pending", got)
+		}
+		if got := c.transcript.projections[loopB].live.gateDecisions[sharedCall]; got != gateDenied {
+			t.Errorf("loop B decision = %v, want denied", got)
+		}
+		cmd()
+		if !agent.denyCalled || agent.lastLoopID != loopB || agent.lastCallID != sharedCall {
+			t.Errorf("Deny dispatch = (called %v, loop %v, call %v), want loop B/call", agent.denyCalled, agent.lastLoopID, agent.lastCallID)
+		}
+
+		before := c.transcript
+		c.transcript = c.transcript.ResolveGate(callID(99), sharedCall, gateDenied)
+		c.transcript = c.transcript.ResolveGate(loopB, callID(98), gateDenied)
+		if !reflect.DeepEqual(before, c.transcript) {
+			t.Fatal("unknown loop/call mutated transcript")
 		}
 	})
 }

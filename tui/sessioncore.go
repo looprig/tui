@@ -379,10 +379,10 @@ func (c *sessionCore) mapAction(a uiAction) (tea.Cmd, bool) {
 		// Record the decision so the call's committed card reads "Approved …". The loop
 		// emits no decision event, so the keypress is the only source (the gate was
 		// remembered by the transcript on PermissionRequested).
-		c.transcript = c.transcript.ResolveGate(a.ToolExecutionID, gateApproved)
+		c.transcript = c.transcript.ResolveGate(a.LoopID, a.ToolExecutionID, gateApproved)
 		return approveCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID, a.Scope), false
 	case uiDeny:
-		c.transcript = c.transcript.ResolveGate(a.ToolExecutionID, gateDenied)
+		c.transcript = c.transcript.ResolveGate(a.LoopID, a.ToolExecutionID, gateDenied)
 		return denyCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID), false
 	case uiAnswer:
 		return provideAnswerCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID, a.Text), false

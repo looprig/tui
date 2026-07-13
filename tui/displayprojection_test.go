@@ -101,6 +101,24 @@ func TestDisplayProjectionCommittedLenSurvivesSessionEventTail(t *testing.T) {
 	}
 }
 
+func TestDisplayProjectionTracksLifecycleOnlyHistoryPresence(t *testing.T) {
+	loopID := callID(0x44)
+	events := []event.Event{
+		event.LoopStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"}, DisplayName: "Operator Primer"},
+		event.LoopIdle{Header: hdr(loopID)},
+	}
+	projection := FoldDisplay(events)
+	if got := projection.EventCount(); got != 2 {
+		t.Fatalf("EventCount() = %d, want 2", got)
+	}
+	if got := projection.CommittedLen(); got != 0 {
+		t.Fatalf("CommittedLen() = %d, want 0", got)
+	}
+	if got := FoldDisplay(nil).EventCount(); got != 0 {
+		t.Fatalf("empty EventCount() = %d, want 0", got)
+	}
+}
+
 // equalTranscriptModel is a same-package test bridge: it deep-compares a
 // DisplayProjection's (unexported) transcript model against an internally-built
 // transcriptModel, so TestFoldDisplay can assert the exported fold equals the

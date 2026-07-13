@@ -922,21 +922,22 @@ func (m *transcriptModel) permissionRequested(ev event.PermissionRequested) {
 	}
 }
 
-// ResolveGate records the user's decision for a pending permission gate (callID),
+// ResolveGate records the user's decision for a pending permission gate (loopID, callID),
 // the source the loop never emits as an event — Screen calls it from the approve/deny
 // keypress. An unknown callID (no matching pending gate) is a no-op. The map is cloned
 // on write (value-copy contract). It returns the next model.
-func (m transcriptModel) ResolveGate(callID uuid.UUID, decision gateDecision) transcriptModel {
-	for loopID, projection := range m.projections {
-		if _, ok := projection.live.gateDecisions[callID]; !ok {
-			continue
-		}
-		p := m.ensureProjection(loopID)
-		g := cloneGates(p.live.gateDecisions)
-		g[callID] = decision
-		p.live.gateDecisions = g
+func (m transcriptModel) ResolveGate(loopID, callID uuid.UUID, decision gateDecision) transcriptModel {
+	projection, ok := m.projections[loopID]
+	if !ok || projection == nil {
 		return m
 	}
+	if _, ok := projection.live.gateDecisions[callID]; !ok {
+		return m
+	}
+	p := m.ensureProjection(loopID)
+	g := cloneGates(p.live.gateDecisions)
+	g[callID] = decision
+	p.live.gateDecisions = g
 	return m
 }
 

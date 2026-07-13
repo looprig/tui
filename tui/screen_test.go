@@ -1177,6 +1177,9 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("empty-backlog restoredMsg err = %v, want nil", msg.err)
 	}
+	if msg.eventCount != 0 {
+		t.Fatalf("empty-backlog eventCount = %d, want 0", msg.eventCount)
+	}
 	if len(msg.transcript.testCommitted()) != 0 {
 		t.Fatalf("empty-backlog fold committed = %d, want 0", len(msg.transcript.testCommitted()))
 	}
@@ -1191,6 +1194,80 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	}
 	if got := committedText(m.transcript.testCommitted()[0]); got != bannerText {
 		t.Errorf("banner entry text = %q after empty restore, want %q unchanged", got, bannerText)
+	}
+}
+
+func TestModernRestoreLifecycleOnlyBacklogInstallsMetadata(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xAC)
+	backlog := []event.Event{
+		event.LoopStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"}, DisplayName: "Operator Primer"},
+		event.LoopIdle{Header: hdr(loopID)},
+	}
+	agent := &fakeAgent{activeLoopID: loopID, backlog: backlog}
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "swe", Description: "test agent"})
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = updateScreen(t, m, systemReadyMsg{})
+	banner := m.transcript.global[0]
+
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+	if msg.eventCount != len(backlog) {
+		t.Fatalf("eventCount = %d, want %d", msg.eventCount, len(backlog))
+	}
+	m = feedRestored(t, m, msg)
+	loops := m.transcript.loops()
+	if len(loops) != 1 || loops[0].ID != loopID || loops[0].Name != "Operator Primer" || loops[0].Live {
+		t.Fatalf("restored loops = %+v, want idle Operator Primer", loops)
+	}
+	if len(m.transcript.global) != 1 || m.transcript.global[0].ID != banner.ID {
+		t.Fatalf("startup global rows = %+v, want preserved banner id %d", m.transcript.global, banner.ID)
+	}
+	if entry, ok := barEntryFor(m.bar(), loopID); !ok || entry.name != "Operator Primer" {
+		t.Fatalf("restored bar entry = %+v, present %v", entry, ok)
+	}
+
+	m = feed(t, m, event.TurnStarted{Header: hdr(loopID), Message: userMsg("continue")})
+	if got := m.transcript.loops()[0].Name; got != "Operator Primer" {
+		t.Fatalf("display name after live TurnStarted = %q, want Operator Primer", got)
+	}
+	committed, _ := m.transcript.projectionFor(loopID)
+	seen := map[displayID]bool{}
+	for _, entry := range committed {
+		if seen[entry.ID] {
+			t.Fatalf("duplicate displayID %d after lifecycle restore", entry.ID)
+		}
+		seen[entry.ID] = true
+	}
+}
+
+func TestModernRestoreDoesNotOverwriteLiveEventsDuringReplay(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xAD)
+	backlog := []event.Event{
+		event.LoopStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"}, DisplayName: "Operator Primer"},
+		event.LoopIdle{Header: hdr(loopID)},
+	}
+	agent := &fakeAgent{activeLoopID: loopID, backlog: backlog}
+	m := newScreenSized(t, agent, 80, 24)
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+	// These live events arrive after subscription but before the replay result is installed.
+	m = feed(t, m, event.TurnStarted{Header: hdr(loopID), Message: userMsg("live input")})
+	m = feed(t, m, event.TokenDelta{Header: hdr(loopID), Chunk: &content.TextChunk{Text: "streaming now"}})
+	m = feedRestored(t, m, msg)
+
+	loops := m.transcript.loops()
+	if len(loops) != 1 || loops[0].Name != "Operator Primer" || !loops[0].Live {
+		t.Fatalf("merged loops = %+v, want live Operator Primer", loops)
+	}
+	committed, live := m.transcript.projectionFor(loopID)
+	if live.Text != "streaming now" {
+		t.Fatalf("live text = %q, want streaming now", live.Text)
+	}
+	if len(committed) == 0 || committedText(committed[len(committed)-1]) != "live input" {
+		t.Fatalf("committed after replay merge = %+v, want live input retained", committed)
 	}
 }
 

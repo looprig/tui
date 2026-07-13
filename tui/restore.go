@@ -21,6 +21,7 @@ import (
 type DisplayProjection struct {
 	transcript  transcriptModel
 	interaction interactionModel
+	eventCount  int
 }
 
 // FoldDisplay folds events through the SAME pure reducers the live path and the
@@ -39,7 +40,7 @@ func FoldDisplay(events []event.Event) DisplayProjection {
 		tr = tr.ApplyEvent(ev)
 		in = in.ApplyEvent(ev)
 	}
-	return DisplayProjection{transcript: tr, interaction: in}
+	return DisplayProjection{transcript: tr, interaction: in, eventCount: len(events)}
 }
 
 // EqualTranscript reports whether p and other have the byte-for-byte identical committed
@@ -123,6 +124,10 @@ func zeroLiveThinkTiming(s liveSeg) liveSeg {
 // and every loop projection.
 func (p DisplayProjection) CommittedLen() int { return p.transcript.committedLen() }
 
+// EventCount reports how many backlog events were folded. Unlike CommittedLen it remains
+// non-zero for lifecycle-only history that rebuilds loop metadata without transcript rows.
+func (p DisplayProjection) EventCount() int { return p.eventCount }
+
 // PendingPrompts is the number of pending prompts (permission gates + AskUser requests)
 // the projection's interaction surface holds — the gate dimension a transcript deep-
 // equal does not cover.
@@ -157,6 +162,7 @@ func (e *RestoreBacklogError) Unwrap() error { return e.Cause }
 type restoredMsg struct {
 	transcript  transcriptModel
 	interaction interactionModel
+	eventCount  int
 	err         error
 }
 
@@ -176,7 +182,7 @@ func restoreBacklogCmd(ctx context.Context, agent Agent) tea.Cmd {
 			return restoredMsg{err: &RestoreBacklogError{Cause: err}}
 		}
 		proj := FoldDisplay(backlog)
-		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction}
+		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, eventCount: proj.eventCount}
 	}
 }
 
