@@ -205,8 +205,12 @@ func closeAgentForQuit(handoff *agentCloseHandoff) tea.Cmd {
 	}
 }
 
-func closeStaleReopen(handoff *agentCloseHandoff) tea.Cmd {
+func closeStaleReopen(handoff *agentCloseHandoff, reopenErr error) tea.Cmd {
 	return func() tea.Msg {
-		return staleReopenCloseMsg{handoff: handoff, err: handoff.close()}
+		return staleReopenCloseMsg{
+			handoff:   handoff,
+			reopenErr: reopenErr,
+			closeErr:  handoff.close(),
+		}
 	}
 }

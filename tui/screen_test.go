@@ -1899,6 +1899,7 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 		stepDoneFrom(oldLoop, aiMessage("", "old history")),
 	}}
 	fresh := &fakeAgent{activeLoopID: callID(0xE2)}
+	staleOpenErr := errors.New("stale reopen failed")
 	staleCloseErr := errors.New("close stale replacement")
 	staleFresh := &fakeAgent{activeLoopID: callID(0xE3), closeErr: staleCloseErr}
 	openCalls := 0
@@ -1925,7 +1926,7 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 	// Even an impossible handoff-backed early result cannot swap the session ahead of old
 	// replay. Its replacement is closed through an exactly-once cleanup handoff.
 	handoff := newReopenHandoff()
-	stale := reopenResultMsg{agent: staleFresh, handoff: handoff}
+	stale := reopenResultMsg{agent: staleFresh, err: staleOpenErr, handoff: handoff}
 	handoff.complete(stale)
 	m, cmd = updateScreen(t, m, stale)
 	if cmd == nil || m.Agent() != old || !m.restoring {
@@ -1939,6 +1940,9 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 	if !containsPlain(m.viewport.lines, staleCloseErr.Error()) {
 		t.Fatalf("viewport missing stale cleanup error: %q", plainAll(m.viewport.lines))
 	}
+	if !containsPlain(m.viewport.lines, staleOpenErr.Error()) {
+		t.Fatalf("viewport missing original stale reopen error: %q", plainAll(m.viewport.lines))
+	}
 	if err := handoff.finalize(); err != nil {
 		t.Fatalf("claimed stale handoff finalize = %v", err)
 	}
@@ -1949,7 +1953,8 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 		t.Fatalf("late finalizer double-closed stale replacement: %d", staleFresh.closeCalls)
 	}
 	nilHandoff := newReopenHandoff()
-	nilStale := reopenResultMsg{handoff: nilHandoff}
+	nilStaleErr := errors.New("nil stale reopen failed")
+	nilStale := reopenResultMsg{err: nilStaleErr, handoff: nilHandoff}
 	nilHandoff.complete(nilStale)
 	m, cmd = updateScreen(t, m, nilStale)
 	if cmd != nil || m.Agent() != old || !m.restoring {
@@ -1957,6 +1962,12 @@ func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 	}
 	if err := nilHandoff.finalize(); err != nil {
 		t.Fatalf("nil stale handoff finalize = %v", err)
+	}
+	if !containsPlain(m.viewport.lines, nilStaleErr.Error()) {
+		t.Fatalf("viewport missing nil-agent stale error: %q", plainAll(m.viewport.lines))
+	}
+	if err := m.TerminalError(); err != nil {
+		t.Fatalf("stale diagnostics became terminal: %v", err)
 	}
 	m = feedRestored(t, m, restored)
 	if m.Agent() != old || m.restoring || !containsPlain(m.viewport.lines, "old history") {

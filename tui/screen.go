@@ -696,11 +696,12 @@ func (m *Screen) rejectStaleReopenResult(msg reopenResultMsg) tea.Cmd {
 		}
 	}
 	if msg.agent == nil {
+		m.commitStaleReopenDiagnostic(msg.err, nil)
 		return nil
 	}
 	handoff := newAgentCloseHandoff(msg.agent)
 	m.staleClosings = append(m.staleClosings, handoff)
-	return closeStaleReopen(handoff)
+	return closeStaleReopen(handoff, msg.err)
 }
 
 func (m *Screen) handleStaleReopenClose(msg staleReopenCloseMsg) tea.Cmd {
@@ -710,11 +711,25 @@ func (m *Screen) handleStaleReopenClose(msg staleReopenCloseMsg) tea.Cmd {
 			break
 		}
 	}
-	if msg.err != nil {
-		m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("close stale reopen replacement: %w", msg.err))
-		m.rerender()
-	}
+	m.commitStaleReopenDiagnostic(msg.reopenErr, msg.closeErr)
 	return nil
+}
+
+func (m *Screen) commitStaleReopenDiagnostic(reopenErr, closeErr error) {
+	var diagnostic error
+	if reopenErr != nil {
+		diagnostic = errors.Join(diagnostic, fmt.Errorf("reject stale reopen result: %w", reopenErr))
+	}
+	if closeErr != nil {
+		diagnostic = errors.Join(diagnostic, fmt.Errorf("close stale reopen replacement: %w", closeErr))
+	}
+	if diagnostic == nil {
+		return
+	}
+	// This is a defense-in-depth diagnostic only: the valid old restore remains
+	// authoritative, so rejecting a stale result must not become a terminal error.
+	m.transcript = m.transcript.CommitGlobalError(diagnostic)
+	m.rerender()
 }
 
 // handleCloseForQuitResult consumes the deferred replacement close before clearing ownership.

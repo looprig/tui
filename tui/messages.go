@@ -65,8 +65,9 @@ type closeForQuitResultMsg struct {
 // staleReopenCloseMsg reports bounded cleanup of a replacement rejected by the initial
 // restore barrier.
 type staleReopenCloseMsg struct {
-	handoff *agentCloseHandoff
-	err     error
+	handoff   *agentCloseHandoff
+	reopenErr error
+	closeErr  error
 }
 
 // systemReadyMsg triggers the initial system "session ready" entry at startup.
