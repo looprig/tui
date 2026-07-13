@@ -357,38 +357,34 @@ func subagentTerminalVerb(s subStatus) string {
 	}
 }
 
-// renderSubagentCard renders a committed Subagent card (design §5/§4): a "●"-level
-// header "Subagent(<agent>)  \"<task>\"" beside the lit dot, the subagent's nested tool
-// calls as ordinary "⎿" cards ONE indent level under the header (never "⎿ ⎿"), then a
-// final "⎿ <verb> · N steps — \"<summary>\"" line whose verb comes from SubStatus and
-// whose summary is the card's own (suppressed-elsewhere) Result — so the hand-back text
-// shows ONLY here, never doubled as a normal result body. A subInterrupted card omits
-// the summary; subFailed shows its error text. When Nested > 0 a trailing
-// "⎿ +M nested subagent steps" line collapses the depth-2 activity (design §6). expand
-// drives the child cards' result-preview fold.
-func renderSubagentCard(c ToolCallView, expand bool, width int) string {
-	// The header wraps to the viewport width (a long task string must NOT overrun the right
-	// edge): the first row carries the lit "● " bullet, continuation rows a barWidth-wide
-	// indent so the wrapped task aligns under the header text rather than under the bullet.
-	head := wrapHeadline(subagentHeaderText(c), width)
-	// Cap accounts for: the (possibly multi-row) header, the children's ONE joined element
-	// from renderToolCalls (1), the done line (1), and the optional nested line (1).
-	lines := make([]string, 0, len(head)+3)
-	lines = append(lines, head...)
-
-	// Children render as the existing "⎿" tool cards, one indent level under the header.
-	if body := renderToolCalls(c.Children, expand, width); body != "" {
-		lines = append(lines, body)
+// subagentNodeStatus maps a child loop's terminal status to its rail-node tint.
+func subagentNodeStatus(s subStatus) styles.NodeStatus {
+	switch s {
+	case subFailed, subInterrupted:
+		return styles.NodeFailed
+	case subRunning:
+		return styles.NodeRunning
+	default: // subDone
+		return styles.NodeOK
 	}
+}
 
-	// The done/failed/interrupted child carries the step count and (for done/failed) the
-	// summary — the ONLY place the hand-back text appears (no doubling).
-	lines = append(lines, subagentDoneLine(c, width))
-
+// renderSubagentCard renders a reconciled Subagent as a rail node opening a NESTED
+// secondary rail: an "○" header node (tinted by the child's terminal status) at depth 0,
+// its own tool calls as depth-1 nodes, an optional "+N nested subagent steps" collapsed
+// marker, then a closing "○ verb · N steps — "summary"" node at depth 1. Every nested
+// row carries the outer "│" spine, so the timeline stays unbroken without extra connector
+// rows. expand drives the child cards' result-preview fold (unchanged).
+func renderSubagentCard(c ToolCallView, expand bool, width int) string {
+	status := subagentNodeStatus(c.SubStatus)
+	lines := make([]string, 0, 2+len(c.Children)*2)
+	lines = append(lines, railNodeStyled(styles.ToolNode(status), subagentHeaderText(c), styles.ToolCallStyle, 0, width)...)
+	for i := range c.Children {
+		lines = append(lines, renderToolNode(c.Children[i], 1, expand, width, false)...)
+	}
+	lines = append(lines, railNodeStyled(styles.ToolNode(status), subagentDoneText(c), styles.ToolCallStyle, 1, width)...)
 	if c.Nested > 0 {
-		nested := cardIndent + styles.ToolCallStyle.Render(
-			cardConnector+"+"+strconv.Itoa(c.Nested)+" nested subagent steps")
-		lines = append(lines, nested)
+		lines = append(lines, railDetail("+"+strconv.Itoa(c.Nested)+" nested subagent steps", 1, width)...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -424,17 +420,15 @@ func subagentHeaderText(c ToolCallView) string {
 	return head
 }
 
-// subagentDoneLine builds the Subagent card's terminal "⎿" child: "<verb> · N steps"
-// from SubStatus + Steps, plus the truncated summary (the card's own Result, the
-// suppressed hand-back text) appended as `— "<summary>"` for done/failed. An
-// interrupted child omits the summary (design §4). It is width-wrapped like a card body.
-// Result is expected single-line, pre-truncated at the reduce layer; this only joins it.
-func subagentDoneLine(c ToolCallView, width int) string {
+// subagentDoneText is the subagent's terminal summary "verb · N steps[ — "summary"]".
+// The summary (the hand-back text, this being the ONLY place it appears) is omitted for
+// an interrupted child.
+func subagentDoneText(c ToolCallView) string {
 	line := subagentTerminalVerb(c.SubStatus) + hintSeparator + plural(c.Steps, "step")
 	if summary := strings.Join(c.Result, " "); summary != "" && c.SubStatus != subInterrupted {
 		line += " — " + `"` + summary + `"`
 	}
-	return cardIndent + styles.ToolCallStyle.Render(cardConnector+line)
+	return line
 }
 
 // plural renders a count with grammatical agreement on unit: "1 <unit>" (singular) for

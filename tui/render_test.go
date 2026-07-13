@@ -1011,12 +1011,13 @@ func TestRenderAssistant_NodePresence(t *testing.T) {
 	}
 }
 
-// TestRenderEntrySubagentCard covers the committed Subagent card render (design §5/§4):
-// a kindTool entry whose ToolCallView has Agent set renders as a "●"-level card
-// "Subagent(<agent>)  \"<task>\"" with its children as "⎿" rows and a final
-// "⎿ done · N steps — \"<summary>\"" line. The card's own Result (the done summary)
-// must appear ONLY in that done child, never also as a separate result body (no
-// doubling). The "+M nested subagent steps" line shows only when Nested > 0.
+// TestRenderEntrySubagentCard covers the committed Subagent card render (Task 6 nested
+// rail): a kindTool entry whose ToolCallView has Agent set renders as an "○" header node
+// "Subagent(<agent>)  \"<task>\"" opening a nested rail, its children as depth-1 "│ ○"
+// nodes, and a closing "│ ○ done · N steps — \"<summary>\"" node. The card's own Result
+// (the done summary) must appear ONLY in that closing node, never also as a separate
+// result body (no doubling). The "+M nested subagent steps" line shows only when
+// Nested > 0.
 func TestRenderEntrySubagentCard(t *testing.T) {
 	t.Parallel()
 
@@ -1037,31 +1038,31 @@ func TestRenderEntrySubagentCard(t *testing.T) {
 	}
 	got := stripANSI(strings.Join(renderEntry(e, false, 100), "\n"))
 
-	// Header: the "●" bullet, the standard tool-card "Subagent(explorer)" form, and the
+	// Header: the "○" node, the standard tool-card "Subagent(explorer)" form, and the
 	// task in quotes.
-	for _, w := range []string{strings.TrimSpace(styles.Dot), "Subagent(explorer)", `"map repo"`} {
+	for _, w := range []string{"○ Subagent(explorer)", `"map repo"`} {
 		if !strings.Contains(got, w) {
 			t.Errorf("subagent card = %q, want %q", got, w)
 		}
 	}
-	// Two child cards under the header, each at the ⎿ level.
-	if !strings.Contains(got, "Grep") || !strings.Contains(got, "Read") {
-		t.Errorf("subagent card = %q, want the Grep and Read child rows", got)
-	}
-	// The done child: verb + step count + summary.
-	for _, w := range []string{"done", "6 steps", "found 12 packages"} {
+	// Two child nodes under the header, each at depth 1 (a "│ ○" node).
+	for _, w := range []string{"│ ○ Grep", "│ ○ Read"} {
 		if !strings.Contains(got, w) {
-			t.Errorf("subagent card = %q, want the done child %q", got, w)
+			t.Errorf("subagent card = %q, want the depth-1 child node %q", got, w)
 		}
 	}
-	// No doubling: "found 12 packages" appears exactly once (only in the done child),
+	// The closing done node: verb + step count + summary at depth 1.
+	if !strings.Contains(got, `│ ○ done · 6 steps — "found 12 packages"`) {
+		t.Errorf("subagent card = %q, want the closing done node", got)
+	}
+	// No doubling: "found 12 packages" appears exactly once (only in the done node),
 	// not also as a separate result-preview body.
 	if n := strings.Count(got, "found 12 packages"); n != 1 {
 		t.Errorf("subagent card = %q, summary appears %d times, want exactly 1 (no doubling)", got, n)
 	}
-	// Never a doubled "⎿ ⎿" connector — children are ONE indent level under the header.
-	if strings.Contains(got, cardConnector+cardConnector) {
-		t.Errorf("subagent card = %q, must NOT nest ⎿ under ⎿", got)
+	// Every point on the rail is a circle — no "⎿" children anywhere.
+	if strings.Contains(got, "⎿") {
+		t.Errorf("subagent card = %q, must NOT contain any ⎿ (every point is a node)", got)
 	}
 	// Nested == 0 → no nested-steps line.
 	if strings.Contains(got, "nested subagent steps") {
@@ -1072,8 +1073,8 @@ func TestRenderEntrySubagentCard(t *testing.T) {
 // TestRenderSubagentCardHeaderWraps pins that a long subagent header WRAPS to the viewport width
 // instead of overflowing the right edge (the reported bug: `Subagent(operator)  "Perform a
 // focused security audit of sandbox confine…"` ran off screen): a narrow width wraps the header
-// into more rows than a wide one, the first row carries the ● bullet, and the full task text
-// survives (wrapped, not clipped).
+// into more rows than a wide one, the first row carries the "○" header node, and the full task
+// text survives (wrapped, not clipped).
 func TestRenderSubagentCardHeaderWraps(t *testing.T) {
 	t.Parallel()
 
@@ -1087,9 +1088,9 @@ func TestRenderSubagentCardHeaderWraps(t *testing.T) {
 	if narrowRows, wideRows := strings.Count(narrow, "\n"), strings.Count(wide, "\n"); narrowRows <= wideRows {
 		t.Errorf("narrow rows = %d, wide rows = %d; want the narrow header to wrap into more rows\nnarrow:\n%s", narrowRows, wideRows, narrow)
 	}
-	// The first row carries the ● bullet (the header, not a child/done line).
-	if first := strings.SplitN(narrow, "\n", 2)[0]; !strings.HasPrefix(first, strings.TrimSpace(styles.Dot)) {
-		t.Errorf("first header row = %q, want it to start with the ● bullet", first)
+	// The first row carries the "○" header node (the header, not a child/done line).
+	if first := strings.SplitN(narrow, "\n", 2)[0]; !strings.HasPrefix(first, "○ ") {
+		t.Errorf("first header row = %q, want it to start with the ○ header node", first)
 	}
 	// Nothing is clipped: every task word survives the wrap.
 	flat := strings.Join(strings.Fields(narrow), " ")
@@ -1168,6 +1169,120 @@ func TestRenderEntrySubagentCardTerminals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSubagentNodeStatus covers the child-loop terminal status → rail-node tint mapping:
+// subDone is the hollow OK node, subFailed and subInterrupted are the failed (red) node,
+// and subRunning is the pulsing node. stripANSI cannot distinguish the node colors, so
+// this maps the status directly to its styles.NodeStatus.
+func TestSubagentNodeStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status subStatus
+		want   styles.NodeStatus
+	}{
+		{name: "done is the hollow node", status: subDone, want: styles.NodeOK},
+		{name: "failed is the failed node", status: subFailed, want: styles.NodeFailed},
+		{name: "interrupted is the failed node", status: subInterrupted, want: styles.NodeFailed},
+		{name: "running is the pulsing node", status: subRunning, want: styles.NodeRunning},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := subagentNodeStatus(tt.status); got != tt.want {
+				t.Errorf("subagentNodeStatus(%d) = %d, want %d", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderSubagentCard_NestedRail covers the Task-6 nested-rail subagent render: the
+// subagent is an "○" header node at depth 0 opening a NESTED secondary rail whose children
+// are depth-1 "│ ○" nodes (with "│ │" detail rows), closed by a "│ ○ verb · N steps —
+// \"summary\"" done node at depth 1. Every point on the rail is a circle — no "⎿" children
+// and no plain done line. The interrupted variant omits the summary; a positive Nested adds
+// a "│ │ +N nested subagent steps" collapsed marker.
+func TestRenderSubagentCard_NestedRail(t *testing.T) {
+	t.Parallel()
+
+	base := ToolCallView{
+		ToolName:  "Subagent",
+		Agent:     "explore",
+		Task:      "find the retry logic",
+		SubStatus: subDone,
+		Steps:     2,
+		Result:    []string{"found in backoff.go"},
+		Children: []ToolCallView{
+			{ToolName: "Read", Summary: "backoff.go", Status: ToolOK, Result: []string{"12 lines"}},
+			{ToolName: "Grep", Summary: "retry", Status: ToolOK, Result: []string{"3 matches"}},
+		},
+	}
+
+	t.Run("done nested rail", func(t *testing.T) {
+		t.Parallel()
+		out := stripANSI(renderSubagentCard(base, true, 80))
+		for _, w := range []string{
+			"○ Subagent(explore)",
+			"find the retry logic",
+			"│ ○ Read(backoff.go)",
+			"│ │ 12 lines",
+			"│ ○ Grep(retry)",
+			"│ │ 3 matches",
+			`│ ○ done · 2 steps — "found in backoff.go"`,
+		} {
+			if !strings.Contains(out, w) {
+				t.Errorf("nested rail = \n%s\nwant it to contain %q", out, w)
+			}
+		}
+		if strings.Contains(out, "⎿") {
+			t.Errorf("nested rail = \n%s\nmust NOT contain any ⎿ (every point is a circle)", out)
+		}
+		// The closing line begins with a node (its depth-1 spine then "○"), not plain text.
+		lines := strings.Split(out, "\n")
+		last := lines[len(lines)-1]
+		if !strings.HasPrefix(last, "│ ○ done") {
+			t.Errorf("closing line = %q, want it to begin with the depth-1 done node", last)
+		}
+	})
+
+	t.Run("failed closing text", func(t *testing.T) {
+		t.Parallel()
+		c := base
+		c.SubStatus = subFailed
+		c.Children = []ToolCallView{{ToolName: "Read", Summary: "backoff.go", Status: ToolError, Result: []string{"no such file"}}}
+		out := stripANSI(renderSubagentCard(c, true, 80))
+		if !strings.Contains(out, "failed · 2 steps") {
+			t.Errorf("failed nested rail = \n%s\nwant the closing 'failed · 2 steps' text", out)
+		}
+		// The red tint (subFailed → styles.NodeFailed) is asserted by TestSubagentNodeStatus;
+		// stripANSI is color-blind so it cannot be seen here.
+	})
+
+	t.Run("interrupted omits the summary", func(t *testing.T) {
+		t.Parallel()
+		c := base
+		c.SubStatus = subInterrupted
+		out := stripANSI(renderSubagentCard(c, true, 80))
+		if !strings.Contains(out, "interrupted · 2 steps") {
+			t.Errorf("interrupted nested rail = \n%s\nwant 'interrupted · 2 steps'", out)
+		}
+		if strings.Contains(out, "found in backoff.go") || strings.Contains(out, " — ") {
+			t.Errorf("interrupted nested rail = \n%s\nmust NOT append the summary", out)
+		}
+	})
+
+	t.Run("nested counter collapsed marker", func(t *testing.T) {
+		t.Parallel()
+		c := base
+		c.Nested = 3
+		out := stripANSI(renderSubagentCard(c, true, 80))
+		if !strings.Contains(out, "│ │ +3 nested subagent steps") {
+			t.Errorf("nested rail = \n%s\nwant the '│ │ +3 nested subagent steps' marker", out)
+		}
+	})
 }
 
 // TestRenderLiveAssistantWorkingWord covers the LIVE empty-text tool step (design §3
