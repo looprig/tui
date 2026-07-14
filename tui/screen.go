@@ -1331,8 +1331,9 @@ func (m Screen) focusedStatus() Status {
 func (m Screen) statusInputs() statusInputs {
 	_, live := m.transcript.projectionFor(m.focusedLoopID)
 	in := statusInputs{
-		streaming: live.Text != "",
-		thinking:  live.Text == "" && live.Thinking != "",
+		streaming:        live.Text != "",
+		thinking:         live.Text == "" && live.Thinking != "",
+		compactionActive: m.compaction.IsActive(m.focusedLoopID),
 	}
 	if p := m.activePrompt(); p != nil {
 		in.permissionActive = p.Kind == promptPermission

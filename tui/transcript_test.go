@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -3320,4 +3321,91 @@ func TestTranscriptProjectionFoldsEphemeral(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTranscriptCompactionCompletion(t *testing.T) {
+	t.Parallel()
+
+	loopA := callID(0x91)
+	loopB := callID(0x92)
+	eventA := callID(0x93)
+	eventB := callID(0x94)
+	attempt := event.CompactAttemptID(callID(0x95))
+	committed := func(loopID, eventID uuid.UUID, duration time.Duration) event.CompactionCommitted {
+		h := hdr(loopID)
+		h.EventID = eventID
+		return event.CompactionCommitted{Header: h, AttemptID: attempt, Duration: duration}
+	}
+	rejected := func(loopID, eventID uuid.UUID) event.CompactionRejected {
+		h := hdr(loopID)
+		h.EventID = eventID
+		return event.CompactionRejected{Header: h, AttemptID: attempt, Duration: 3 * time.Second}
+	}
+
+	tests := []struct {
+		name      string
+		events    []event.Event
+		wantA     []string
+		wantB     []string
+		wantTotal int
+	}{
+		{
+			name:      "committed event appends exact duration payload",
+			events:    []event.Event{committed(loopA, eventA, 25*time.Second)},
+			wantA:     []string{"conversation compacted in 25s"},
+			wantTotal: 1,
+		},
+		{
+			name:      "duplicate event id appends once",
+			events:    []event.Event{committed(loopA, eventA, 25*time.Second), committed(loopA, eventA, 25*time.Second)},
+			wantA:     []string{"conversation compacted in 25s"},
+			wantTotal: 1,
+		},
+		{
+			name:      "zero event id appends nothing",
+			events:    []event.Event{committed(loopA, uuid.UUID{}, 25*time.Second)},
+			wantTotal: 0,
+		},
+		{
+			name:      "rejection appends no success row",
+			events:    []event.Event{rejected(loopA, eventA)},
+			wantTotal: 0,
+		},
+		{
+			name:      "completion is isolated to its loop",
+			events:    []event.Event{committed(loopB, eventB, 61*time.Second)},
+			wantB:     []string{"conversation compacted in 1m 1s"},
+			wantTotal: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{}
+			for _, ev := range tt.events {
+				m = m.ApplyEvent(ev)
+			}
+			if got := harnessTexts(m, loopA); !reflect.DeepEqual(got, tt.wantA) {
+				t.Errorf("loop A harness rows = %q, want %q", got, tt.wantA)
+			}
+			if got := harnessTexts(m, loopB); !reflect.DeepEqual(got, tt.wantB) {
+				t.Errorf("loop B harness rows = %q, want %q", got, tt.wantB)
+			}
+			if got := m.committedLen(); got != tt.wantTotal {
+				t.Errorf("committedLen = %d, want %d", got, tt.wantTotal)
+			}
+		})
+	}
+}
+
+func harnessTexts(m transcriptModel, loopID uuid.UUID) []string {
+	committed, _ := m.projectionFor(loopID)
+	var texts []string
+	for _, entry := range committed {
+		if entry.Kind == kindHarness {
+			texts = append(texts, committedText(entry))
+		}
+	}
+	return texts
 }
