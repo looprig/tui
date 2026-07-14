@@ -31,6 +31,10 @@ type Agent interface {
 	// Submit (same fire-and-forget InputID/Cause.CommandID contract, human agency); a
 	// loopID equal to the ACTIVE loop id behaves exactly like Submit.
 	SubmitToLoop(ctx context.Context, loopID uuid.UUID, blocks []content.Block) (uuid.UUID, error)
+	// CompactToLoop requests manual conversation compaction for one exact loop.
+	// The modern viewport supplies its focused loop so this action never redirects
+	// through the session's active-loop convenience target.
+	CompactToLoop(ctx context.Context, loopID uuid.UUID) (uuid.UUID, error)
 	// ActiveLoopID returns the current default input target.
 	ActiveLoopID() uuid.UUID
 	Interrupt(ctx context.Context) (bool, error)

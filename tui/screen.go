@@ -263,6 +263,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.handleSubmitResult(msg)
 		return m, cmd
+	case compactResultMsg:
+		cmd := m.handleCompactResult(msg)
+		return m, cmd
 	case interruptResultMsg:
 		cmd := m.handleInterruptResult(msg)
 		return m, cmd
@@ -645,6 +648,16 @@ func (m *Screen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 	return nil
 }
 
+// handleCompactResult keeps successful dispatch silent and renders an immediate
+// failure as a non-fatal error notice. Progress itself is driven by compaction
+// events, never an optimistic slash-command spinner.
+func (m *Screen) handleCompactResult(msg compactResultMsg) tea.Cmd {
+	if m.sessionCore.applyCompactResult(msg) {
+		m.rerender()
+	}
+	return nil
+}
+
 // handleInterruptResult applies an Interrupt outcome via the core. On error it returns to
 // Running with a faint error entry the viewport re-renders; on success it stays Interrupting
 // until the loop's TurnInterrupted terminal lands Idle.
@@ -858,6 +871,11 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// core's default submit does (buildBlocks from action.Text), and a build error commits
 		// the same faint error entry.
 		cmd, present = m.sessionCore.submitToLoop(m.focusedLoopID, action.Text)
+	} else if action.Kind == uiRunSlash && action.Slash == "/compact" {
+		// Focus is presentation-owned and intentionally independent from the
+		// session's active loop. Manual compaction follows what the user is
+		// viewing, regardless of whether that loop is idle or running.
+		cmd = m.sessionCore.compactToLoop(m.focusedLoopID)
 	} else {
 		cmd, present = m.sessionCore.mapAction(action)
 	}

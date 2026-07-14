@@ -34,6 +34,24 @@ func updateScreen(t *testing.T, m Screen, msg tea.Msg) (Screen, tea.Cmd) {
 	return got, cmd
 }
 
+func compactResultFromCmd(t *testing.T, cmd tea.Cmd) (compactResultMsg, bool) {
+	t.Helper()
+	if cmd == nil {
+		return compactResultMsg{}, false
+	}
+	switch msg := cmd().(type) {
+	case compactResultMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, child := range msg {
+			if result, ok := compactResultFromCmd(t, child); ok {
+				return result, true
+			}
+		}
+	}
+	return compactResultMsg{}, false
+}
+
 // newScreenSized builds a Screen over agent and gives it a first terminal size, the
 // common starting point for the viewport tests (ready + a sized viewport).
 func newScreenSized(t *testing.T, agent Agent, w, h int) Screen {
@@ -1886,6 +1904,71 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	}
 	if !old.closeCalled {
 		t.Error("old agent not closed on /clear swap")
+	}
+}
+
+func TestModernCompactTargetsFocusedLoop(t *testing.T) {
+	t.Parallel()
+
+	active := callID(0x71)
+	focused := callID(0x72)
+	compactErr := errors.New("manual compaction unavailable")
+	tests := []struct {
+		name        string
+		status      Status
+		err         error
+		wantVisible bool
+	}{
+		{name: "idle success is silent", status: StatusIdle},
+		{name: "running success dispatches without status gate", status: StatusRunning},
+		{name: "immediate failure is visible", status: StatusIdle, err: compactErr, wantVisible: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agent := &fakeAgent{activeLoopID: active, compactID: callID(0x73), compactErr: tt.err}
+			m := newScreenSized(t, agent, 80, 24)
+			m.focusLoop(focused)
+			m.status = tt.status
+			beforeEntries := len(m.transcript.testCommitted())
+			m.interaction.input.SetValue("/compact")
+
+			m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m.status != tt.status {
+				t.Errorf("status after dispatch = %d, want unchanged %d", m.status, tt.status)
+			}
+			if got := plainAll(m.viewport.lines); strings.Contains(got, "compacting") {
+				t.Errorf("viewport after dispatch = %q, want no optimistic compaction status", got)
+			}
+			result, ok := compactResultFromCmd(t, cmd)
+			if !ok {
+				t.Fatal("/compact command did not produce compactResultMsg")
+			}
+			if !agent.compactCalled {
+				t.Fatal("CompactToLoop was not called")
+			}
+			if agent.lastCompactLoopID != focused {
+				t.Errorf("CompactToLoop loopID = %v, want focused %v (active is %v)", agent.lastCompactLoopID, focused, active)
+			}
+
+			m, _ = updateScreen(t, m, result)
+			if m.status != tt.status {
+				t.Errorf("status after result = %d, want unchanged %d", m.status, tt.status)
+			}
+			gotVisible := strings.Contains(plainAll(m.viewport.lines), "manual compaction unavailable")
+			if gotVisible != tt.wantVisible {
+				t.Errorf("failure visible = %v, want %v; viewport = %q", gotVisible, tt.wantVisible, plainAll(m.viewport.lines))
+			}
+			wantEntries := beforeEntries
+			if tt.wantVisible {
+				wantEntries++
+			}
+			if got := len(m.transcript.testCommitted()); got != wantEntries {
+				t.Errorf("committed entries = %d, want %d", got, wantEntries)
+			}
+		})
 	}
 }
 

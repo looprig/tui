@@ -215,6 +215,53 @@ func TestSubmitToLoopCmd(t *testing.T) {
 	}
 }
 
+func TestCompactToLoopCmd(t *testing.T) {
+	t.Parallel()
+
+	wantID := callID(0x61)
+	wantLoopID := callID(0x62)
+	wantErr := errors.New("compact failed")
+	tests := []struct {
+		name      string
+		agent     *fakeAgent
+		wantID    uuid.UUID
+		wantError error
+	}{
+		{name: "success preserves correlation id", agent: &fakeAgent{compactID: wantID}, wantID: wantID},
+		{name: "failure preserves exact error", agent: &fakeAgent{compactErr: wantErr}, wantError: wantErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			msg := compactToLoopCmd(context.Background(), tt.agent, wantLoopID)()
+			res, ok := msg.(compactResultMsg)
+			if !ok {
+				t.Fatalf("msg = %T, want compactResultMsg", msg)
+			}
+			if res.commandID != tt.wantID {
+				t.Errorf("commandID = %v, want %v", res.commandID, tt.wantID)
+			}
+			if res.err != tt.wantError {
+				t.Errorf("err = %v, want exact error %v", res.err, tt.wantError)
+			}
+			if !tt.agent.compactCalled {
+				t.Fatal("CompactToLoop was not called")
+			}
+			if tt.agent.lastCompactLoopID != wantLoopID {
+				t.Errorf("CompactToLoop loopID = %v, want %v", tt.agent.lastCompactLoopID, wantLoopID)
+			}
+			if !tt.agent.compactHasDeadline {
+				t.Fatal("CompactToLoop context has no deadline")
+			}
+			if tt.agent.compactTimeLeft > 2*time.Second {
+				t.Errorf("deadline remaining = %v, want at most %v", tt.agent.compactTimeLeft, 2*time.Second)
+			}
+		})
+	}
+}
+
 func TestInterruptTurn(t *testing.T) {
 	t.Parallel()
 

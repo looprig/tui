@@ -300,6 +300,17 @@ func (c *sessionCore) applySubmitResult(msg submitResultMsg) bool {
 	return false
 }
 
+// applyCompactResult surfaces only an immediate manual-compaction failure. A
+// successful request is silent: enduring compaction events own subsequent user
+// feedback, so this reducer never paints an optimistic progress row.
+func (c *sessionCore) applyCompactResult(msg compactResultMsg) bool {
+	if msg.err == nil {
+		return false
+	}
+	c.transcript = c.transcript.CommitGlobalError(msg.err)
+	return true
+}
+
 // applyInterruptResult applies the outcome of an Interrupt call. On error the turn may
 // still be live, so the status returns to Running and a faint error entry commits (the
 // shell presents it). On success it stays Interrupting — the active loop's TurnInterrupted
@@ -434,6 +445,13 @@ func (c *sessionCore) submitToLoop(loopID uuid.UUID, text string) (tea.Cmd, bool
 		return nil, true
 	}
 	return submitToLoopCmd(c.appCtx, c.agent, loopID, blocks), false
+}
+
+// compactToLoop requests manual compaction for one exact loop. It deliberately
+// has no turn-status gate: the harness coordinates the request at its safe
+// boundary whether the focused loop is currently idle or running.
+func (c *sessionCore) compactToLoop(loopID uuid.UUID) tea.Cmd {
+	return compactToLoopCmd(c.appCtx, c.agent, loopID)
 }
 
 // runSlash executes a known slash command. /help commits the listing (the shell presents

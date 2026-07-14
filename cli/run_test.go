@@ -32,6 +32,9 @@ func (a *fakeAgent) Submit(context.Context, []content.Block) (uuid.UUID, error) 
 func (a *fakeAgent) SubmitToLoop(context.Context, uuid.UUID, []content.Block) (uuid.UUID, error) {
 	return uuid.UUID{}, nil
 }
+func (a *fakeAgent) CompactToLoop(context.Context, uuid.UUID) (uuid.UUID, error) {
+	return uuid.UUID{}, nil
+}
 func (a *fakeAgent) ActiveLoopID() uuid.UUID                 { return a.loopID }
 func (a *fakeAgent) Interrupt(context.Context) (bool, error) { return false, nil }
 func (a *fakeAgent) AcceptsImages(uuid.UUID) bool            { return false }
