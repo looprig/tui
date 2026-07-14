@@ -3399,6 +3399,84 @@ func TestTranscriptCompactionCompletion(t *testing.T) {
 	}
 }
 
+func TestTranscriptCompactionCompletionDetachesTargetProjection(t *testing.T) {
+	t.Parallel()
+
+	existingLoop := callID(0x81)
+	otherLoop := callID(0x82)
+	attemptID := event.CompactAttemptID(callID(0x83))
+	tests := []struct {
+		name     string
+		base     transcriptModel
+		loopID   uuid.UUID
+		eventID  uuid.UUID
+		wantRows int
+	}{
+		{
+			name: "existing target projection remains unchanged",
+			base: transcriptModel{}.ApplyEvent(event.TurnStarted{
+				Header:  hdr(existingLoop),
+				Message: userMsg("existing row"),
+			}),
+			loopID:   existingLoop,
+			eventID:  callID(0x84),
+			wantRows: 2,
+		},
+		{
+			name: "absent target projection is created on next value only",
+			base: transcriptModel{}.ApplyEvent(event.TurnStarted{
+				Header:  hdr(otherLoop),
+				Message: userMsg("other loop row"),
+			}),
+			loopID:   existingLoop,
+			eventID:  callID(0x85),
+			wantRows: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			priorRows, _ := tt.base.projectionFor(tt.loopID)
+			priorRows = append([]entry(nil), priorRows...)
+			priorNextID := tt.base.nextID
+
+			h := hdr(tt.loopID)
+			h.EventID = tt.eventID
+			next := tt.base.ApplyEvent(event.CompactionCommitted{
+				Header:    h,
+				AttemptID: attemptID,
+				Duration:  4 * time.Second,
+			})
+
+			gotPriorRows, _ := tt.base.projectionFor(tt.loopID)
+			if !reflect.DeepEqual(gotPriorRows, priorRows) {
+				t.Errorf("prior projection changed: got %+v, want %+v", gotPriorRows, priorRows)
+			}
+			if tt.base.nextID != priorNextID {
+				t.Errorf("prior nextID = %d, want unchanged %d", tt.base.nextID, priorNextID)
+			}
+			if _, mutated := tt.base.compactionCompletions[tt.eventID]; mutated {
+				t.Errorf("prior dedup contains event %v, want unchanged", tt.eventID)
+			}
+
+			nextRows, _ := next.projectionFor(tt.loopID)
+			if len(nextRows) != tt.wantRows {
+				t.Fatalf("next rows = %d, want %d", len(nextRows), tt.wantRows)
+			}
+			if got := harnessTexts(next, tt.loopID); !reflect.DeepEqual(got, []string{"conversation compacted in 4s"}) {
+				t.Errorf("next completion rows = %q, want one exact row", got)
+			}
+			if next.nextID != priorNextID+1 {
+				t.Errorf("next nextID = %d, want %d", next.nextID, priorNextID+1)
+			}
+			if _, recorded := next.compactionCompletions[tt.eventID]; !recorded {
+				t.Errorf("next dedup missing event %v", tt.eventID)
+			}
+		})
+	}
+}
+
 func harnessTexts(m transcriptModel, loopID uuid.UUID) []string {
 	committed, _ := m.projectionFor(loopID)
 	var texts []string

@@ -571,7 +571,27 @@ func (m transcriptModel) commitCompactionCompletion(ev event.CompactionCommitted
 	}
 	m.compactionCompletions = cloneCompactionCompletionIDs(m.compactionCompletions)
 	m.compactionCompletions[eventID] = struct{}{}
+	m = m.detachCompactionCompletionProjection(ev.EventHeader().LoopID)
 	return m.CommitHarnessFor(ev.EventHeader().LoopID, "conversation compacted in "+formatElapsed(ev.Duration))
+}
+
+// detachCompactionCompletionProjection gives the next reducer value ownership of the
+// target projection before CommitHarnessFor appends its row. Other loop projections remain
+// shared and untouched; an absent target is left for CommitHarnessFor to create normally.
+func (m transcriptModel) detachCompactionCompletionProjection(loopID uuid.UUID) transcriptModel {
+	projection, ok := m.projections[loopID]
+	if !ok || projection == nil {
+		return m
+	}
+	next := make(map[uuid.UUID]*loopProjection, len(m.projections))
+	for id, existing := range m.projections {
+		next[id] = existing
+	}
+	cloned := *projection
+	cloned.committed = append([]entry(nil), projection.committed...)
+	next[loopID] = &cloned
+	m.projections = next
+	return m
 }
 
 func cloneCompactionCompletionIDs(in map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
