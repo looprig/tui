@@ -35,7 +35,10 @@ func TestAllLoopsEventFilter(t *testing.T) {
 	}{
 		{name: "active ephemeral", ev: event.TokenDelta{Header: event.Header{Coordinates: identity.Coordinates{LoopID: active}}}, want: true},
 		{name: "other ephemeral", ev: event.TokenDelta{Header: event.Header{Coordinates: identity.Coordinates{LoopID: other}}}, want: true},
+		{name: "compaction started", ev: event.CompactionStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: other}}}, want: true},
 		{name: "other enduring", ev: event.StepDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: other}}}, want: true},
+		{name: "compaction committed", ev: event.CompactionCommitted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: other}}}, want: true},
+		{name: "compaction rejected", ev: event.CompactionRejected{Header: event.Header{Coordinates: identity.Coordinates{LoopID: other}}}, want: true},
 		{name: "selection", ev: event.ActiveLoopChanged{Header: event.Header{Coordinates: identity.Coordinates{SessionID: sessionID}}, ActiveLoopID: other}, want: true},
 	}
 	for _, tt := range tests {
