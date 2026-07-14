@@ -530,6 +530,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	} else if msg.eventCount != 0 {
 		m.transcript = installRestoredTranscript(m.transcript, msg.transcript)
 		m.interaction = installRestoredInteraction(m.interaction, msg.interaction)
+		m.compaction = msg.compaction
 	}
 	for _, input := range buffered {
 		switch input.kind {

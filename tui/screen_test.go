@@ -1341,6 +1341,45 @@ func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
 	}
 }
 
+func TestModernRestoreCompactionTerminalSuppressesBufferedStart(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xB5)
+	attemptID := event.CompactAttemptID(callID(0xB6))
+	terminalID := callID(0xB7)
+	terminalHeader := hdr(loopID)
+	terminalHeader.EventID = terminalID
+
+	tests := []struct {
+		name     string
+		terminal event.Event
+	}{
+		{name: "committed terminal", terminal: event.CompactionCommitted{Header: terminalHeader, AttemptID: attemptID}},
+		{name: "rejected terminal", terminal: event.CompactionRejected{Header: terminalHeader, AttemptID: attemptID}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{tt.terminal}}
+			m := newScreenSized(t, agent, 80, 24)
+			m.restoring = true
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+			m = feed(t, m, event.CompactionStarted{Header: hdr(loopID), AttemptID: attemptID})
+			m = feedRestored(t, m, msg)
+
+			if m.compaction.IsActive(loopID) {
+				t.Fatal("replay terminal plus buffered start left compaction active")
+			}
+			if !m.compaction.isTerminal(loopID, attemptID) {
+				t.Fatal("restored terminal tombstone was not installed")
+			}
+		})
+	}
+}
+
 func TestModernRestoreStampsBufferedThinkingInDrainOrder(t *testing.T) {
 	t.Parallel()
 

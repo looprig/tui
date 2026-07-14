@@ -13,8 +13,8 @@ import (
 // sessionCore is the SHARED transport both TUI presentation shells embed: the
 // scrollback-first Screen and the modern viewport Screen. It owns everything an
 // event router must own — the agent wiring, the ONE session-lifetime subscription and
-// its lifecycle (stale/nil guards), the dispatch of each event into the transcript +
-// interaction reducers, the active-loop turn status, the /clear reopen ordering, and
+// its lifecycle (stale/nil guards), the dispatch of each event into the transcript,
+// interaction, and compaction reducers, the active-loop turn status, the /clear ordering, and
 // the submit/interrupt/gate command wiring — but NO presentation. Extracting it means
 // event routing cannot drift between the two modes: a new event type handled here is
 // handled by both shells at once.
@@ -66,6 +66,11 @@ type sessionCore struct {
 	// false). The DISPLAYED status follows only the active loop's bit; a background loop's
 	// turn events fold here without moving the status. Never nil (seeded in newSessionCore).
 	loopRunning map[uuid.UUID]bool
+
+	// compaction is the pure per-loop activity projection shared by live delivery and
+	// restore folding. Terminal attempt tombstones prevent replay/buffer overlap from
+	// resurrecting an already-finished ephemeral start.
+	compaction compactionProjection
 }
 
 // newSessionCore builds an idle sessionCore over agent, with open as the /clear thunk and
@@ -141,9 +146,10 @@ const (
 	turnEnded
 )
 
-// handleEvent applies one subscription event to BOTH reducers — the transcript (which
+// handleEvent applies one subscription event to the display reducers — the transcript (which
 // reconstructs the live segment and commits user/tool/prompt/terminal entries) and the
-// interaction model (which enqueues prompts and clears its queue on terminals) —
+// interaction model (which enqueues prompts and clears its queue on terminals), plus the
+// per-loop compaction activity projection — then
 // reconciles an ActiveLoopChanged into the active-loop baseline (applyActiveSelection),
 // folds every loop's turn-lifecycle events into the per-loop running map and derives the
 // displayed STATUS from the ACTIVE loop's bit (applyTurnStatus), and re-arms the
@@ -155,6 +161,7 @@ const (
 func (c *sessionCore) handleEvent(ev event.Event) (tea.Cmd, turnPhase) {
 	c.transcript = c.transcript.ApplyEvent(ev)
 	c.interaction = c.interaction.ApplyEvent(ev)
+	c.compaction = c.compaction.ApplyEvent(ev)
 	if sel, ok := ev.(event.ActiveLoopChanged); ok {
 		c.applyActiveSelection(sel)
 	}
@@ -356,6 +363,7 @@ func (c *sessionCore) applyReopenResult(msg reopenResultMsg) (tea.Cmd, bool) {
 	// so a selection cannot slip past the fresh subscription's setup window.
 	c.activeLoopID = uuid.UUID{}
 	c.loopRunning = map[uuid.UUID]bool{}
+	c.compaction = compactionProjection{}
 	// Re-subscribe via the INJECTED filter (c.subscribe) against the freshly swapped
 	// agent, so a /clear re-attaches the all-loops scope rather than silently narrowing
 	// the post-clear session and starving every subagent projection.

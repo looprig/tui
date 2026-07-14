@@ -233,6 +233,39 @@ func TestSessionCoreReopenOrdering(t *testing.T) {
 	})
 }
 
+func TestSessionCoreReopenClearsCompactionProjection(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xC5)
+	attemptID := event.CompactAttemptID(callID(0xC6))
+	tests := []struct {
+		name string
+		ev   event.Event
+	}{
+		{name: "active attempt", ev: event.CompactionStarted{Header: hdr(loopID), AttemptID: attemptID}},
+		{name: "terminal tombstone", ev: event.CompactionCommitted{Header: hdr(loopID), AttemptID: attemptID}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			current := &fakeAgent{activeLoopID: loopID}
+			fresh := &fakeAgent{activeLoopID: callID(0xC7)}
+			core := newTestCore(current)
+			core.compaction = core.compaction.ApplyEvent(tt.ev)
+
+			_, present := core.applyReopenResult(reopenResultMsg{agent: fresh})
+			if present {
+				t.Fatal("applyReopenResult present = true, want false")
+			}
+			if !reflect.DeepEqual(core.compaction, compactionProjection{}) {
+				t.Fatalf("compaction projection after /clear = %+v, want zero", core.compaction)
+			}
+		})
+	}
+}
+
 // TestSessionCoreMapAction pins the shared submit/interrupt/gate command wiring: each
 // typed uiAction produces the right bounded command (and, for the gate actions, records
 // the transcript decision), and reports whether it committed an out-of-band entry the
