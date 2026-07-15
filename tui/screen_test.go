@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,35 @@ func compactResultFromCmd(t *testing.T, cmd tea.Cmd) (compactResultMsg, bool) {
 		}
 	}
 	return compactResultMsg{}, false
+}
+
+// runGracefulQuitSequence executes the two leaves returned by the shell's graceful
+// shutdown choreography and verifies the second leaf is Bubble Tea's quit signal.
+// tea.Sequence intentionally hides its concrete message type, so reflection is used
+// only to unwrap its []tea.Cmd representation in this black-box test.
+func runGracefulQuitSequence(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("graceful quit cmd = nil")
+	}
+	msg := cmd()
+	seq := reflect.ValueOf(msg)
+	if seq.Kind() != reflect.Slice || seq.Len() != 2 {
+		t.Fatalf("graceful quit message = %T (kind %s, len %d), want two-command sequence", msg, seq.Kind(), seq.Len())
+	}
+	closeCmd, ok := seq.Index(0).Interface().(tea.Cmd)
+	if !ok {
+		t.Fatalf("graceful quit first leaf = %T, want tea.Cmd", seq.Index(0).Interface())
+	}
+	quitCmd, ok := seq.Index(1).Interface().(tea.Cmd)
+	if !ok {
+		t.Fatalf("graceful quit second leaf = %T, want tea.Cmd", seq.Index(1).Interface())
+	}
+	_ = closeCmd()
+	quitMsg := quitCmd()
+	if _, ok := quitMsg.(tea.QuitMsg); !ok {
+		t.Fatalf("graceful quit final message = %T, want tea.QuitMsg", quitMsg)
+	}
 }
 
 // newScreenSized builds a Screen over agent and gives it a first terminal size, the
@@ -2444,6 +2474,29 @@ func TestModernStaleReopenCloseDoesNotLeakIntoSuccessorSession(t *testing.T) {
 	}
 }
 
+func TestModernHiddenHelpDispatchCommitsVisibleListing(t *testing.T) {
+	t.Parallel()
+
+	m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 80, 24)
+	m.interaction.input.SetValue("/help")
+
+	m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Errorf("/help cmd = %v, want nil", cmd)
+	}
+	if got := m.interaction.input.Value(); got != "" {
+		t.Errorf("input after /help = %q, want empty", got)
+	}
+	committed := m.transcript.testCommitted()
+	if len(committed) != 1 {
+		t.Fatalf("committed entries after /help = %d, want 1", len(committed))
+	}
+	if got := committedText(committed[0]); got != helpText() {
+		t.Errorf("committed /help listing = %q, want %q", got, helpText())
+	}
+}
+
 // TestModernInterruptAndQuit pins the two globals: esc with NO prompt interrupts a running turn
 // (flips to Interrupting + dispatches the bounded Interrupt), and ctrl+c closes the subscription
 // and quits.
@@ -2463,6 +2516,52 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		}
 	})
 
+	t.Run("esc dismisses an open tray without interrupting", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name string
+			seed string
+			open func(*interactionModel)
+		}{
+			{
+				name: "slash",
+				seed: "/co",
+				open: func(in *interactionModel) { in.slash = components.NewSlashComplete("/co") },
+			},
+			{
+				name: "file",
+				seed: "review @tui/sc",
+				open: func(in *interactionModel) {
+					in.files = components.NewFileComplete([]components.FileItem{{Path: "tui/screen.go"}})
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				agent := &fakeAgent{activeLoopID: callID(1), interruptCancelled: true}
+				m := runningScreen(t, agent)
+				m.interaction.input.SetValue(tt.seed)
+				tt.open(&m.interaction)
+
+				m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+
+				if cmd != nil {
+					t.Errorf("esc cmd = %v, want nil (no Interrupt dispatch)", cmd)
+				}
+				if m.status != StatusRunning {
+					t.Errorf("status = %d, want StatusRunning (turn not interrupted)", m.status)
+				}
+				if got := m.interaction.input.Value(); got != tt.seed {
+					t.Errorf("draft after esc = %q, want %q", got, tt.seed)
+				}
+				if m.interaction.slash != nil || m.interaction.files != nil {
+					t.Errorf("tray remains after esc: slash=%v files=%v", m.interaction.slash, m.interaction.files)
+				}
+			})
+		}
+	})
+
 	t.Run("ctrl+c closes the subscription and quits", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{activeLoopID: callID(1)}
@@ -2477,6 +2576,86 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		}
 		if fs, ok := sub.(*fakeSubscription); ok && !fs.closed {
 			t.Error("ctrl+c did not close the subscription")
+		}
+		runGracefulQuitSequence(t, cmd)
+		if agent.closeCalls != 1 {
+			t.Errorf("ctrl+c agent Close calls = %d, want 1", agent.closeCalls)
+		}
+	})
+
+	t.Run("selected exit clears compose and performs graceful shutdown", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{activeLoopID: callID(1)}
+		m := runningScreen(t, agent)
+		sub := m.sub
+		m.interaction.input.SetValue("/")
+		m.interaction.slash = components.NewSlashComplete("/")
+		m.interaction.slash.Down()
+		m.interaction.slash.Down()
+
+		m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+		if got := m.interaction.input.Value(); got != "" {
+			t.Errorf("input after /exit = %q, want empty", got)
+		}
+		if m.interaction.slash != nil {
+			t.Errorf("slash tray after /exit = %v, want nil", m.interaction.slash)
+		}
+		if !m.quitting {
+			t.Error("/exit did not latch quitting")
+		}
+		if m.sub != nil {
+			t.Error("/exit did not clear subscription reference")
+		}
+		if fs, ok := sub.(*fakeSubscription); ok && !fs.closed {
+			t.Error("/exit did not close the subscription")
+		}
+		runGracefulQuitSequence(t, cmd)
+		if agent.closeCalls != 1 {
+			t.Errorf("/exit agent Close calls = %d, want 1", agent.closeCalls)
+		}
+	})
+
+	t.Run("exit and ctrl+c both defer while clear is resetting", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name string
+			quit func(t *testing.T, m Screen) (Screen, tea.Cmd)
+		}{
+			{
+				name: "ctrl+c",
+				quit: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
+					return updateScreen(t, m, ctrlKey('c'))
+				},
+			},
+			{
+				name: "exit",
+				quit: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
+					m.interaction.input.SetValue("/exit")
+					m.interaction.slash = components.NewSlashComplete("/exit")
+					return updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				agent := &fakeAgent{activeLoopID: callID(1)}
+				m := newScreenSized(t, agent, 80, 24)
+				m.status = StatusResetting
+
+				m, cmd := tt.quit(t, m)
+
+				if cmd != nil {
+					t.Fatalf("quit while resetting cmd = %v, want deferred nil", cmd)
+				}
+				if !m.quitting || !m.quitAfterReopen {
+					t.Errorf("deferred flags: quitting=%v quitAfterReopen=%v, want both true", m.quitting, m.quitAfterReopen)
+				}
+				if agent.closeCalls != 0 {
+					t.Errorf("agent closed before reopen resolved: calls=%d", agent.closeCalls)
+				}
+			})
 		}
 	})
 

@@ -115,10 +115,10 @@ type Screen struct {
 	// transcript never consults it, and an anim tick recomposes ONLY the status line.
 	anim animState
 
-	// quitting latches on ctrl+c so the continuous anim tick chain self-terminates instead of
+	// quitting latches on ctrl+c or /exit so the continuous anim tick chain self-terminates instead of
 	// leaking a reschedule past tea.Quit: handleAnim stops re-arming once it is set.
 	quitting        bool
-	quitAfterReopen bool // ctrl+c during /clear waits until the handoff result is consumed
+	quitAfterReopen bool // ctrl+c or /exit during /clear waits until the handoff result is consumed
 }
 
 // tickInterval is the status-line timer's cadence: one tick per second while a turn
@@ -775,6 +775,24 @@ func (m *Screen) handleCloseForQuitResult(msg closeForQuitResultMsg) tea.Cmd {
 	return tea.Quit
 }
 
+// beginGracefulQuit owns the shared ctrl+c and /exit shutdown choreography. If a
+// /clear handoff is in flight it defers teardown until handleReopenResult claims the
+// replacement. Otherwise it stops animation, closes and clears the subscription
+// best-effort, then closes the agent under the bounded command before quitting.
+func (m *Screen) beginGracefulQuit() tea.Cmd {
+	if m.status == StatusResetting {
+		m.quitting = true
+		m.quitAfterReopen = true
+		return nil
+	}
+	m.quitting = true
+	if m.sub != nil {
+		_ = m.sub.Close()
+		m.sub = nil
+	}
+	return tea.Sequence(closeAgent(m.agent), tea.Quit)
+}
+
 // handleKey routes a key press in ACTUAL execution order: (1) the GLOBAL chords ctrl+c
 // (quit), ctrl+t (toggle the global collapse fold), and ctrl+n/ctrl+p (cycle focus over the
 // bar's loops) fire first, even with a prompt open — focus/fold are pure VIEW state and the
@@ -786,23 +804,7 @@ func (m *Screen) handleCloseForQuitResult(msg closeForQuitResultMsg) tea.Cmd {
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		if m.status == StatusResetting {
-			// The async handoff owns the old/replacement lifecycle. Defer quitting until its
-			// result is consumed so no replacement can escape the model unclaimed.
-			m.quitting = true
-			m.quitAfterReopen = true
-			return m, nil
-		}
-		// Latch quitting so the continuous anim tick chain self-terminates (handleAnim stops
-		// re-arming) rather than leaking a reschedule past tea.Quit. Then close the subscription
-		// best-effort so it does not leak past quit (a synchronous, idempotent teardown), close
-		// the agent (bounded async), and quit.
-		m.quitting = true
-		if m.sub != nil {
-			_ = m.sub.Close()
-			m.sub = nil
-		}
-		return m, tea.Sequence(closeAgent(m.agent), tea.Quit)
+		return m, m.beginGracefulQuit()
 	case "ctrl+t":
 		// Retroactive global fold: because the viewport re-renders from committed each frame,
 		// flipping the default re-folds the WHOLE buffer (design §Collapse). Fires even with a
@@ -827,9 +829,12 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.activePrompt() != nil {
 		return m.routeToInteraction(msg)
 	}
-	// Precedence (3): Esc with no prompt keeps its legacy meaning — interrupt a running turn
-	// (a no-op when idle).
+	// Precedence (3): an open completion tray consumes Esc before the global interrupt,
+	// preserving the draft. With no tray, Esc keeps its legacy interrupt meaning.
 	if msg.String() == "esc" {
+		if m.interaction.slash != nil || m.interaction.files != nil {
+			return m.routeToInteraction(msg)
+		}
 		return m, m.sessionCore.interruptRunning()
 	}
 	// Precedence (4): the viewport consumes ONLY PageUp/PageDown/Home/End (handleKey returns
@@ -878,6 +883,8 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// session's active loop. Manual compaction follows what the user is
 		// viewing, regardless of whether that loop is idle or running.
 		cmd = m.sessionCore.compactToLoop(m.focusedLoopID)
+	} else if action.Kind == uiRunSlash && action.Slash == "/exit" {
+		cmd = m.beginGracefulQuit()
 	} else {
 		cmd, present = m.sessionCore.mapAction(action)
 	}

@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/looprig/cli/tui/components"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
@@ -106,24 +107,40 @@ func TestInteractionComposeUpdate(t *testing.T) {
 	}
 }
 
-func TestHelpTextIncludesCompact(t *testing.T) {
+func TestHelpTextListsOnlyVisibleCommands(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		want string
-	}{
-		{name: "compact command", want: "/compact — compact the conversation"},
+	wants := []string{
+		"/clear — start a new conversation",
+		"/compact — compact the current conversation",
+		"/exit — exit Looprig",
 	}
 
 	got := helpText()
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if !strings.Contains(got, tt.want) {
-				t.Errorf("helpText() = %q, want substring %q", got, tt.want)
-			}
-		})
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Errorf("helpText() = %q, want substring %q", got, want)
+		}
+	}
+	for _, hidden := range []string{"/help", "/commands"} {
+		if strings.Contains(got, hidden) {
+			t.Errorf("helpText() = %q, must not advertise hidden command %q", got, hidden)
+		}
+	}
+}
+
+func TestHelpIsRecognizedButHiddenFromCompletion(t *testing.T) {
+	t.Parallel()
+
+	if !isSlashCommand("/help") {
+		t.Fatal("isSlashCommand(/help) = false, want hidden compatibility command recognized")
+	}
+	tray := components.NewSlashComplete("/")
+	if tray == nil {
+		t.Fatal("NewSlashComplete(/) = nil")
+	}
+	if got := stripANSI(tray.View()); strings.Contains(got, "/help") {
+		t.Errorf("slash tray advertises hidden /help: %q", got)
 	}
 }
 
@@ -932,16 +949,16 @@ func TestInteractionComposeSlashNavigation(t *testing.T) {
 			wantSlash: "/compact",
 		},
 		{
-			name:      "two downs then enter dispatches help",
+			name:      "two downs then enter dispatches exit",
 			keys:      []tea.KeyPressMsg{{Code: tea.KeyDown}, {Code: tea.KeyDown}, {Code: tea.KeyEnter}},
 			wantKind:  uiRunSlash,
-			wantSlash: "/help",
+			wantSlash: "/exit",
 		},
 		{
-			name:      "up wraps and enter dispatches help",
+			name:      "up wraps and enter dispatches exit",
 			keys:      []tea.KeyPressMsg{{Code: tea.KeyUp}, {Code: tea.KeyEnter}},
 			wantKind:  uiRunSlash,
-			wantSlash: "/help",
+			wantSlash: "/exit",
 		},
 		{
 			name:      "tab fills clear",
@@ -972,6 +989,50 @@ func TestInteractionComposeSlashNavigation(t *testing.T) {
 			}
 			if m.slash != nil {
 				t.Errorf("slash panel = %+v, want nil after dispatch/fill", m.slash)
+			}
+		})
+	}
+}
+
+func TestInteractionEscapeDismissesCompletionWithoutEditingDraft(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		seed string
+		open func(*interactionModel)
+	}{
+		{
+			name: "slash tray",
+			seed: "/co",
+			open: func(m *interactionModel) { m.slash = components.NewSlashComplete("/co") },
+		},
+		{
+			name: "file tray",
+			seed: "review @tui/sc",
+			open: func(m *interactionModel) {
+				m.files = components.NewFileComplete([]components.FileItem{{Path: "tui/screen.go"}})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newInteractionModel()
+			m.input.SetValue(tt.seed)
+			tt.open(&m)
+
+			m, action, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+			if action.Kind != uiNoop || cmd != nil {
+				t.Errorf("escape result = action %+v cmd %v, want consumed no-op", action, cmd)
+			}
+			if got := m.input.Value(); got != tt.seed {
+				t.Errorf("draft after escape = %q, want unchanged %q", got, tt.seed)
+			}
+			if m.slash != nil || m.files != nil {
+				t.Errorf("completion after escape: slash=%v files=%v, want both dismissed", m.slash, m.files)
 			}
 		})
 	}

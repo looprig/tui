@@ -386,6 +386,10 @@ func (m interactionModel) answerKey(msg tea.KeyPressMsg) (interactionModel, uiAc
 // editor's blink Cmd so the composer cursor keeps blinking. The panel-navigation and
 // submit/run keys are pure state changes — they return a nil Cmd.
 func (m interactionModel) composeKey(msg tea.KeyPressMsg) (interactionModel, uiAction, tea.Cmd) {
+	if msg.String() == "esc" && (m.slash != nil || m.files != nil) {
+		m.slash, m.files = nil, nil
+		return m, noop, nil
+	}
 	if m.slash != nil {
 		if isEnter(msg) {
 			name := m.slash.Selected().Name
@@ -516,8 +520,13 @@ func slashAction(name string) uiAction {
 	return uiAction{Kind: uiRunSlash, Slash: name}
 }
 
-// isSlashCommand reports whether name is one of the canonical slash commands.
+// isSlashCommand reports whether name is a visible command or the exact hidden
+// /help compatibility command. Hidden commands are deliberately kept out of the
+// component command table so they never appear in completion or helpText.
 func isSlashCommand(name string) bool {
+	if name == "/help" {
+		return true
+	}
 	for _, c := range components.SlashCommands {
 		if c.Name == name {
 			return true
