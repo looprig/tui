@@ -2192,7 +2192,7 @@ func TestModernAskUserDispatches(t *testing.T) {
 
 // TestModernClearReopensAndResubscribes pins /clear parity: the slash command flips to Resetting
 // and reopens the agent (via the core); the reopen result swaps in the fresh agent, RESETS the
-// modern view (focus back to the fresh primary, viewport cleared), and re-subscribes with the
+// modern view (focus back to the fresh primary, fresh-session banner shown), and re-subscribes with the
 // ALL-LOOPS filter — a /clear must not silently narrow the modern scope to active-only.
 func TestModernClearReopensAndResubscribes(t *testing.T) {
 	t.Parallel()
@@ -2200,6 +2200,7 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	old := &fakeAgent{activeLoopID: callID(1)}
 	fresh := &fakeAgent{activeLoopID: callID(2)}
 	m := newScreenSized(t, old, 80, 24)
+	m.banner = AgentBanner{Name: "SWE"}
 	m.openAgent = fakeOpen(fresh)
 	m = feed(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
 	m = feed(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
@@ -2225,11 +2226,12 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	if m.focusedLoopID != fresh.ActiveLoopID() {
 		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.ActiveLoopID())
 	}
-	if len(m.transcript.testCommitted()) != 0 {
-		t.Errorf("committed = %d, want 0 (transcript reset)", len(m.transcript.testCommitted()))
+	committed := m.transcript.testCommitted()
+	if len(committed) != 1 || !strings.Contains(committedText(committed[0]), "SWE") {
+		t.Errorf("committed after clear = %+v, want exactly the fresh-session SWE banner", committed)
 	}
-	if len(m.viewport.lines) != 0 {
-		t.Errorf("viewport lines = %d, want 0 (viewport reset)", len(m.viewport.lines))
+	if got := plainAll(m.viewport.lines); !strings.Contains(got, "SWE") {
+		t.Errorf("viewport after clear = %q, want fresh-session banner (replacement must not look blank)", got)
 	}
 	if cmd == nil {
 		t.Fatal("reopen cmd = nil, want re-subscribe")
@@ -2597,7 +2599,7 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		m := runningScreen(t, agent)
 
 		m, first := updateScreen(t, m, ctrlKey('c'))
-		m, second := updateScreen(t, m, ctrlKey('c'))
+		_, second := updateScreen(t, m, ctrlKey('c'))
 
 		if second != nil {
 			t.Fatalf("second ctrl+c cmd = %v, want nil while first close is pending", second)

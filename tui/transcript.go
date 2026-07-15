@@ -1404,6 +1404,10 @@ func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
 // always holds. A loop runs its turns sequentially and every subagent completes before its
 // parent turn ends, so no still-running sibling accumulator is wrongly dropped. Clone-on-
 // write (value-copy contract): a fresh map + accumOrder omitting the keys, never in-place.
+// The matching child→spawn relationships are retired at the same boundary. Without that
+// tombstone, an already-published child terminal delivered after the parent's terminal can
+// call subagentTerminal, recreate the deleted accumulator, and make the card reappear below
+// the committed turn notice.
 func (m *transcriptModel) clearLoopAccums(loopID uuid.UUID) {
 	drop := make(map[spawnKey]bool)
 	for k := range m.subagentAccum {
@@ -1428,6 +1432,18 @@ func (m *transcriptModel) clearLoopAccums(loopID uuid.UUID) {
 	}
 	m.subagentAccum = next
 	m.accumOrder = order
+
+	// Retire every direct child whose spawn belonged to the terminating parent. All-loop
+	// delivery preserves each loop's order, not cross-loop ordering, so a child's terminal
+	// may legitimately arrive after this parent terminal. Removing the relationship makes
+	// every late child fold a no-op for the detached card instead of resurrecting it.
+	parents := cloneLoopParent(m.loopParent)
+	for child, key := range parents {
+		if key.parentLoopID == loopID {
+			delete(parents, child)
+		}
+	}
+	m.loopParent = parents
 }
 
 // cloneLoopParent returns a fresh copy of the child→spawnKey map (nil-safe), so a

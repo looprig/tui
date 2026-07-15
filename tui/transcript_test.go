@@ -2626,6 +2626,50 @@ func TestSubagentAccumClearedDespiteTurnMismatch(t *testing.T) {
 	}
 }
 
+// TestLateChildTerminalDoesNotResurrectClearedSubagent reproduces the all-loop fan-in
+// ordering that made a completed Subagent card reappear below the parent's "turn ran"
+// notice: the parent terminal clears the pending accumulator, then an already-published
+// child terminal is delivered late. Once the parent has retired that spawn, no child
+// terminal kind may recreate its accumulator.
+func TestLateChildTerminalDoesNotResurrectClearedSubagent(t *testing.T) {
+	t.Parallel()
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	terminals := []struct {
+		name string
+		ev   event.Event
+	}{
+		{name: "done", ev: event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}}},
+		{name: "failed", ev: event.TurnFailed{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}}},
+		{name: "interrupted", ev: event.TurnInterrupted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}}},
+	}
+
+	for _, tt := range terminals {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{}
+			m = m.ApplyEvent(childLoopStarted(sub, "operator", primary, turn, step, "toolu_spawn"))
+			m = m.ApplyEvent(childTurnStarted(sub, "inspect the repository"))
+			if got := len(m.pendingSubagentCardsFor(primary)); got != 1 {
+				t.Fatalf("pending cards before parent terminal = %d, want 1", got)
+			}
+
+			m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: primary, TurnID: turn}}})
+			if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+				t.Fatalf("pending cards after parent terminal = %d, want 0", got)
+			}
+
+			m = m.ApplyEvent(tt.ev)
+			if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+				t.Errorf("pending cards after late child %s = %d, want 0 (retired spawn must stay retired)", tt.name, got)
+			}
+		})
+	}
+}
+
 // TestSubagentAccumClearedOnParentInterrupt: a child fills its accumulator, then the
 // PARENT turn is interrupted before the orchestrator reconciles it. The stale accumulator
 // must be cleared so it does not leak into the next turn as a lingering pending card.

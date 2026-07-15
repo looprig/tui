@@ -378,6 +378,41 @@ func TestReopenAgentClosesOldBeforeOpeningReplacement(t *testing.T) {
 	}
 }
 
+// TestReopenAgentKeepsSuccessfulOpenerContextAlive reproduces the SWE /clear failure:
+// SWE derives the replacement session's loop lifetime from the context passed to OpenAgent.
+// A successful reopen must therefore keep that context live until the application context
+// itself is cancelled; cancelling a construction-only child on return kills the fresh loop
+// and makes the next submit fail with "session: loop exited".
+func TestReopenAgentKeepsSuccessfulOpenerContextAlive(t *testing.T) {
+	t.Parallel()
+
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
+	old := &fakeAgent{}
+	fresh := &fakeAgent{}
+	var openerCtx context.Context
+
+	res := reopenAgent(appCtx, old, func(ctx context.Context) (Agent, error) {
+		openerCtx = ctx
+		return fresh, nil
+	}, newReopenHandoff())().(reopenResultMsg)
+	if res.err != nil || res.agent != fresh {
+		t.Fatalf("reopen = (agent %p, err %v), want fresh %p with nil error", res.agent, res.err, fresh)
+	}
+	select {
+	case <-openerCtx.Done():
+		t.Fatalf("successful opener context already cancelled: %v", openerCtx.Err())
+	default:
+	}
+
+	cancelApp()
+	select {
+	case <-openerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("opener context did not follow application cancellation")
+	}
+}
+
 // TestReopenAgentClosesPartialReplacementOnError guards the opener contract defensively:
 // if construction returns both an agent and an error, the unusable partial replacement must
 // be closed before the terminal error is delivered.

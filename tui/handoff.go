@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const handoffFinalizeTimeout = closeTimeout + reopenTimeout + time.Second
+// handoffFinalizeTimeout bounds runtime teardown while a /clear handoff is still in flight.
+// Replacement construction receives the application-lifetime context (see reopenAgent), so
+// this is only the finalizer's wait budget; it is not passed into the replacement session.
+const handoffFinalizeTimeout = closeTimeout + 5*time.Second + time.Second
 
 // reopenHandoff coordinates ownership between the asynchronous /clear command, the Update
 // loop, and cli.Run. Exactly one consumer claims the completed result: Update installs it, or

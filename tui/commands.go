@@ -27,9 +27,6 @@ const interruptTimeout = 2 * time.Second
 // cannot strand the slash-command dispatch.
 const compactDispatchTimeout = 2 * time.Second
 
-// reopenTimeout bounds a /clear reopen so a slow agent construction cannot hang.
-const reopenTimeout = 5 * time.Second
-
 // closeTimeout bounds a best-effort close so a hung session cannot wedge quit.
 const closeTimeout = 5 * time.Second
 
@@ -173,7 +170,10 @@ func provideAnswerCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID
 // reopenAgent hands ownership from old to a fresh /clear session. It closes old first so
 // exclusive resources (notably a workspace root lease) are released before open constructs
 // the replacement. Once close starts there is no rollback: a close/open error is terminal and
-// the Update loop exits instead of pretending the old session remains live.
+// the Update loop exits instead of pretending the old session remains live. ctx is the
+// APPLICATION-lifetime context: OpenAgent implementations may derive the replacement
+// session's own lifetime from it, so it must not be wrapped in a short construction timeout
+// or cancelled when OpenAgent returns.
 func reopenAgent(ctx context.Context, old Agent, open OpenAgent, handoff *reopenHandoff) tea.Cmd {
 	return func() tea.Msg {
 		result := reopenResultMsg{handoff: handoff}
@@ -185,9 +185,7 @@ func reopenAgent(ctx context.Context, old Agent, open OpenAgent, handoff *reopen
 			result.err = fmt.Errorf("close current session: %w", err)
 			return result
 		}
-		rctx, cancel := context.WithTimeout(ctx, reopenTimeout)
-		defer cancel()
-		a, err := open(rctx)
+		a, err := open(ctx)
 		if err != nil && a != nil {
 			partialCloseCtx, partialCloseCancel := context.WithTimeout(context.Background(), closeTimeout)
 			if closeErr := a.Close(partialCloseCtx); closeErr != nil {

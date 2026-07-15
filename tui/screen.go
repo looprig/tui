@@ -700,6 +700,11 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	m.viewport = viewportModel{atTail: true}
 	m.startupPending = false
 	m.startupCommitted = false
+	// /clear installs a brand-new session without re-running Init, so no later
+	// systemReadyMsg will rebuild its opening surface. Commit the replacement's banner
+	// here: otherwise a successful swap leaves an empty viewport and looks exactly like
+	// the old session merely closed.
+	m.commitStartup()
 	m.rerender()
 	if m.quitAfterReopen {
 		m.closing = newAgentCloseHandoff(m.agent)
