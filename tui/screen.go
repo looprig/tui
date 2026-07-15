@@ -29,8 +29,9 @@ import (
 // The core owns event routing exactly as it does for Screen; Screen adds ONLY the
 // viewport presentation. Update delegates transport to the core then re-renders the focused
 // projection into the viewport (keeping the auto-follow tail pinned); View composes, top to
-// bottom, the viewport content, one status line, a blank gap, the bottom box, a blank gap, and
-// the active-loops bar, and returns a per-frame View with AltScreen + cell-motion mouse (the
+// bottom, the viewport content, one status line, a blank gap, an optional completion tray, the
+// bottom box, a blank gap, and the active-loops bar, and returns a per-frame View with
+// AltScreen + cell-motion mouse (the
 // v2 fields the copy-while-scrolling design turns on). Agent() is promoted from the embedded
 // sessionCore, so Screen satisfies the composition root's agentHolder through that single
 // definition.
@@ -892,8 +893,8 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // wherever the pointer sits (the viewport reads only the wheel's direction), so it is routed
 // unconditionally. A content-region click/drag/release drives the viewport's select/copy and
 // (on a plain click) toggles the clicked entry's fold. A bar-region LEFT click focuses the
-// loop whose segment covers the column (barMouse → focusLoop). The status/box regions have no
-// mouse behavior (keys drive the composer/prompt).
+// loop whose segment covers the column (barMouse → focusLoop). The status/tray/box regions
+// have no mouse behavior (keys drive completion and the composer/prompt).
 func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
 		return m.viewport.handleMouse(w)
@@ -904,7 +905,7 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return m.contentMouse(msg, mouse)
 	case regionBar:
 		return m.barMouse(msg, mouse)
-	default: // regionStatus, regionBox, regionGap — keys (not the mouse) drive these, gaps are inert.
+	default: // regionStatus, regionTray, regionBox, regionGap — keyboard-driven or inert.
 		return nil
 	}
 }
@@ -987,12 +988,15 @@ func (m *Screen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 // (which draws the regions) and regionAt (which hit-tests a mouse row) compute from, so a
 // drawn row and a hit-tested row can never disagree. Top to bottom: the content region
 // occupies rows [0, contentH); then an inert blank pad row, the status line, a blank gap row,
-// the bottom box, a second blank gap row, and finally the active-loops bar at the very bottom.
+// an optional completion tray, the bottom box, a second blank gap row, and finally the
+// active-loops bar at the very bottom.
 type screenLayout struct {
 	contentH int // viewport content rows: region [0, contentH)
 	padTopY  int // the inert blank pad row between the content and the status line
 	statusY  int // the status line row
-	gapTopY  int // the inert blank gap row between the status line and the box
+	gapTopY  int // the inert blank gap row between the status line and tray/box
+	trayTop  int // the first row of the optional completion tray
+	trayH    int // the completion tray's rendered height; zero when hidden
 	boxTop   int // the first row of the bottom box
 	boxH     int // the bottom box's rendered height
 	gapBotY  int // the inert blank gap row between the box and the loop bar
@@ -1000,14 +1004,13 @@ type screenLayout struct {
 }
 
 // layout derives the region geometry from the current frame: the bottom box is measured
-// first (its height varies with the composer/prompt), then the status, the blank pad row above
-// it, the two blank gap rows, and the bar reserve one row each, and the viewport content gets
-// whatever remains (floored at 0). Because it is deterministic in the model state, View and
-// regionAt compute the identical layout.
+// first (its height varies with the composer/prompt), along with the optional completion tray,
+// then the status, the blank pad row above it, the two blank gap rows, and the bar reserve one
+// row each, and the viewport content gets whatever remains (floored at 0). Because it is
+// deterministic in the model state, View and regionAt compute the identical layout.
 //
-// The row order is pad → status → gap → box → gap → bar (an inert blank pad row sets the
-// status line off the content above it; the input box sits ABOVE the loop bar, each set off by
-// an inert blank row), matching composeBody's stacking exactly.
+// The row order is pad → status → gap → optional tray → box → gap → bar. There is deliberately
+// no blank row between tray and box, so their accent rails read as one continuous surface.
 //
 // NOT side-effect-free: measuring the box (bottomBoxView → the bubbles textarea's View)
 // drives the textarea's internal render/measure cache, so layout must run only on Bubble
@@ -1019,14 +1022,19 @@ func (m Screen) layout() screenLayout {
 	if boxH < 1 {
 		boxH = 1
 	}
-	contentH := m.height - padH - statusH - gapH - boxH - gapH - barH
+	trayH := 0
+	if tray := m.completionTrayView(); tray != "" {
+		trayH = lipgloss.Height(tray)
+	}
+	contentH := m.height - padH - statusH - gapH - trayH - boxH - gapH - barH
 	if contentH < 0 {
 		contentH = 0
 	}
 	padTopY := contentH
 	statusY := padTopY + padH
 	gapTopY := statusY + statusH
-	boxTop := gapTopY + gapH
+	trayTop := gapTopY + gapH
+	boxTop := trayTop + trayH
 	gapBotY := boxTop + boxH
 	barY := gapBotY + gapH
 	return screenLayout{
@@ -1034,6 +1042,8 @@ func (m Screen) layout() screenLayout {
 		padTopY:  padTopY,
 		statusY:  statusY,
 		gapTopY:  gapTopY,
+		trayTop:  trayTop,
+		trayH:    trayH,
 		boxTop:   boxTop,
 		boxH:     boxH,
 		gapBotY:  gapBotY,
@@ -1042,8 +1052,8 @@ func (m Screen) layout() screenLayout {
 }
 
 // screenRegion is a frame region the mouse can fall in — the content viewport, the status
-// line, the bottom box, the loop bar, or an inert gap row — the discriminant handleMouse
-// routes on.
+// line, the completion tray, the bottom box, the loop bar, or an inert gap row — the
+// discriminant handleMouse routes on. Tray rows are explicitly inert in this first version.
 type screenRegion uint8
 
 const (
@@ -1051,13 +1061,15 @@ const (
 	regionStatus
 	regionBar
 	regionBox
+	regionTray
 	regionGap
 )
 
 // regionAt maps a terminal row y to its frame region using the same layout View draws, so
 // mouse routing (content select/copy vs a bar focus click) matches what the user sees. The
 // inert blank pad row above the status line, the two blank gap rows (and any row past the bar)
-// are regionGap — inert, no mouse behavior.
+// are regionGap — inert, no mouse behavior. Completion tray rows are regionTray, also inert,
+// so they can never be mistaken for transcript content or composer rows.
 func (m Screen) regionAt(y int) screenRegion {
 	lay := m.layout()
 	switch {
@@ -1065,6 +1077,8 @@ func (m Screen) regionAt(y int) screenRegion {
 		return regionContent
 	case y == lay.statusY:
 		return regionStatus
+	case y >= lay.trayTop && y < lay.trayTop+lay.trayH:
+		return regionTray
 	case y >= lay.boxTop && y < lay.boxTop+lay.boxH:
 		return regionBox
 	case y == lay.barY:
@@ -1361,6 +1375,24 @@ func (m Screen) bottomBoxView() string {
 	return bottomBox(m.surfaceInputs())
 }
 
+// completionTrayView renders the active compose-mode completion list at the full terminal
+// width. Slash commands and @path files are mutually exclusive in interactionModel; slash
+// wins defensively if an invalid state supplies both. Prompt modes suppress stale completers
+// because their controls replace the composer until the pending prompt is resolved.
+func (m Screen) completionTrayView() string {
+	if m.interaction.mode != modeCompose {
+		return ""
+	}
+	switch {
+	case m.interaction.slash != nil:
+		return m.interaction.slash.ViewWidth(m.width)
+	case m.interaction.files != nil:
+		return m.interaction.files.ViewWidth(m.width)
+	default:
+		return ""
+	}
+}
+
 // surfaceInputs builds the agent-free snapshot the shared bottom-box + status primitives
 // read: the interaction model, the FOCUSED loop's status + live signals, and the frame
 // dimensions.
@@ -1468,8 +1500,9 @@ func formatElapsed(d time.Duration) string {
 }
 
 // View composes the frame top to bottom — the viewport content (the focused projection with
-// collapse), one status line, a blank gap, the bottom box, a blank gap, and the active-loops
-// bar — and returns a per-frame View with the modern configuration: AltScreen on and
+// collapse), one status line, a blank gap, an optional completion tray, the bottom box, a
+// blank gap, and the active-loops bar — and returns a per-frame View with the modern
+// configuration: AltScreen on and
 // cell-motion mouse (the v2
 // per-frame fields the copy-while-scrolling design turns on), plus the composer's Kitty
 // keyboard request (see Screen.View for why). It returns an empty view until the first sized
@@ -1487,10 +1520,11 @@ func (m Screen) View() tea.View {
 
 // composeBody stacks the frame's rows for lay: the viewport content padded/clamped to
 // EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then an inert
-// blank pad row, the status line, an inert blank gap row, the bottom box, a second inert blank
-// gap row, and the active-loops bar at the very bottom. The blank pad row sets the status line
-// off the content above it, and the input box sits ABOVE the loop bar, each set off by a blank
-// row so the chrome does not read as cramped. The viewport is sized to
+// blank pad row, the status line, an inert blank gap row, the optional completion tray, the
+// bottom box, a second inert blank gap row, and the active-loops bar at the very bottom. The
+// tray directly touches the input so their thick rails connect. The blank pad row sets the
+// status line off the content above it, and the input box sits ABOVE the loop bar, set off by
+// a blank row so the chrome does not read as cramped. The viewport is sized to
 // lay.contentH on a LOCAL copy before rendering, so the drawn content region always matches
 // the current layout even if the bottom chrome changed since the last Update-side
 // resize/rerender. Every line is width-clamped (truncate, never wrap) so no row exceeds the
@@ -1509,9 +1543,12 @@ func (m Screen) composeBody(lay screenLayout) string {
 	for len(rows) < lay.contentH {
 		rows = append(rows, "")
 	}
-	rows = append(rows, "")                                        // inert pad: content → status
-	rows = append(rows, m.statusLine())                            // status line
-	rows = append(rows, "")                                        // inert gap: status → box
+	rows = append(rows, "")             // inert pad: content → status
+	rows = append(rows, m.statusLine()) // status line
+	rows = append(rows, "")             // inert gap: status → tray/box
+	if tray := m.completionTrayView(); tray != "" {
+		rows = append(rows, strings.Split(tray, "\n")...) // completion tray (touches input)
+	}
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
 	rows = append(rows, "")                                        // inert gap: box → bar
 	rows = append(rows, m.bar().Render(m.width))                   // active-loops bar (very bottom)

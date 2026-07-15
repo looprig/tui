@@ -10,7 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/looprig/cli/tui/components"
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
@@ -363,6 +365,133 @@ func TestModernRegionAt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := m.regionAt(tt.y); got != tt.want {
 				t.Errorf("regionAt(%d) = %d, want %d", tt.y, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestModernCompletionTrayLayoutAndRegions(t *testing.T) {
+	t.Parallel()
+
+	agent := &fakeAgent{activeLoopID: callID(1)}
+	m := newScreenSized(t, agent, 48, 24)
+	closed := m.layout()
+
+	m.interaction.slash = components.NewSlashComplete("/")
+	tray := m.completionTrayView()
+	if tray == "" {
+		t.Fatal("completionTrayView() = empty, want slash tray")
+	}
+	lay := m.layout()
+	if got, want := lay.trayH, lipgloss.Height(tray); got != want {
+		t.Errorf("trayH = %d, want rendered height %d", got, want)
+	}
+	if got, want := lay.contentH, closed.contentH-lay.trayH; got != want {
+		t.Errorf("contentH = %d, want closed contentH %d - trayH %d = %d", got, closed.contentH, lay.trayH, want)
+	}
+	if lay.trayTop != lay.gapTopY+1 {
+		t.Errorf("trayTop = %d, want directly below status gap at %d", lay.trayTop, lay.gapTopY+1)
+	}
+	if lay.boxTop != lay.trayTop+lay.trayH {
+		t.Errorf("boxTop = %d, want tray bottom %d (no gap)", lay.boxTop, lay.trayTop+lay.trayH)
+	}
+	for i, line := range strings.Split(tray, "\n") {
+		if got := lipgloss.Width(line); got != m.width {
+			t.Errorf("tray row %d width = %d, want full terminal width %d", i, got, m.width)
+		}
+	}
+	if got := m.regionAt(lay.trayTop); got != regionTray {
+		t.Errorf("regionAt(trayTop) = %d, want inert regionTray %d", got, regionTray)
+	}
+	if got := m.regionAt(lay.trayTop + lay.trayH - 1); got != regionTray {
+		t.Errorf("regionAt(last tray row) = %d, want inert regionTray %d", got, regionTray)
+	}
+}
+
+func TestModernCompletionTrayAppearsAboveInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		open func(*Screen)
+		want string
+	}{
+		{
+			name: "slash command",
+			open: func(m *Screen) { m.interaction.slash = components.NewSlashComplete("/co") },
+			want: "/compact",
+		},
+		{
+			name: "file with full at path",
+			open: func(m *Screen) {
+				m.interaction.files = components.NewFileComplete([]components.FileItem{{Path: "tui/screen.go"}})
+			},
+			want: "@tui/screen.go",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+			tt.open(&m)
+			lay := m.layout()
+			rows := strings.Split(m.composeBody(lay), "\n")
+			if got := ansi.Strip(rows[lay.trayTop]); !strings.Contains(got, tt.want) {
+				t.Errorf("first tray row = %q, want %q", got, tt.want)
+			}
+			if lay.boxTop != lay.trayTop+lay.trayH {
+				t.Errorf("boxTop = %d, want %d: tray must touch input", lay.boxTop, lay.trayTop+lay.trayH)
+			}
+		})
+	}
+}
+
+func TestModernCompletionTrayResizeOpenAndClose(t *testing.T) {
+	t.Parallel()
+
+	m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+	closedH := m.layout().contentH
+	m, _ = updateScreen(t, m, runeKey('/'))
+	open := m.layout()
+	if open.trayH == 0 {
+		t.Fatal("typing slash did not open completion tray")
+	}
+	if got := m.viewport.height; got != open.contentH {
+		t.Errorf("viewport height after open = %d, want layout contentH %d", got, open.contentH)
+	}
+
+	m, _ = updateScreen(t, m, runeKey('z'))
+	closed := m.layout()
+	if closed.trayH != 0 {
+		t.Errorf("trayH after unmatched /z = %d, want 0", closed.trayH)
+	}
+	if closed.contentH != closedH {
+		t.Errorf("contentH after close = %d, want restored %d", closed.contentH, closedH)
+	}
+	if got := m.viewport.height; got != closedH {
+		t.Errorf("viewport height after close = %d, want restored %d", got, closedH)
+	}
+}
+
+func TestModernCompletionTrayHiddenOutsideComposeMode(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []interactionMode{modePermissionPrompt, modeChoicePrompt, modeAnswerPrompt} {
+		mode := mode
+		t.Run(fmt.Sprintf("mode %d", mode), func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+			// Seed both fields to prove prompt suppression is mode-based even if stale
+			// state violates the normal mutually-exclusive completion invariant.
+			m.interaction.slash = components.NewSlashComplete("/")
+			m.interaction.files = components.NewFileComplete([]components.FileItem{{Path: "tui/screen.go"}})
+			m.interaction.mode = mode
+			if got := m.completionTrayView(); got != "" {
+				t.Errorf("completionTrayView() in prompt mode = %q, want empty", got)
+			}
+			if got := m.layout().trayH; got != 0 {
+				t.Errorf("prompt-mode trayH = %d, want 0", got)
 			}
 		})
 	}
