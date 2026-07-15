@@ -16,7 +16,13 @@ import (
 var (
 	gradLime = rgb{0xD5, 0xF8, 0x4D} // #D5F84D
 	gradBlue = rgb{0xA2, 0xD2, 0xFF} // #A2D2FF
+
+	hoverGlowBase = rgb{0x73, 0x73, 0x73} // quiet gray: the light is off
 )
+
+// hoverGlowFinalFrame is the settled frame of the one-shot hover light: three direct
+// transitions from quiet gray to brand blue, with no bright overshoot.
+const hoverGlowFinalFrame uint = 3
 
 // gradSpatialFreq is the gradient's angular step PER CHARACTER (radians): how quickly the
 // color sweeps along the label. ~0.45 rad/char spreads a little over half a cosine cycle
@@ -94,4 +100,60 @@ func gradientLabel(s string, phase uint) string {
 		b.WriteString(gradientGlyph(string(r), float64(i), phase))
 	}
 	return b.String()
+}
+
+// hoverGlowColor returns the one-shot hover color for frame: three even transitions from
+// quiet gray directly to pastel blue. Frames beyond the animation clamp to the settled
+// color, so a stationary hover is static.
+func hoverGlowColor(frame uint) color.Color {
+	if frame >= hoverGlowFinalFrame {
+		return lipgloss.Color(gradBlue.hex())
+	}
+	t := float64(frame) / float64(hoverGlowFinalFrame)
+	return lipgloss.Color(hoverGlowBase.lerp(gradBlue, t).hex())
+}
+
+// brandBlueLabel renders an action row in the palette's pastel-blue endpoint and underlines
+// only [underlineStart, underlineEnd). Keeping the row color and semantic link span separate
+// prevents rails, node glyphs, tool names and trailing layout cells from gaining an underline.
+// It is intentionally static so hover can be compared with the gradient preserved in git.
+func brandBlueLabel(s string, glowFrame uint) string {
+	return brandBlueLabelSpan(s, 0, 0, glowFrame)
+}
+
+func brandBlueLabelSpan(s string, underlineStart, underlineEnd int, glowFrame uint) string {
+	blue := lipgloss.NewStyle().Foreground(hoverGlowColor(glowFrame))
+	if underlineStart < 0 || underlineEnd > len(s) || underlineStart >= underlineEnd {
+		return blue.Render(s)
+	}
+	link := blue.Underline(true)
+	var b strings.Builder
+	if underlineStart > 0 {
+		b.WriteString(blue.Render(s[:underlineStart]))
+	}
+	b.WriteString(link.Render(s[underlineStart:underlineEnd]))
+	if underlineEnd < len(s) {
+		b.WriteString(blue.Render(s[underlineEnd:]))
+	}
+	return b.String()
+}
+
+// brandBlueTranscriptLabel selects the semantic link within a clickable transcript row:
+// "thought for Ns" without its rail, or only "N tool(s)" in a collapsed tool-run summary.
+// Expanded tool nodes remain blue on hover but carry no underline because the group label is
+// absent and tool names themselves are not the collapse link.
+func brandBlueTranscriptLabel(s string, phase uint) string {
+	if strings.HasPrefix(s, thinkingRail) {
+		return brandBlueLabelSpan(s, len(thinkingRail), len(strings.TrimRight(s, " ")), phase)
+	}
+	if divider := strings.Index(s, " · "); divider >= 0 {
+		if glyphEnd := strings.IndexByte(s, ' '); glyphEnd >= 0 {
+			labelStart := glyphEnd + 1
+			label := s[labelStart:divider]
+			if strings.HasSuffix(label, " tool") || strings.HasSuffix(label, " tools") {
+				return brandBlueLabelSpan(s, labelStart, divider, phase)
+			}
+		}
+	}
+	return brandBlueLabel(s, phase)
 }

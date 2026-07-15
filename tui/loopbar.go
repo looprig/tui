@@ -37,7 +37,7 @@ type loopBar struct {
 	active  uuid.UUID
 	max     int
 	hovered uuid.UUID // pointer target; zero means no segment is hovered
-	phase   uint      // shared animation frame for the hovered segment's brand gradient
+	phase   uint      // one-shot glow frame for the hovered segment
 }
 
 // Bar glyphs (design §Active-loops bar): a leading mark per segment — a FILLED ● for the
@@ -261,13 +261,15 @@ func (b loopBar) segPlain(e loopBarEntry) string {
 // segStyled is segBody in the bar's lighter tone: the bar normally renders faint
 // (StatusStyle) so it reads as quiet, subordinate context, and the focused loop is set apart
 // by an additionally BOLD name (plus its filled ● mark). The segment under the pointer instead
-// gets the flowing lime-to-blue action gradient. A pending gate's "!" remains in the warn
+// gets the solid pastel-blue action color, with only its text label underlined (not the mark).
+// A pending gate's "!" remains in the warn
 // color. Styling is zero-width, so segStyled has the same display width as segPlain and the
 // recorded cell spans stay valid.
 func (b loopBar) segStyled(e loopBarEntry) string {
 	body := b.segBody(e)
 	if b.hovered != (uuid.UUID{}) && e.id == b.hovered {
-		out := gradientLabel(body, b.phase)
+		labelStart := len(b.leadMark(e) + barMarkSep)
+		out := brandBlueLabelSpan(body, labelStart, len(body), b.phase)
 		if e.gate {
 			out += styles.NoticeWarnStyle.Render(barGateMark)
 		}

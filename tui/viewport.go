@@ -329,8 +329,8 @@ func (m viewportModel) View() string {
 	return m.viewHovered(0, 0)
 }
 
-// viewHovered draws the ordinary viewport plus a flowing lime-to-blue foreground on
-// the one actionable header identified by hovered. The line is redrawn from plain text
+// viewHovered draws the ordinary viewport plus a solid pastel-blue foreground on the
+// one actionable header identified by hovered. The line is redrawn from plain text
 // so nested renderer ANSI cannot mask the hover color; selection remains higher priority.
 // A zero hovered id means no hover (committed display ids start at one).
 func (m viewportModel) viewHovered(hovered displayID, phase uint) string {
@@ -353,7 +353,7 @@ func (m viewportModel) viewHovered(hovered displayID, phase uint) string {
 			continue
 		}
 		if hovered != 0 && buf[i].clickable && buf[i].entry == hovered {
-			rows = append(rows, gradientLabel(buf[i].plain, phase))
+			rows = append(rows, brandBlueTranscriptLabel(buf[i].plain, phase))
 			continue
 		}
 		rows = append(rows, buf[i].styled)

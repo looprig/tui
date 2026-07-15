@@ -705,11 +705,10 @@ func TestModernContentClickCollapse(t *testing.T) {
 	}
 }
 
-// TestModernClickableHeaderHoverFlowsBrandGradient pins the pointer affordance for
-// transcript actions: hovering a collapsible header changes only its styled rendering,
-// the brand gradient advances with the shared animation phase, and moving onto ordinary
-// body text removes the affordance without changing visible content.
-func TestModernClickableHeaderHoverFlowsBrandGradient(t *testing.T) {
+// TestModernClickableHeaderHoverRunsOneShotGlow pins the pointer affordance for transcript
+// actions: a new target starts at glow frame zero, advances exactly to the settled third frame,
+// does not restart while the pointer stays within it, and cancels on ordinary body text.
+func TestModernClickableHeaderHoverRunsOneShotGlow(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
@@ -719,7 +718,14 @@ func TestModernClickableHeaderHoverFlowsBrandGradient(t *testing.T) {
 	m = feed(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason", "the answer")))
 
 	base := m.View().Content
-	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: 4, Y: 0, Button: tea.MouseNone})
+	var glowCmd tea.Cmd
+	m, glowCmd = updateScreen(t, m, tea.MouseMotionMsg{X: 4, Y: 0, Button: tea.MouseNone})
+	if glowCmd == nil {
+		t.Fatal("entering clickable header did not start the one-shot glow")
+	}
+	if m.hoverGlowFrame != 0 {
+		t.Fatalf("initial hover glow frame = %d, want 0", m.hoverGlowFrame)
+	}
 	hover0 := m.View().Content
 	if hover0 == base {
 		t.Fatal("hovering collapsible header did not change its styled rendering")
@@ -728,10 +734,33 @@ func TestModernClickableHeaderHoverFlowsBrandGradient(t *testing.T) {
 		t.Error("header hover changed visible transcript text, want style-only affordance")
 	}
 
-	m, _ = updateScreen(t, m, animMsg(time.Time{}))
-	hover1 := m.View().Content
-	if hover1 == hover0 {
-		t.Fatal("hovered header styling did not advance with animation phase")
+	epoch := m.hoverGlowEpoch
+	previous := strings.Split(hover0, "\n")[0]
+	for frame := uint(1); frame <= hoverGlowFinalFrame; frame++ {
+		var next tea.Cmd
+		m, next = updateScreen(t, m, hoverGlowMsg{epoch: epoch})
+		if m.hoverGlowFrame != frame {
+			t.Fatalf("hover glow frame = %d, want %d", m.hoverGlowFrame, frame)
+		}
+		got := strings.Split(m.View().Content, "\n")[0]
+		if got == previous {
+			t.Fatalf("header style did not change at glow frame %d", frame)
+		}
+		previous = got
+		if frame < hoverGlowFinalFrame && next == nil {
+			t.Fatalf("glow stopped early at frame %d", frame)
+		}
+		if frame == hoverGlowFinalFrame && next != nil {
+			t.Fatal("settled glow scheduled an unnecessary extra frame")
+		}
+	}
+
+	m, glowCmd = updateScreen(t, m, tea.MouseMotionMsg{X: 5, Y: 0, Button: tea.MouseNone})
+	if glowCmd != nil {
+		t.Error("moving within the same clickable header restarted the glow")
+	}
+	if m.hoverGlowFrame != hoverGlowFinalFrame {
+		t.Errorf("same-target motion reset glow frame to %d", m.hoverGlowFrame)
 	}
 
 	bodyY := -1
@@ -745,16 +774,24 @@ func TestModernClickableHeaderHoverFlowsBrandGradient(t *testing.T) {
 		t.Fatal("fixture has no visible narration body row")
 	}
 	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: 4, Y: bodyY, Button: tea.MouseNone})
+	if m.hoveredEntry != 0 || m.hoverGlowFrame != 0 {
+		t.Errorf("body hover left target=%d frame=%d, want cleared", m.hoveredEntry, m.hoverGlowFrame)
+	}
 	baseHeader := strings.Split(base, "\n")[0]
 	gotHeader := strings.Split(m.View().Content, "\n")[0]
 	if gotHeader != baseHeader {
 		t.Errorf("ordinary body hover retained a clickable header style; got %q want %q", gotHeader, baseHeader)
 	}
+	staleEpoch := epoch
+	m, glowCmd = updateScreen(t, m, hoverGlowMsg{epoch: staleEpoch})
+	if glowCmd != nil || m.hoverGlowFrame != 0 {
+		t.Error("stale glow tick survived after the pointer left its target")
+	}
 }
 
-// TestModernLoopBarHoverFlowsBrandGradient pins the second clickable surface: a loop
-// segment animates while hovered, while its separator and the empty tail stay inert.
-func TestModernLoopBarHoverFlowsBrandGradient(t *testing.T) {
+// TestModernLoopBarHoverRunsOneShotGlow pins the second clickable surface: a loop segment
+// starts the same one-shot glow, while its separator and empty tail remain inert.
+func TestModernLoopBarHoverRunsOneShotGlow(t *testing.T) {
 	t.Parallel()
 
 	primary := callID(1)
@@ -775,7 +812,11 @@ func TestModernLoopBarHoverFlowsBrandGradient(t *testing.T) {
 	}
 	base := barLine(m)
 	lay := m.layout()
-	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: span.start, Y: lay.barY, Button: tea.MouseNone})
+	var glowCmd tea.Cmd
+	m, glowCmd = updateScreen(t, m, tea.MouseMotionMsg{X: span.start, Y: lay.barY, Button: tea.MouseNone})
+	if glowCmd == nil {
+		t.Fatal("entering loop segment did not start the one-shot glow")
+	}
 	hover0 := barLine(m)
 	if hover0 == base {
 		t.Fatal("hovering loop segment did not change its styled rendering")
@@ -784,10 +825,10 @@ func TestModernLoopBarHoverFlowsBrandGradient(t *testing.T) {
 		t.Error("loop hover changed visible bar text, want style-only affordance")
 	}
 
-	m, _ = updateScreen(t, m, animMsg(time.Time{}))
+	m, _ = updateScreen(t, m, hoverGlowMsg{epoch: m.hoverGlowEpoch})
 	hover1 := barLine(m)
 	if hover1 == hover0 {
-		t.Fatal("hovered loop styling did not advance with animation phase")
+		t.Fatal("hovered loop styling did not advance with glow frame")
 	}
 
 	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: span.end, Y: lay.barY, Button: tea.MouseNone})

@@ -1,6 +1,11 @@
 package tui
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+)
 
 // TestRGBLerp covers the channel-wise interpolation and its [0,1] clamp: the two
 // endpoints, the midpoint, an equal-color no-op, and out-of-range t values that must
@@ -65,6 +70,76 @@ func TestGradientLabel(t *testing.T) {
 			// Determinism: same (s, phase) renders identically.
 			if again := gradientLabel(tt.s, tt.phase); again != got {
 				t.Errorf("gradientLabel(%q,%d) not deterministic", tt.s, tt.phase)
+			}
+		})
+	}
+}
+
+// TestHoverGlowColor pins the approved three-step link ignition: quiet gray moves through
+// two muted blues and settles at the palette's pastel blue, with later frames clamped there.
+func TestHoverGlowColor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		frame uint
+		want  string
+	}{
+		{frame: 0, want: "#737373"},
+		{frame: 1, want: "#8393A2"},
+		{frame: 2, want: "#92B2D0"},
+		{frame: 3, want: "#A2D2FF"},
+		{frame: 99, want: "#A2D2FF"},
+	}
+	for _, tt := range tests {
+		r, g, b, _ := hoverGlowColor(tt.frame).RGBA()
+		got := fmt.Sprintf("#%02X%02X%02X", r>>8, g>>8, b>>8)
+		if got != tt.want {
+			t.Errorf("hoverGlowColor(%d) = %q, want %q", tt.frame, got, tt.want)
+		}
+	}
+}
+
+// TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText locks the approved link spans:
+// reasoning excludes its rail, a collapsed tool run underlines only its count label, and an
+// expanded tool node stays colored but does not misrepresent the tool name as the collapse link.
+func TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText(t *testing.T) {
+	t.Parallel()
+
+	blue := lipgloss.NewStyle().Foreground(hoverGlowColor(hoverGlowFinalFrame))
+	link := blue.Underline(true)
+	tests := []struct {
+		name, input, want string
+	}{
+		{
+			name:  "thought excludes rail",
+			input: "│ thought for 3s",
+			want:  blue.Render("│ ") + link.Render("thought for 3s"),
+		},
+		{
+			name:  "plural tool run excludes names",
+			input: "○ 3 tools · Read, Bash",
+			want:  blue.Render("○ ") + link.Render("3 tools") + blue.Render(" · Read, Bash"),
+		},
+		{
+			name:  "singular tool run",
+			input: "○ 1 tool · Bash",
+			want:  blue.Render("○ ") + link.Render("1 tool") + blue.Render(" · Bash"),
+		},
+		{
+			name:  "expanded tool name is not a link",
+			input: "○ Bash(git status)",
+			want:  blue.Render("○ Bash(git status)"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := brandBlueTranscriptLabel(tt.input, hoverGlowFinalFrame)
+			if got != tt.want {
+				t.Errorf("brandBlueTranscriptLabel(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			if plain := stripANSI(got); plain != tt.input {
+				t.Errorf("styled text strips to %q, want original %q", plain, tt.input)
 			}
 		})
 	}

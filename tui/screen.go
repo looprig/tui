@@ -90,10 +90,13 @@ type Screen struct {
 	// hoveredEntry and hoveredLoop are the two pointer-action affordances. A committed
 	// transcript header is stored only when its rendered row is marked clickable; a loop
 	// id is stored only when the active bar's HitTest resolves its segment. Zero means no
-	// hover. View applies the shared animated lime-to-blue gradient dynamically, so an
-	// animation tick never needs to rebuild transcript lines.
-	hoveredEntry displayID
-	hoveredLoop  uuid.UUID
+	// hover. View applies the one-shot blue glow dynamically without rebuilding transcript
+	// lines. hoverGlowFrame advances from gray directly to settled pastel blue;
+	// hoverGlowEpoch invalidates ticks left behind by an earlier pointer target.
+	hoveredEntry   displayID
+	hoveredLoop    uuid.UUID
+	hoverGlowFrame uint
+	hoverGlowEpoch uint64
 
 	// turnStartedAt records each running loop's current-turn start time — set from the
 	// loop's TurnStarted event CreatedAt, deleted on its terminal (TurnDone/Failed/
@@ -113,13 +116,12 @@ type Screen struct {
 	// and otherwise stops, so the timer never ticks forever once the session goes idle.
 	ticking bool
 
-	// anim holds the shell's animation state: its frame counter flows the status-label + dot
-	// and hovered-action lime↔blue gradients. A SINGLE anim tick chain, started at
+	// anim holds the status-line animation state: its frame counter flows the status-label +
+	// dot gradient. A SINGLE anim tick chain, started at
 	// Init and re-armed every blinkInterval, advances it for the life of the program and stops
 	// only on quit (quitting) — kept continuous for lifecycle simplicity rather than gated on
-	// status. Only ACTIVE states render the status gradient, while a hovered transcript header
-	// or loop segment renders the same gradient at any status. The committed transcript never
-	// consults it: View applies hover styling dynamically without rebuilding stored lines.
+	// status. Only ACTIVE states render the status gradient. Hover uses its own short-lived
+	// glow tick so it can animate smoothly without speeding up the status shimmer.
 	anim animState
 
 	// quitting latches on ctrl+c or /exit so the continuous anim tick chain self-terminates instead of
@@ -142,18 +144,27 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
 }
 
-// animMsg is one shell-animation tick carrying its own time (unused at the UI; it satisfies
-// tea.Tick's func(time.Time) tea.Msg shape). Handling it advances the shared gradient phase
-// (m.anim) by one frame and re-arms the next tick, so status and hover shimmer run continuously
-// for the life of the program. It never touches the transcript.
+// animMsg is one status-animation tick carrying its own time (unused at the UI; it satisfies
+// tea.Tick's func(time.Time) tea.Msg shape). Handling it advances the status gradient phase
+// (m.anim) by one frame and re-arms the next tick for the life of the program.
 type animMsg time.Time
 
-// animCmd schedules ONE shell-animation tick after blinkInterval — Screen's animation cadence
+// animCmd schedules ONE status-animation tick after blinkInterval — Screen's animation cadence
 // (commands.go) — delivering an animMsg. handleAnim re-arms it every tick until the shell is
-// quitting, so the modern gradients animate continuously without a per-turn gate. It never
+// quitting, so the modern status gradient animates continuously without a per-turn gate. It never
 // re-renders the transcript.
 func animCmd() tea.Cmd {
 	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return animMsg(t) })
+}
+
+// hoverGlowInterval is the dedicated cadence of the one-shot hover light. Three 70ms
+// transitions produce a roughly 210ms ignition without changing the slower status shimmer.
+const hoverGlowInterval = 70 * time.Millisecond
+
+type hoverGlowMsg struct{ epoch uint64 }
+
+func hoverGlowCmd(epoch uint64) tea.Cmd {
+	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return hoverGlowMsg{epoch: epoch} })
 }
 
 // loopBarCap is the visible-cap the modern active-loops bar renders under: at most
@@ -301,6 +312,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case animMsg:
 		cmd := m.handleAnim()
+		return m, cmd
+	case hoverGlowMsg:
+		cmd := m.handleHoverGlow(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -508,20 +522,35 @@ func (m *Screen) handleTick(msg tickMsg) tea.Cmd {
 	return m.maybeStartTick()
 }
 
-// handleAnim advances the shell gradients one frame and re-arms the next anim tick,
+// handleAnim advances the status gradient one frame and re-arms the next anim tick,
 // UNLESS the shell is quitting (then the chain stops so no tick leaks past tea.Quit). It is a
 // PURE recompose: it advances ONLY m.anim (the gradient phase) and never re-renders the
 // transcript buffer (renderFocused/SetLines) — the transcript is unchanged on an anim tick.
-// View recomposes the status line and any hovered action from the new frame, so advancing the
-// frame and returning the reschedule is the whole update. It runs continuously at every status;
-// the status shimmers only while active, while pointer hover can shimmer at any status. The turn
-// timer keeps its own 1s tick.
+// View recomposes the status line from the new frame, so advancing the frame and returning
+// the reschedule is the whole update. It runs continuously, though the status shimmers only
+// while active. The turn timer and hover glow keep their own cadences.
 func (m *Screen) handleAnim() tea.Cmd {
 	if m.quitting {
 		return nil
 	}
 	m.anim = m.anim.advance()
 	return animCmd()
+}
+
+// handleHoverGlow advances only the currently hovered target's one-shot light. An epoch
+// mismatch means the pointer moved since this tick was scheduled, so the stale chain ends.
+func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
+	if msg.epoch != m.hoverGlowEpoch || (m.hoveredEntry == 0 && m.hoveredLoop == (uuid.UUID{})) {
+		return nil
+	}
+	if m.hoverGlowFrame >= hoverGlowFinalFrame {
+		return nil
+	}
+	m.hoverGlowFrame++
+	if m.hoverGlowFrame >= hoverGlowFinalFrame {
+		return nil
+	}
+	return hoverGlowCmd(msg.epoch)
 }
 
 // handleRestored releases the initial replay barrier. A non-empty historical fold installs
@@ -930,46 +959,72 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
 		// Scrolling changes which content occupies the pointer's row. Clear the old target
 		// rather than leaving an affordance attached to content no longer under the pointer.
-		m.hoveredEntry = 0
-		m.hoveredLoop = uuid.UUID{}
+		m.clearHover()
 		return m.viewport.handleMouse(w)
 	}
 	mouse := msg.Mouse()
 	region := m.regionAt(mouse.Y)
+	var hoverCmd tea.Cmd
 	if _, moving := msg.(tea.MouseMotionMsg); moving {
-		m.updateHover(region, mouse)
+		hoverCmd = m.updateHover(region, mouse)
 	}
+	var regionCmd tea.Cmd
 	switch region {
 	case regionContent:
-		return m.contentMouse(msg, mouse)
+		regionCmd = m.contentMouse(msg, mouse)
 	case regionBar:
-		return m.barMouse(msg, mouse)
-	default: // regionStatus, regionTray, regionBox, regionGap — keyboard-driven or inert.
-		return nil
+		regionCmd = m.barMouse(msg, mouse)
 	}
+	if hoverCmd == nil {
+		return regionCmd
+	}
+	if regionCmd == nil {
+		return hoverCmd
+	}
+	return tea.Batch(hoverCmd, regionCmd)
 }
 
 // updateHover maps a cell-motion event to the same hit targets clicks use. A held-left
 // motion is a text drag, not a hover. Every motion first clears both targets, ensuring
 // gaps and keyboard-only chrome immediately return to their inert appearance.
-func (m *Screen) updateHover(region screenRegion, mouse tea.Mouse) {
-	m.hoveredEntry = 0
-	m.hoveredLoop = uuid.UUID{}
-	if mouse.Button == tea.MouseLeft {
-		return
-	}
-	switch region {
-	case regionContent:
-		if id, ok := m.viewport.clickableEntryAt(mouse.Y); ok {
-			m.hoveredEntry = id
-		}
-	case regionBar:
-		if m.width > 0 {
-			if id, ok := m.bar().HitTest(mouse.X); ok {
-				m.hoveredLoop = id
+func (m *Screen) updateHover(region screenRegion, mouse tea.Mouse) tea.Cmd {
+	var nextEntry displayID
+	var nextLoop uuid.UUID
+	if mouse.Button != tea.MouseLeft {
+		switch region {
+		case regionContent:
+			if id, ok := m.viewport.clickableEntryAt(mouse.Y); ok {
+				nextEntry = id
+			}
+		case regionBar:
+			if m.width > 0 {
+				if id, ok := m.bar().HitTest(mouse.X); ok {
+					nextLoop = id
+				}
 			}
 		}
 	}
+	if nextEntry == m.hoveredEntry && nextLoop == m.hoveredLoop {
+		return nil
+	}
+	m.hoveredEntry = nextEntry
+	m.hoveredLoop = nextLoop
+	m.hoverGlowFrame = 0
+	m.hoverGlowEpoch++
+	if nextEntry == 0 && nextLoop == (uuid.UUID{}) {
+		return nil
+	}
+	return hoverGlowCmd(m.hoverGlowEpoch)
+}
+
+func (m *Screen) clearHover() {
+	if m.hoveredEntry == 0 && m.hoveredLoop == (uuid.UUID{}) {
+		return
+	}
+	m.hoveredEntry = 0
+	m.hoveredLoop = uuid.UUID{}
+	m.hoverGlowFrame = 0
+	m.hoverGlowEpoch++
 }
 
 // barMouse focuses the loop whose active-loops-bar segment covers a LEFT click's column
@@ -1441,7 +1496,7 @@ func (m Screen) bar() loopBar {
 		active:  active,
 		max:     loopBarCap,
 		hovered: m.hoveredLoop,
-		phase:   m.anim.frame,
+		phase:   m.hoverGlowFrame,
 	}
 }
 
@@ -1624,7 +1679,7 @@ func (m Screen) composeBody(lay screenLayout) string {
 	vp.SetSize(m.contentWidth(), lay.contentH)
 
 	rows := make([]string, 0, m.height)
-	if content := vp.viewHovered(m.hoveredEntry, m.anim.frame); content != "" {
+	if content := vp.viewHovered(m.hoveredEntry, m.hoverGlowFrame); content != "" {
 		rows = append(rows, strings.Split(content, "\n")...)
 	}
 	if len(rows) > lay.contentH {
