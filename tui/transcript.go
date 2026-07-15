@@ -407,6 +407,10 @@ type transcriptModel struct {
 	// freshly allocated so a prior model never sees it, and in-place fold into the pointer
 	// is the intended write path within one linear reducer chain.
 	projections map[uuid.UUID]*loopProjection
+	// compactionCompletions owns display idempotency for durable compaction success rows.
+	// Event IDs are session-global and the map is cloned on write so replay, live delivery,
+	// and restore folding all share one value-safe deduplication rule.
+	compactionCompletions map[uuid.UUID]struct{}
 }
 
 // spawnKey identifies one Subagent tool call's spawn: the parent loop/turn/step
@@ -502,6 +506,8 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.markQueued(ev.Cause.CommandID, ev.LoopID)
 	case event.InputCancelled:
 		m.dropQueued(ev.Cause.CommandID)
+	case event.CompactionCommitted:
+		m = m.commitCompactionCompletion(ev)
 	}
 	p := m.ensureProjection(loopID)
 	m.fold = p
@@ -542,6 +548,47 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	}
 	m.fold = nil
 	return m
+}
+
+func (m transcriptModel) commitCompactionCompletion(ev event.CompactionCommitted) transcriptModel {
+	eventID := ev.EventHeader().EventID
+	if eventID.IsZero() {
+		return m
+	}
+	if _, duplicate := m.compactionCompletions[eventID]; duplicate {
+		return m
+	}
+	m.compactionCompletions = cloneCompactionCompletionIDs(m.compactionCompletions)
+	m.compactionCompletions[eventID] = struct{}{}
+	m = m.detachCompactionCompletionProjection(ev.EventHeader().LoopID)
+	return m.CommitHarnessFor(ev.EventHeader().LoopID, "conversation compacted in "+formatElapsed(ev.Duration))
+}
+
+// detachCompactionCompletionProjection gives the next reducer value ownership of the
+// target projection before CommitHarnessFor appends its row. Other loop projections remain
+// shared and untouched; an absent target is left for CommitHarnessFor to create normally.
+func (m transcriptModel) detachCompactionCompletionProjection(loopID uuid.UUID) transcriptModel {
+	projection, ok := m.projections[loopID]
+	if !ok || projection == nil {
+		return m
+	}
+	next := make(map[uuid.UUID]*loopProjection, len(m.projections))
+	for id, existing := range m.projections {
+		next[id] = existing
+	}
+	cloned := *projection
+	cloned.committed = append([]entry(nil), projection.committed...)
+	next[loopID] = &cloned
+	m.projections = next
+	return m
+}
+
+func cloneCompactionCompletionIDs(in map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
+	out := make(map[uuid.UUID]struct{}, len(in)+1)
+	for id := range in {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // loopStartedLabel resolves the presentation label a LoopStarted contributes to the loop

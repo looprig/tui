@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -41,6 +42,17 @@ type fakeAgent struct {
 	submitToLoopCalled     bool
 	lastSubmitToLoopID     uuid.UUID
 	lastSubmitToLoopBlocks []content.Block
+
+	// compact recorder: CompactToLoop returns the configured id/error and captures
+	// the exact loop plus command deadline so the bounded slash dispatch can be
+	// tested without waiting for a real timeout.
+	compactID          uuid.UUID
+	compactErr         error
+	compactCalled      bool
+	lastCompactLoopID  uuid.UUID
+	compactDeadline    time.Time
+	compactTimeLeft    time.Duration
+	compactHasDeadline bool
 
 	// activeLoopID is the current default input target returned by ActiveLoopID.
 	activeLoopID uuid.UUID
@@ -125,6 +137,17 @@ func (f *fakeAgent) SubmitToLoop(_ context.Context, loopID uuid.UUID, blocks []c
 		return fixedFakeSubmitID, nil
 	}
 	return f.submitID, nil
+}
+
+func (f *fakeAgent) CompactToLoop(ctx context.Context, loopID uuid.UUID) (uuid.UUID, error) {
+	f.compactCalled = true
+	f.lastCompactLoopID = loopID
+	f.compactDeadline, f.compactHasDeadline = ctx.Deadline()
+	f.compactTimeLeft = time.Until(f.compactDeadline)
+	if f.compactErr != nil {
+		return uuid.UUID{}, f.compactErr
+	}
+	return f.compactID, nil
 }
 
 func (f *fakeAgent) ActiveLoopID() uuid.UUID {

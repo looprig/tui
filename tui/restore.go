@@ -13,20 +13,21 @@ import (
 
 // DisplayProjection is the committed TUI projection of a fold over all delivered
 // Enduring events — the "displayed" transcript the event-persistence design's headline
-// property compares (displayed == stored == restored). It bundles the two pure reducer
-// states (the scrollback transcript and the pending-gate interaction surface) so the
+// property compares (displayed == stored == restored). It bundles the pure reducer states
+// (transcript, pending-gate interaction, and compaction activity) so the
 // restore-repaint path and the persistence property tests build the displayed view
 // through one named seam. It is value-typed and immutable; FoldDisplay is its only
 // constructor.
 type DisplayProjection struct {
 	transcript  transcriptModel
 	interaction interactionModel
+	compaction  compactionProjection
 	eventCount  int
 	eventIDs    map[uuid.UUID]struct{}
 }
 
 // FoldDisplay folds events through the SAME pure reducers the live path and the
-// cold-restore repaint use (transcript.ApplyEvent + interaction.ApplyEvent), starting
+// cold-restore repaint use, starting
 // from the zero reducer state scoped to loopID, and returns the resulting
 // displayed projection. It is the single fold the TUI uses to turn a slice of Enduring
 // events into a repaintable transcript: restoreBacklogCmd folds the restored backlog
@@ -37,15 +38,17 @@ type DisplayProjection struct {
 func FoldDisplay(events []event.Event) DisplayProjection {
 	tr := transcriptModel{}
 	in := newInteractionModel()
+	compaction := compactionProjection{}
 	ids := make(map[uuid.UUID]struct{})
 	for _, ev := range events {
 		tr = tr.ApplyEvent(ev)
 		in = in.ApplyEvent(ev)
+		compaction = compaction.ApplyEvent(ev)
 		if id := ev.EventHeader().EventID; !id.IsZero() {
 			ids[id] = struct{}{}
 		}
 	}
-	return DisplayProjection{transcript: tr, interaction: in, eventCount: len(events), eventIDs: ids}
+	return DisplayProjection{transcript: tr, interaction: in, compaction: compaction, eventCount: len(events), eventIDs: ids}
 }
 
 // EqualTranscript reports whether p and other have the byte-for-byte identical committed
@@ -158,7 +161,7 @@ func (e *RestoreBacklogError) Error() string {
 func (e *RestoreBacklogError) Unwrap() error { return e.Cause }
 
 // restoredMsg carries the result of the background restore fold (restoreBacklogCmd):
-// the rebuilt committed transcript + pending-gate interaction model for a cold-restore
+// the rebuilt transcript, interaction model, and compaction projection for a cold-restore
 // repaint, OR a non-nil err when the backlog read failed. The reducers were applied
 // PER-EVENT inside the command (off the update loop), so the Screen applies this state
 // ONCE — it never folds per event on the loop. A new (non-restored) session yields an
@@ -167,6 +170,7 @@ func (e *RestoreBacklogError) Unwrap() error { return e.Cause }
 type restoredMsg struct {
 	transcript  transcriptModel
 	interaction interactionModel
+	compaction  compactionProjection
 	eventCount  int
 	eventIDs    map[uuid.UUID]struct{}
 	err         error
@@ -175,7 +179,7 @@ type restoredMsg struct {
 // restoreBacklogCmd is the background-fold command (Task 10.1): OFF the Bubble Tea
 // update loop, it reads the restored session's historical Enduring backlog via
 // Agent.ReplayBacklog, then folds EVERY event through the SAME pure reducers the live
-// path uses (transcript.ApplyEvent + interaction.ApplyEvent) to build the FINAL reducer
+// path uses to build the FINAL reducer
 // state, and returns a SINGLE restoredMsg. This is the no-UI-hang property: a large
 // backlog is folded once here, not delivered as N per-event messages through the live
 // Subscribe 256-buffer and not folded per event on the update loop. A read failure
@@ -188,7 +192,7 @@ func restoreBacklogCmd(ctx context.Context, agent Agent) tea.Cmd {
 			return restoredMsg{err: &RestoreBacklogError{Cause: err}}
 		}
 		proj := FoldDisplay(backlog)
-		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, eventCount: proj.eventCount, eventIDs: proj.eventIDs}
+		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, compaction: proj.compaction, eventCount: proj.eventCount, eventIDs: proj.eventIDs}
 	}
 }
 

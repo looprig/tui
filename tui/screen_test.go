@@ -34,6 +34,24 @@ func updateScreen(t *testing.T, m Screen, msg tea.Msg) (Screen, tea.Cmd) {
 	return got, cmd
 }
 
+func compactResultFromCmd(t *testing.T, cmd tea.Cmd) (compactResultMsg, bool) {
+	t.Helper()
+	if cmd == nil {
+		return compactResultMsg{}, false
+	}
+	switch msg := cmd().(type) {
+	case compactResultMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, child := range msg {
+			if result, ok := compactResultFromCmd(t, child); ok {
+				return result, true
+			}
+		}
+	}
+	return compactResultMsg{}, false
+}
+
 // newScreenSized builds a Screen over agent and gives it a first terminal size, the
 // common starting point for the viewport tests (ready + a sized viewport).
 func newScreenSized(t *testing.T, agent Agent, w, h int) Screen {
@@ -1323,6 +1341,95 @@ func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
 	}
 }
 
+func TestModernRestoreDeduplicatesCompactionCompletionOverlap(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xA3)
+	attemptID := event.CompactAttemptID(callID(0xA4))
+	eventID := callID(0xA5)
+	h := hdr(loopID)
+	h.EventID = eventID
+	completion := event.CompactionCommitted{Header: h, AttemptID: attemptID, Duration: 25 * time.Second}
+
+	tests := []struct {
+		name     string
+		backlog  []event.Event
+		buffered []event.Event
+		want     string
+	}{
+		{
+			name:     "same enduring event in replay and live buffer commits once",
+			backlog:  []event.Event{completion},
+			buffered: []event.Event{completion},
+			want:     "○ conversation compacted in 25s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{activeLoopID: loopID, backlog: tt.backlog}
+			m := newScreenSized(t, agent, 80, 24)
+			m.restoring = true
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+			for _, ev := range tt.buffered {
+				m = feed(t, m, ev)
+			}
+			m = feedRestored(t, m, msg)
+
+			committed, _ := m.transcript.projectionFor(loopID)
+			if len(committed) != 1 {
+				t.Fatalf("committed rows = %d, want 1", len(committed))
+			}
+			if got := strings.TrimSpace(plainAll(m.viewport.lines)); got != tt.want {
+				t.Errorf("rendered completion = %q, want %q", got, tt.want)
+			}
+			if got := strings.Count(plainAll(m.viewport.lines), harnessMark); got != 1 {
+				t.Errorf("harness glyph count = %d, want 1; viewport = %q", got, plainAll(m.viewport.lines))
+			}
+		})
+	}
+}
+
+func TestModernRestoreCompactionTerminalSuppressesBufferedStart(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xB5)
+	attemptID := event.CompactAttemptID(callID(0xB6))
+	terminalID := callID(0xB7)
+	terminalHeader := hdr(loopID)
+	terminalHeader.EventID = terminalID
+
+	tests := []struct {
+		name     string
+		terminal event.Event
+	}{
+		{name: "committed terminal", terminal: event.CompactionCommitted{Header: terminalHeader, AttemptID: attemptID}},
+		{name: "rejected terminal", terminal: event.CompactionRejected{Header: terminalHeader, AttemptID: attemptID}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{tt.terminal}}
+			m := newScreenSized(t, agent, 80, 24)
+			m.restoring = true
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+
+			m = feed(t, m, event.CompactionStarted{Header: hdr(loopID), AttemptID: attemptID})
+			m = feedRestored(t, m, msg)
+
+			if m.compaction.IsActive(loopID) {
+				t.Fatal("replay terminal plus buffered start left compaction active")
+			}
+			if !m.compaction.isTerminal(loopID, attemptID) {
+				t.Fatal("restored terminal tombstone was not installed")
+			}
+		})
+	}
+}
+
 func TestModernRestoreStampsBufferedThinkingInDrainOrder(t *testing.T) {
 	t.Parallel()
 
@@ -1889,6 +1996,71 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	}
 }
 
+func TestModernCompactTargetsFocusedLoop(t *testing.T) {
+	t.Parallel()
+
+	active := callID(0x71)
+	focused := callID(0x72)
+	compactErr := errors.New("manual compaction unavailable")
+	tests := []struct {
+		name        string
+		status      Status
+		err         error
+		wantVisible bool
+	}{
+		{name: "idle success is silent", status: StatusIdle},
+		{name: "running success dispatches without status gate", status: StatusRunning},
+		{name: "immediate failure is visible", status: StatusIdle, err: compactErr, wantVisible: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			agent := &fakeAgent{activeLoopID: active, compactID: callID(0x73), compactErr: tt.err}
+			m := newScreenSized(t, agent, 80, 24)
+			m.focusLoop(focused)
+			m.status = tt.status
+			beforeEntries := len(m.transcript.testCommitted())
+			m.interaction.input.SetValue("/compact")
+
+			m, cmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m.status != tt.status {
+				t.Errorf("status after dispatch = %d, want unchanged %d", m.status, tt.status)
+			}
+			if got := plainAll(m.viewport.lines); strings.Contains(got, "compacting") {
+				t.Errorf("viewport after dispatch = %q, want no optimistic compaction status", got)
+			}
+			result, ok := compactResultFromCmd(t, cmd)
+			if !ok {
+				t.Fatal("/compact command did not produce compactResultMsg")
+			}
+			if !agent.compactCalled {
+				t.Fatal("CompactToLoop was not called")
+			}
+			if agent.lastCompactLoopID != focused {
+				t.Errorf("CompactToLoop loopID = %v, want focused %v (active is %v)", agent.lastCompactLoopID, focused, active)
+			}
+
+			m, _ = updateScreen(t, m, result)
+			if m.status != tt.status {
+				t.Errorf("status after result = %d, want unchanged %d", m.status, tt.status)
+			}
+			gotVisible := strings.Contains(plainAll(m.viewport.lines), "manual compaction unavailable")
+			if gotVisible != tt.wantVisible {
+				t.Errorf("failure visible = %v, want %v; viewport = %q", gotVisible, tt.wantVisible, plainAll(m.viewport.lines))
+			}
+			wantEntries := beforeEntries
+			if tt.wantVisible {
+				wantEntries++
+			}
+			if got := len(m.transcript.testCommitted()); got != wantEntries {
+				t.Errorf("committed entries = %d, want %d", got, wantEntries)
+			}
+		})
+	}
+}
+
 func TestModernClearBlockedUntilInitialRestoreCompletes(t *testing.T) {
 	t.Parallel()
 
@@ -2346,6 +2518,48 @@ func TestModernStatusTimerSuffix(t *testing.T) {
 			}
 			if tt.wantNoParen && strings.Contains(status, "(") {
 				t.Errorf("status = %q, want no elapsed suffix", status)
+			}
+		})
+	}
+}
+
+func TestModernCompactionStatusAndElapsedSuffix(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x96)
+	attemptID := event.CompactAttemptID(callID(0x97))
+	base := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		status     Status
+		running    bool
+		compacting bool
+		startedAt  time.Time
+		want       string
+	}{
+		{name: "idle compaction is active without elapsed suffix", status: StatusIdle, compacting: true, want: "● compacting conversation…"},
+		{name: "running compaction keeps turn elapsed suffix", status: StatusRunning, running: true, compacting: true, startedAt: base, want: "● compacting conversation… (8s)"},
+		{name: "interrupting suppresses compaction and elapsed suffix", status: StatusInterrupting, running: true, compacting: true, startedAt: base, want: "● interrupting…"},
+		{name: "clearing suppresses compaction and elapsed suffix", status: StatusResetting, running: true, compacting: true, startedAt: base, want: "● clearing…"},
+		{name: "ordinary running status retains elapsed suffix", status: StatusRunning, running: true, startedAt: base, want: "● waiting… (8s)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 24)
+			m.status = tt.status
+			m.loopRunning[loopID] = tt.running
+			m.now = base.Add(8 * time.Second)
+			if !tt.startedAt.IsZero() {
+				m.turnStartedAt = map[uuid.UUID]time.Time{loopID: tt.startedAt}
+			}
+			if tt.compacting {
+				m.compaction = m.compaction.ApplyEvent(event.CompactionStarted{Header: hdr(loopID), AttemptID: attemptID})
+			}
+			if got := stripANSI(m.statusLine()); got != tt.want {
+				t.Errorf("statusLine = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -41,6 +41,14 @@ type submitResultMsg struct {
 	err     error
 }
 
+// compactResultMsg reports the immediate outcome of a manual compaction request.
+// The command id correlates the request with later compaction events; a non-nil
+// error is the only immediate user-visible outcome.
+type compactResultMsg struct {
+	commandID uuid.UUID
+	err       error
+}
+
 // interruptResultMsg carries the outcome of an Interrupt call.
 type interruptResultMsg struct {
 	cancelled bool

@@ -16,16 +16,22 @@ func TestNewSlashComplete(t *testing.T) {
 		wantNames []string
 	}{
 		{
-			name:      "prefix /c matches clear",
-			prefix:    "/c",
+			name:      "prefix /cl matches clear",
+			prefix:    "/cl",
 			wantCount: 1,
 			wantNames: []string{"/clear"},
 		},
 		{
 			name:      "prefix slash matches all",
 			prefix:    "/",
-			wantCount: 2,
-			wantNames: []string{"/clear", "/help"},
+			wantCount: 3,
+			wantNames: []string{"/clear", "/compact", "/help"},
+		},
+		{
+			name:      "prefix /co matches compact",
+			prefix:    "/co",
+			wantCount: 1,
+			wantNames: []string{"/compact"},
 		},
 		{
 			name:      "prefix /h matches help",
@@ -102,11 +108,16 @@ func TestSlashCompleteCursorWrap(t *testing.T) {
 		{
 			name:     "down moves to second",
 			moves:    []func(*SlashComplete){(*SlashComplete).Down},
+			wantName: "/compact",
+		},
+		{
+			name:     "down twice moves to third",
+			moves:    []func(*SlashComplete){(*SlashComplete).Down, (*SlashComplete).Down},
 			wantName: "/help",
 		},
 		{
-			name:     "down twice wraps to first",
-			moves:    []func(*SlashComplete){(*SlashComplete).Down, (*SlashComplete).Down},
+			name:     "down three times wraps to first",
+			moves:    []func(*SlashComplete){(*SlashComplete).Down, (*SlashComplete).Down, (*SlashComplete).Down},
 			wantName: "/clear",
 		},
 		{
@@ -115,8 +126,13 @@ func TestSlashCompleteCursorWrap(t *testing.T) {
 			wantName: "/help",
 		},
 		{
-			name:     "up twice from first lands on first",
+			name:     "up twice from first moves to second",
 			moves:    []func(*SlashComplete){(*SlashComplete).Up, (*SlashComplete).Up},
+			wantName: "/compact",
+		},
+		{
+			name:     "up three times from first wraps to first",
+			moves:    []func(*SlashComplete){(*SlashComplete).Up, (*SlashComplete).Up, (*SlashComplete).Up},
 			wantName: "/clear",
 		},
 	}

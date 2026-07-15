@@ -207,19 +207,20 @@ github.com/gorilla/websocket
 # github.com/invopop/jsonschema v0.13.0
 ## explicit; go 1.18
 github.com/invopop/jsonschema
-# github.com/looprig/core v0.1.0 => ../core
+# github.com/looprig/core v0.2.0 => ../core
 ## explicit; go 1.25.0
 github.com/looprig/core/content
 github.com/looprig/core/logging
 github.com/looprig/core/uuid
-# github.com/looprig/harness v0.10.0 => ../harness
+# github.com/looprig/harness v0.11.0 => ../harness
 ## explicit; go 1.26.4
 github.com/looprig/harness/pkg/ceiling
 github.com/looprig/harness/pkg/event
 github.com/looprig/harness/pkg/gate
+github.com/looprig/harness/pkg/hustle
 github.com/looprig/harness/pkg/identity
 github.com/looprig/harness/pkg/tool
-# github.com/looprig/inference v0.1.0 => ../inference
+# github.com/looprig/inference v0.2.0 => ../inference
 ## explicit; go 1.26.4
 github.com/looprig/inference
 # github.com/lucasb-eyer/go-colorful v1.4.0

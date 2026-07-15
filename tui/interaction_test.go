@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -63,6 +64,14 @@ func TestInteractionComposeUpdate(t *testing.T) {
 			wantValue: "", // editor reset on a run
 		},
 		{
+			name:      "compact slash enter runs the command",
+			seed:      "/compact",
+			key:       tea.KeyPressMsg{Code: tea.KeyEnter},
+			wantKind:  uiRunSlash,
+			wantSlash: "/compact",
+			wantValue: "",
+		},
+		{
 			name:      "unknown slash enter falls through to submit",
 			seed:      "/nope and more",
 			key:       tea.KeyPressMsg{Code: tea.KeyEnter},
@@ -92,6 +101,27 @@ func TestInteractionComposeUpdate(t *testing.T) {
 			}
 			if got := m.input.Value(); got != tt.wantValue {
 				t.Errorf("editor Value = %q, want %q", got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestHelpTextIncludesCompact(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "compact command", want: "/compact — compact the conversation"},
+	}
+
+	got := helpText()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("helpText() = %q, want substring %q", got, tt.want)
 			}
 		})
 	}
@@ -888,56 +918,63 @@ func TestInteractionAnswerModeNextFieldEmpty(t *testing.T) {
 func TestInteractionComposeSlashNavigation(t *testing.T) {
 	t.Parallel()
 
-	t.Run("down then enter dispatches the highlighted command", func(t *testing.T) {
-		t.Parallel()
-		// Typing "/" matches all commands (/clear, /help); the panel is visible.
-		m := newInteractionModel()
-		m, _, _ = m.Update(runeKey('/'))
-		if m.slash == nil {
-			t.Fatal("slash panel = nil after typing '/', want visible")
-		}
-		// Head highlight is /clear; down moves to /help.
-		m, navAction, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		if navAction.Kind != uiNoop {
-			t.Errorf("down Kind = %d, want uiNoop", navAction.Kind)
-		}
-		m, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if action.Kind != uiRunSlash || action.Slash != "/help" {
-			t.Fatalf("action = %+v, want uiRunSlash '/help' (highlighted, not typed)", action)
-		}
-		if m.slash != nil {
-			t.Errorf("slash panel = %+v, want nil after dispatch", m.slash)
-		}
-	})
+	tests := []struct {
+		name      string
+		keys      []tea.KeyPressMsg
+		wantKind  uiActionKind
+		wantSlash string
+		wantValue string
+	}{
+		{
+			name:      "down then enter dispatches compact",
+			keys:      []tea.KeyPressMsg{{Code: tea.KeyDown}, {Code: tea.KeyEnter}},
+			wantKind:  uiRunSlash,
+			wantSlash: "/compact",
+		},
+		{
+			name:      "two downs then enter dispatches help",
+			keys:      []tea.KeyPressMsg{{Code: tea.KeyDown}, {Code: tea.KeyDown}, {Code: tea.KeyEnter}},
+			wantKind:  uiRunSlash,
+			wantSlash: "/help",
+		},
+		{
+			name:      "up wraps and enter dispatches help",
+			keys:      []tea.KeyPressMsg{{Code: tea.KeyUp}, {Code: tea.KeyEnter}},
+			wantKind:  uiRunSlash,
+			wantSlash: "/help",
+		},
+		{
+			name:      "tab fills clear",
+			keys:      []tea.KeyPressMsg{{Code: tea.KeyTab}},
+			wantKind:  uiNoop,
+			wantValue: "/clear",
+		},
+	}
 
-	t.Run("up wraps and enter dispatches the highlighted command", func(t *testing.T) {
-		t.Parallel()
-		m := newInteractionModel()
-		m, _, _ = m.Update(runeKey('/'))
-		// Up from /clear wraps to the LAST command (/help); the completer wraps. Every
-		// command dispatches the generic uiRunSlash kind — see slashAction.
-		m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-		_, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if action.Kind != uiRunSlash || action.Slash != "/help" {
-			t.Fatalf("action = %+v, want uiRunSlash '/help' (wrapped highlight to /help)", action)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("tab fills the input with the highlighted command", func(t *testing.T) {
-		t.Parallel()
-		m := newInteractionModel()
-		m, _, _ = m.Update(runeKey('/'))
-		m, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-		if action.Kind != uiNoop {
-			t.Errorf("tab Kind = %d, want uiNoop", action.Kind)
-		}
-		if m.input.Value() != "/clear" {
-			t.Errorf("input after tab = %q, want %q", m.input.Value(), "/clear")
-		}
-		if m.slash != nil {
-			t.Errorf("slash panel = %+v, want nil after tab fill", m.slash)
-		}
-	})
+			m := newInteractionModel()
+			m, _, _ = m.Update(runeKey('/'))
+			if m.slash == nil {
+				t.Fatal("slash panel = nil after typing '/', want visible")
+			}
+			action := noop
+			for _, key := range tt.keys {
+				m, action, _ = m.Update(key)
+			}
+			if action.Kind != tt.wantKind || action.Slash != tt.wantSlash {
+				t.Errorf("action = %+v, want kind %d slash %q", action, tt.wantKind, tt.wantSlash)
+			}
+			if got := m.input.Value(); got != tt.wantValue {
+				t.Errorf("input = %q, want %q", got, tt.wantValue)
+			}
+			if m.slash != nil {
+				t.Errorf("slash panel = %+v, want nil after dispatch/fill", m.slash)
+			}
+		})
+	}
 }
 
 // TestInteractionPopRevealsNextThenCompose covers the pop mechanic: popping the
