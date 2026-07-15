@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -3401,4 +3402,169 @@ func TestTranscriptProjectionFoldsEphemeral(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTranscriptCompactionCompletion(t *testing.T) {
+	t.Parallel()
+
+	loopA := callID(0x91)
+	loopB := callID(0x92)
+	eventA := callID(0x93)
+	eventB := callID(0x94)
+	attempt := event.CompactAttemptID(callID(0x95))
+	committed := func(loopID, eventID uuid.UUID, duration time.Duration) event.CompactionCommitted {
+		h := hdr(loopID)
+		h.EventID = eventID
+		return event.CompactionCommitted{Header: h, AttemptID: attempt, Duration: duration}
+	}
+	rejected := func(loopID, eventID uuid.UUID) event.CompactionRejected {
+		h := hdr(loopID)
+		h.EventID = eventID
+		return event.CompactionRejected{Header: h, AttemptID: attempt, Duration: 3 * time.Second}
+	}
+
+	tests := []struct {
+		name      string
+		events    []event.Event
+		wantA     []string
+		wantB     []string
+		wantTotal int
+	}{
+		{
+			name:      "committed event appends exact duration payload",
+			events:    []event.Event{committed(loopA, eventA, 25*time.Second)},
+			wantA:     []string{"conversation compacted in 25s"},
+			wantTotal: 1,
+		},
+		{
+			name:      "duplicate event id appends once",
+			events:    []event.Event{committed(loopA, eventA, 25*time.Second), committed(loopA, eventA, 25*time.Second)},
+			wantA:     []string{"conversation compacted in 25s"},
+			wantTotal: 1,
+		},
+		{
+			name:      "zero event id appends nothing",
+			events:    []event.Event{committed(loopA, uuid.UUID{}, 25*time.Second)},
+			wantTotal: 0,
+		},
+		{
+			name:      "rejection appends no success row",
+			events:    []event.Event{rejected(loopA, eventA)},
+			wantTotal: 0,
+		},
+		{
+			name:      "completion is isolated to its loop",
+			events:    []event.Event{committed(loopB, eventB, 61*time.Second)},
+			wantB:     []string{"conversation compacted in 1m 1s"},
+			wantTotal: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := transcriptModel{}
+			for _, ev := range tt.events {
+				m = m.ApplyEvent(ev)
+			}
+			if got := harnessTexts(m, loopA); !reflect.DeepEqual(got, tt.wantA) {
+				t.Errorf("loop A harness rows = %q, want %q", got, tt.wantA)
+			}
+			if got := harnessTexts(m, loopB); !reflect.DeepEqual(got, tt.wantB) {
+				t.Errorf("loop B harness rows = %q, want %q", got, tt.wantB)
+			}
+			if got := m.committedLen(); got != tt.wantTotal {
+				t.Errorf("committedLen = %d, want %d", got, tt.wantTotal)
+			}
+		})
+	}
+}
+
+func TestTranscriptCompactionCompletionDetachesTargetProjection(t *testing.T) {
+	t.Parallel()
+
+	existingLoop := callID(0x81)
+	otherLoop := callID(0x82)
+	attemptID := event.CompactAttemptID(callID(0x83))
+	tests := []struct {
+		name     string
+		base     transcriptModel
+		loopID   uuid.UUID
+		eventID  uuid.UUID
+		wantRows int
+	}{
+		{
+			name: "existing target projection remains unchanged",
+			base: transcriptModel{}.ApplyEvent(event.TurnStarted{
+				Header:  hdr(existingLoop),
+				Message: userMsg("existing row"),
+			}),
+			loopID:   existingLoop,
+			eventID:  callID(0x84),
+			wantRows: 2,
+		},
+		{
+			name: "absent target projection is created on next value only",
+			base: transcriptModel{}.ApplyEvent(event.TurnStarted{
+				Header:  hdr(otherLoop),
+				Message: userMsg("other loop row"),
+			}),
+			loopID:   existingLoop,
+			eventID:  callID(0x85),
+			wantRows: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			priorRows, _ := tt.base.projectionFor(tt.loopID)
+			priorRows = append([]entry(nil), priorRows...)
+			priorNextID := tt.base.nextID
+
+			h := hdr(tt.loopID)
+			h.EventID = tt.eventID
+			next := tt.base.ApplyEvent(event.CompactionCommitted{
+				Header:    h,
+				AttemptID: attemptID,
+				Duration:  4 * time.Second,
+			})
+
+			gotPriorRows, _ := tt.base.projectionFor(tt.loopID)
+			if !reflect.DeepEqual(gotPriorRows, priorRows) {
+				t.Errorf("prior projection changed: got %+v, want %+v", gotPriorRows, priorRows)
+			}
+			if tt.base.nextID != priorNextID {
+				t.Errorf("prior nextID = %d, want unchanged %d", tt.base.nextID, priorNextID)
+			}
+			if _, mutated := tt.base.compactionCompletions[tt.eventID]; mutated {
+				t.Errorf("prior dedup contains event %v, want unchanged", tt.eventID)
+			}
+
+			nextRows, _ := next.projectionFor(tt.loopID)
+			if len(nextRows) != tt.wantRows {
+				t.Fatalf("next rows = %d, want %d", len(nextRows), tt.wantRows)
+			}
+			if got := harnessTexts(next, tt.loopID); !reflect.DeepEqual(got, []string{"conversation compacted in 4s"}) {
+				t.Errorf("next completion rows = %q, want one exact row", got)
+			}
+			if next.nextID != priorNextID+1 {
+				t.Errorf("next nextID = %d, want %d", next.nextID, priorNextID+1)
+			}
+			if _, recorded := next.compactionCompletions[tt.eventID]; !recorded {
+				t.Errorf("next dedup missing event %v", tt.eventID)
+			}
+		})
+	}
+}
+
+func harnessTexts(m transcriptModel, loopID uuid.UUID) []string {
+	committed, _ := m.projectionFor(loopID)
+	var texts []string
+	for _, entry := range committed {
+		if entry.Kind == kindHarness {
+			texts = append(texts, committedText(entry))
+		}
+	}
+	return texts
 }

@@ -16,6 +16,7 @@ type SlashCmd struct {
 // SlashCommands is the canonical list (exported so package tui can map Name→action).
 var SlashCommands = []SlashCmd{
 	{"/clear", "clear the conversation"},
+	{"/compact", "compact the conversation"},
 	{"/help", "list commands"},
 }
 

@@ -190,14 +190,94 @@ func TestStatusDot(t *testing.T) {
 	for _, tt := range glyph {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := stripANSI(statusDot(tt.status, 0)); got != tt.want {
+			if got := stripANSI(statusDot(tt.status != StatusIdle, 0)); got != tt.want {
 				t.Errorf("statusDot(%v) glyph = %q, want %q", tt.status, got, tt.want)
 			}
 		})
 	}
 
 	// The dot rides the gradient: its rendered color flows across animation phases.
-	if statusDot(StatusRunning, 0) == statusDot(StatusRunning, 2) {
+	if statusDot(true, 0) == statusDot(true, 2) {
 		t.Error("statusDot(running) does not flow across the animation phase")
+	}
+}
+
+func TestCompactionStatusPrecedence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status Status
+		in     statusInputs
+		want   string
+	}{
+		{name: "idle compaction is visible", status: StatusIdle, in: statusInputs{compactionActive: true}, want: "compacting conversation…"},
+		{name: "compaction outranks running", status: StatusRunning, in: statusInputs{compactionActive: true, streaming: true}, want: "compacting conversation…"},
+		{name: "compaction outranks permission", status: StatusRunning, in: statusInputs{compactionActive: true, permissionActive: true}, want: "compacting conversation…"},
+		{name: "interrupting outranks compaction", status: StatusInterrupting, in: statusInputs{compactionActive: true}, want: "interrupting…"},
+		{name: "clearing outranks compaction", status: StatusResetting, in: statusInputs{compactionActive: true}, want: "clearing…"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := statusLabel(tt.status, tt.in); got != tt.want {
+				t.Errorf("statusLabel(%v, %+v) = %q, want %q", tt.status, tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStatusActive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status Status
+		in     statusInputs
+		want   bool
+	}{
+		{name: "idle is inactive", status: StatusIdle},
+		{name: "idle compaction is active", status: StatusIdle, in: statusInputs{compactionActive: true}, want: true},
+		{name: "running is active", status: StatusRunning, want: true},
+		{name: "interrupting is active", status: StatusInterrupting, want: true},
+		{name: "clearing is active", status: StatusResetting, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := statusActive(tt.status, tt.in); got != tt.want {
+				t.Errorf("statusActive(%v, %+v) = %v, want %v", tt.status, tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderStatusLineIdleCompactionIsFilledAndAnimated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		phase uint
+		want  string
+	}{
+		{name: "phase zero", phase: 0, want: "● compacting conversation…"},
+		{name: "later phase", phase: 3, want: "● compacting conversation…"},
+	}
+
+	rendered := make([]string, 0, len(tests))
+	for _, tt := range tests {
+		got := renderStatusLine(StatusIdle, statusInputs{compactionActive: true}, tt.phase)
+		if plain := stripANSI(got); plain != tt.want {
+			t.Errorf("%s plain status = %q, want %q", tt.name, plain, tt.want)
+		}
+		if !strings.Contains(got, "\x1b[38;2;") {
+			t.Errorf("%s status has no active gradient: %q", tt.name, got)
+		}
+		rendered = append(rendered, got)
+	}
+	if rendered[0] == rendered[1] {
+		t.Error("idle compaction status did not animate across phases")
 	}
 }

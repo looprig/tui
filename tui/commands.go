@@ -23,6 +23,10 @@ const blinkInterval = 450 * time.Millisecond
 // interruptTimeout bounds an Interrupt ack so Update never waits on a wedged session.
 const interruptTimeout = 2 * time.Second
 
+// compactDispatchTimeout bounds a manual compaction request so a wedged session
+// cannot strand the slash-command dispatch.
+const compactDispatchTimeout = 2 * time.Second
+
 // reopenTimeout bounds a /clear reopen so a slow agent construction cannot hang.
 const reopenTimeout = 5 * time.Second
 
@@ -100,6 +104,18 @@ func submitToLoopCmd(ctx context.Context, agent Agent, loopID uuid.UUID, blocks 
 	return func() tea.Msg {
 		id, err := agent.SubmitToLoop(ctx, loopID, blocks)
 		return submitResultMsg{inputID: id, blocks: blocks, err: err}
+	}
+}
+
+// compactToLoopCmd requests manual compaction of one exact loop under a bounded
+// context. The command reports the harness correlation id and preserves the
+// returned error unchanged for the presentation reducer.
+func compactToLoopCmd(ctx context.Context, agent Agent, loopID uuid.UUID) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, compactDispatchTimeout)
+		defer cancel()
+		id, err := agent.CompactToLoop(c, loopID)
+		return compactResultMsg{commandID: id, err: err}
 	}
 }
 

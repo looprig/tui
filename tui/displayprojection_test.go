@@ -119,6 +119,31 @@ func TestDisplayProjectionTracksLifecycleOnlyHistoryPresence(t *testing.T) {
 	}
 }
 
+func TestFoldDisplayRetainsCompactionTerminalTombstones(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xC1)
+	attemptID := event.CompactAttemptID(callID(0xC2))
+	tests := []struct {
+		name   string
+		events []event.Event
+	}{
+		{name: "committed terminal", events: []event.Event{event.CompactionCommitted{Header: hdr(loopID), AttemptID: attemptID}}},
+		{name: "rejected terminal", events: []event.Event{event.CompactionRejected{Header: hdr(loopID), AttemptID: attemptID}}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			projection := FoldDisplay(tt.events)
+			if !projection.compaction.isTerminal(loopID, attemptID) {
+				t.Fatal("FoldDisplay did not retain terminal attempt tombstone")
+			}
+		})
+	}
+}
+
 // equalTranscriptModel is a same-package test bridge: it deep-compares a
 // DisplayProjection's (unexported) transcript model against an internally-built
 // transcriptModel, so TestFoldDisplay can assert the exported fold equals the

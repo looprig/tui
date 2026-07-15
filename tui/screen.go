@@ -263,6 +263,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.handleSubmitResult(msg)
 		return m, cmd
+	case compactResultMsg:
+		cmd := m.handleCompactResult(msg)
+		return m, cmd
 	case interruptResultMsg:
 		cmd := m.handleInterruptResult(msg)
 		return m, cmd
@@ -527,6 +530,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	} else if msg.eventCount != 0 {
 		m.transcript = installRestoredTranscript(m.transcript, msg.transcript)
 		m.interaction = installRestoredInteraction(m.interaction, msg.interaction)
+		m.compaction = msg.compaction
 	}
 	for _, input := range buffered {
 		switch input.kind {
@@ -640,6 +644,16 @@ func (m *Screen) handleSubClosed(msg subClosedMsg) tea.Cmd {
 // commits a faint error entry the viewport re-renders.
 func (m *Screen) handleSubmitResult(msg submitResultMsg) tea.Cmd {
 	if m.sessionCore.applySubmitResult(msg) {
+		m.rerender()
+	}
+	return nil
+}
+
+// handleCompactResult keeps successful dispatch silent and renders an immediate
+// failure as a non-fatal error notice. Progress itself is driven by compaction
+// events, never an optimistic slash-command spinner.
+func (m *Screen) handleCompactResult(msg compactResultMsg) tea.Cmd {
+	if m.sessionCore.applyCompactResult(msg) {
 		m.rerender()
 	}
 	return nil
@@ -858,6 +872,11 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// core's default submit does (buildBlocks from action.Text), and a build error commits
 		// the same faint error entry.
 		cmd, present = m.sessionCore.submitToLoop(m.focusedLoopID, action.Text)
+	} else if action.Kind == uiRunSlash && action.Slash == "/compact" {
+		// Focus is presentation-owned and intentionally independent from the
+		// session's active loop. Manual compaction follows what the user is
+		// viewing, regardless of whether that loop is idle or running.
+		cmd = m.sessionCore.compactToLoop(m.focusedLoopID)
 	} else {
 		cmd, present = m.sessionCore.mapAction(action)
 	}
@@ -1385,8 +1404,9 @@ func (m Screen) focusedStatus() Status {
 func (m Screen) statusInputs() statusInputs {
 	_, live := m.transcript.projectionFor(m.focusedLoopID)
 	in := statusInputs{
-		streaming: live.Text != "",
-		thinking:  live.Text == "" && live.Thinking != "",
+		streaming:        live.Text != "",
+		thinking:         live.Text == "" && live.Thinking != "",
+		compactionActive: m.compaction.IsActive(m.focusedLoopID),
 	}
 	if p := m.activePrompt(); p != nil {
 		in.permissionActive = p.Kind == promptPermission
