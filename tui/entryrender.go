@@ -30,7 +30,7 @@ func renderEntry(e entry, expand bool, width int) []string {
 		return splitNonEmpty(renderAssistant(thinkingText(e.Blocks), assistantText(e.Blocks), expand, width, formatThought(e.thinkDur)))
 	case kindTool:
 		// A reconciled Subagent card (Agent set) renders as its OWN rail node opening a
-		// nested secondary rail — its child tool nodes and a closing done node (design §5),
+		// compact secondary rail — its child tools stay hidden and a plain status line closes it,
 		// never as an ordinary tool node.
 		if len(e.Calls) == 1 && e.Calls[0].Agent != "" {
 			return splitNonEmpty(renderSubagentCard(e.Calls[0], expand, width))

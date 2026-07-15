@@ -2626,6 +2626,69 @@ func TestSubagentAccumClearedDespiteTurnMismatch(t *testing.T) {
 	}
 }
 
+// TestSubagentReconcilesUniqueToolUseIDAcrossCoordinateMismatch reproduces the duplicate
+// render from the live TUI: LoopStarted records stale/different parent turn+step coordinates,
+// while the parent's committed StepDone carries the same durable provider tool-use id. The
+// unique pending child card must replace the raw Subagent tool call at that committed position,
+// leaving no second pending card below it.
+func TestSubagentReconcilesUniqueToolUseIDAcrossCoordinateMismatch(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	spawnTurn := callID(0xC3)
+	spawnStep := callID(0xD4)
+	commitTurn := callID(0xE5)
+	commitStep := callID(0xF6)
+	const toolUseID = "toolu_same"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "operator", primary, spawnTurn, spawnStep, toolUseID))
+	m = m.ApplyEvent(childTurnStarted(sub, "inspect the repository"))
+	m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "found the version")))
+	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}})
+	m = m.ApplyEvent(orchestratorStepDone(primary, commitTurn, commitStep,
+		aiMessage("", "", toolUse(toolUseID, "Subagent", `{"agent":"operator"}`)),
+		toolResult(toolUseID, "v0.6.1"),
+	))
+
+	card := findSubagentCard(t, m)
+	if card.Agent != "operator" || card.Task != "inspect the repository" || card.SubStatus != subDone {
+		t.Errorf("reconciled card = %+v, want operator task with done status", card)
+	}
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+		t.Errorf("pending cards after fallback reconciliation = %d, want 0 (single in-place render)", got)
+	}
+}
+
+// TestSubagentCoordinateFallbackFailsClosedWhenAmbiguous pins the safety boundary for the
+// looser correlation: duplicate provider ids under one parent are malformed, so reconciliation
+// must not guess which child owns the committed call.
+func TestSubagentCoordinateFallbackFailsClosedWhenAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	const toolUseID = "toolu_duplicate"
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(callID(0xB1), "one", primary, callID(0xC1), callID(0xD1), toolUseID))
+	m = m.ApplyEvent(childLoopStarted(callID(0xB2), "two", primary, callID(0xC2), callID(0xD2), toolUseID))
+	m = m.ApplyEvent(orchestratorStepDone(primary, callID(0xE5), callID(0xF6),
+		aiMessage("", "", toolUse(toolUseID, "Subagent", `{}`)),
+		toolResult(toolUseID, "ambiguous"),
+	))
+
+	for _, e := range m.testCommitted() {
+		for _, card := range e.Calls {
+			if card.ToolName == subagentToolName && card.Agent != "" {
+				t.Fatalf("ambiguous fallback guessed a child: %+v", card)
+			}
+		}
+	}
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 2 {
+		t.Errorf("pending cards after ambiguous fallback = %d, want 2 unchanged", got)
+	}
+}
+
 // TestLateChildTerminalDoesNotResurrectClearedSubagent reproduces the all-loop fan-in
 // ordering that made a completed Subagent card reappear below the parent's "turn ran"
 // notice: the parent terminal clears the pending accumulator, then an already-published

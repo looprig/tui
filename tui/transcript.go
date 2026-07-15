@@ -1265,19 +1265,22 @@ func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) b
 // reconcileSubagent attaches a child accumulator onto the orchestrator's committed
 // Subagent card (design §3). For a Subagent tool-use block it computes the spawn key
 // from the orchestrator's OWN coordinates (ev.LoopID/TurnID/StepID) + block.ID and
-// looks up subagentAccum: on a hit it copies the agent/task/children/steps/status and
+// looks up subagentAccum: first by the full coordinate key, then (when those parent
+// turn/step coordinates diverge) by a UNIQUE pending parent-loop + provider-tool-use-id
+// fallback. On a hit it copies the agent/task/children/steps/status and
 // sets the done summary from the block's paired ToolResultMessage text (truncated),
 // then SUPPRESSES the card's normal result body so the hand-back text shows ONLY in the
 // done child, not doubled (Task 7 renders the suppression; here Agent being set is the
-// marker). On a miss (spawn failed before any child LoopStarted) the card is returned
-// unchanged — it renders normally with its error result text. A non-Subagent block is
-// returned unchanged.
+// marker). The fallback fails closed when zero or multiple pending candidates match. On
+// a miss (spawn failed before any child LoopStarted, or malformed ambiguous identity) the
+// card is returned unchanged — it renders normally with its error result text. A
+// non-Subagent block is returned unchanged.
 func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolUseBlock, results map[string]*content.ToolResultMessage, card ToolCallView) ToolCallView {
 	if use.Name != subagentToolName {
 		return card
 	}
 	key := spawnKey{ev.LoopID, ev.TurnID, ev.StepID, use.ID}
-	acc, ok := m.subagentAccum[key]
+	acc, ok := m.matchSubagentAccum(key)
 	if !ok {
 		return card // spawn failed before any child loop: render the error result normally
 	}
@@ -1300,6 +1303,29 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 	// tail must stop rendering it as a pending in-flight card (pendingSubagentCards).
 	acc.reconciled = true
 	return card
+}
+
+// matchSubagentAccum returns the accumulator owned by a committed parent Subagent call.
+// Full coordinates are authoritative when they agree. The harness also carries the provider
+// tool-use id explicitly because replay/fan-in paths can report different parent turn/step
+// coordinates; in that case a UNIQUE, unreconciled accumulator under the same parent loop and
+// tool-use id is the same call. Multiple matches are malformed and fail closed rather than
+// attaching the wrong child card.
+func (m transcriptModel) matchSubagentAccum(key spawnKey) (*subagentAccumulator, bool) {
+	if acc, ok := m.subagentAccum[key]; ok && acc != nil {
+		return acc, true
+	}
+	var match *subagentAccumulator
+	for candidate, acc := range m.subagentAccum {
+		if acc == nil || acc.reconciled || candidate.parentLoopID != key.parentLoopID || candidate.toolUseID != key.toolUseID {
+			continue
+		}
+		if match != nil {
+			return nil, false
+		}
+		match = acc
+	}
+	return match, match != nil
 }
 
 // pendingSubagentCards returns, in stable creation order (accumOrder), one ToolCallView

@@ -315,17 +315,16 @@ func subagentNodeStatus(s subStatus) styles.NodeStatus {
 	}
 }
 
-// renderSubagentCard renders a reconciled Subagent as a compact two-node rail: an "○"
-// header node "Subagent(agent) "task"" (tinted by the child's terminal status) at depth 0,
-// then a closing "○ verb · N steps — "summary"" node at depth 1 connected by the outer "│"
-// spine. The subagent's OWN nested tool calls are deliberately NOT shown — the card reports
-// the subagent and its outcome, not the individual tools it ran. status drives both nodes'
-// tint; the second bool (formerly the child-fold expand) is unused now that children are
-// elided.
+// renderSubagentCard renders a reconciled Subagent as one "○" header node
+// "Subagent(agent) "task"" (tinted by the child's terminal status) followed by a plain
+// "│ verb · N steps — "summary"" status line. The inner status deliberately has no second
+// hollow-circle node. The subagent's OWN nested tool calls are deliberately NOT shown — the
+// card reports the subagent and its outcome, not the individual tools it ran. The second bool
+// (formerly the child-fold expand) is unused now that children are elided.
 func renderSubagentCard(c ToolCallView, _ bool, width int) string {
 	status := subagentNodeStatus(c.SubStatus)
 	lines := railNodeStyled(styles.ToolNode(status), subagentHeaderText(c), styles.ToolCallStyle, 0, width)
-	lines = append(lines, railNodeStyled(styles.ToolNode(status), subagentDoneText(c), styles.ToolCallStyle, 1, width)...)
+	lines = append(lines, railDetail(subagentDoneText(c), 0, width)...)
 	return strings.Join(lines, "\n")
 }
 

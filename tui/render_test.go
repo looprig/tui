@@ -1185,7 +1185,7 @@ func TestRenderAssistant_NodePresence(t *testing.T) {
 
 // TestRenderEntrySubagentCard covers the committed Subagent card render (two-node rail):
 // a kindTool entry whose ToolCallView has Agent set renders as an "○" header node
-// "Subagent(<agent>)  \"<task>\"" and a closing "│ ○ done · N steps — \"<summary>\"" node.
+// "Subagent(<agent>)  \"<task>\"" and a closing "│ done · N steps — \"<summary>\"" status line.
 // The subagent's own child tool nodes and the "+M nested subagent steps" line are NOT
 // rendered. The card's own Result (the done summary) must appear ONLY in that closing
 // node, never also as a separate result body (no doubling).
@@ -1223,18 +1223,18 @@ func TestRenderEntrySubagentCard(t *testing.T) {
 			t.Errorf("subagent card = %q, must NOT render the child tool %q", got, a)
 		}
 	}
-	// The closing done node: verb + step count + summary at depth 1.
-	if !strings.Contains(got, `│ ○ done · 6 steps — "found 12 packages"`) {
-		t.Errorf("subagent card = %q, want the closing done node", got)
+	// The closing status line: verb + step count + summary, with no inner node.
+	if !strings.Contains(got, `│ done · 6 steps — "found 12 packages"`) {
+		t.Errorf("subagent card = %q, want the closing done status", got)
 	}
 	// No doubling: "found 12 packages" appears exactly once (only in the done node),
 	// not also as a separate result-preview body.
 	if n := strings.Count(got, "found 12 packages"); n != 1 {
 		t.Errorf("subagent card = %q, summary appears %d times, want exactly 1 (no doubling)", got, n)
 	}
-	// Every point on the rail is a circle — no "⎿" children anywhere.
-	if strings.Contains(got, "⎿") {
-		t.Errorf("subagent card = %q, must NOT contain any ⎿ (every point is a node)", got)
+	// The compact card has no child glyphs: neither the old "⎿" nor an inner "○".
+	if strings.Contains(got, "⎿") || strings.Contains(got, "│ ○") {
+		t.Errorf("subagent card = %q, must NOT contain a child status glyph", got)
 	}
 	// Nested == 0 → no nested-steps line.
 	if strings.Contains(got, "nested subagent steps") {
@@ -1372,11 +1372,11 @@ func TestSubagentNodeStatus(t *testing.T) {
 	}
 }
 
-// TestRenderSubagentCard_HeaderAndDone covers the two-node subagent render: the subagent
-// is an "○" header node at depth 0, closed by a "│ ○ verb · N steps — \"summary\"" done
-// node at depth 1. The subagent's OWN child tool nodes and the "+N nested subagent steps"
-// collapsed marker are NOT rendered. Every point on the rail is a circle — no "⎿" children
-// and no plain done line. The interrupted variant omits the summary.
+// TestRenderSubagentCard_HeaderAndDone covers the compact subagent render: the subagent
+// is an "○" header node at depth 0, closed by a plain "│ verb · N steps — \"summary\""
+// status line. The inner status is not a second hollow-circle node. The subagent's OWN child
+// tool nodes and the "+N nested subagent steps" collapsed marker are NOT rendered. The
+// interrupted variant omits the summary.
 func TestRenderSubagentCard_HeaderAndDone(t *testing.T) {
 	t.Parallel()
 
@@ -1399,7 +1399,7 @@ func TestRenderSubagentCard_HeaderAndDone(t *testing.T) {
 		for _, w := range []string{
 			"○ Subagent(explore)",
 			"find the retry logic",
-			`│ ○ done · 2 steps — "found in backoff.go"`,
+			`│ done · 2 steps — "found in backoff.go"`,
 		} {
 			if !strings.Contains(out, w) {
 				t.Errorf("header/done rail = \n%s\nwant it to contain %q", out, w)
@@ -1414,11 +1414,14 @@ func TestRenderSubagentCard_HeaderAndDone(t *testing.T) {
 		if strings.Contains(out, "⎿") {
 			t.Errorf("header/done rail = \n%s\nmust NOT contain any ⎿ (every point is a circle)", out)
 		}
-		// The closing line begins with a node (its depth-1 spine then "○"), not plain text.
+		// The closing line is plain status text on the subagent's inner rail, with no node.
 		lines := strings.Split(out, "\n")
 		last := lines[len(lines)-1]
-		if !strings.HasPrefix(last, "│ ○ done") {
-			t.Errorf("closing line = %q, want it to begin with the depth-1 done node", last)
+		if !strings.HasPrefix(last, "│ done") {
+			t.Errorf("closing line = %q, want plain status text on the inner rail", last)
+		}
+		if strings.Contains(last, "○") {
+			t.Errorf("closing line = %q, must not contain a hollow-circle status node", last)
 		}
 	})
 
