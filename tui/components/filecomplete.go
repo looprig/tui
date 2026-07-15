@@ -1,12 +1,5 @@
 package components
 
-import (
-	"path/filepath"
-	"strings"
-
-	"github.com/looprig/cli/tui/styles"
-)
-
 // FileItem is one @path completion candidate. Path is the value to complete to (e.g.
 // "src" or "src/main.go"); IsDir drives the trailing "/" affordance and whether
 // selecting it keeps the panel open to drill in.
@@ -40,26 +33,32 @@ func (f *FileComplete) Up() { f.cursor = (f.cursor - 1 + len(f.items)) % len(f.i
 // Down moves the cursor down, wrapping to the top.
 func (f *FileComplete) Down() { f.cursor = (f.cursor + 1) % len(f.items) }
 
-// label is the displayed name for an item: its base name, plus a trailing "/" for a
-// directory so a folder reads as drillable at a glance.
+// label is the complete displayed @path, plus a trailing "/" for a directory so a
+// folder reads as drillable at a glance.
 func (i FileItem) label() string {
-	name := filepath.Base(i.Path)
+	name := "@" + i.Path
 	if i.IsDir {
 		return name + "/"
 	}
 	return name
 }
 
-// View renders the filtered list, marking the cursor row (the same shape as
-// SlashComplete.View so the @ panel and the / panel look identical).
-func (f *FileComplete) View() string {
-	rows := make([]string, len(f.items))
+func (f *FileComplete) trayRows() []completionTrayRow {
+	rows := make([]completionTrayRow, len(f.items))
 	for i, item := range f.items {
-		if i == f.cursor {
-			rows[i] = styles.UserStyle.Render("> " + item.label())
-			continue
-		}
-		rows[i] = "  " + item.label()
+		rows[i] = completionTrayRow{primary: item.label()}
 	}
-	return strings.Join(rows, "\n")
+	return rows
+}
+
+// View renders the filtered list at its natural content width.
+func (f *FileComplete) View() string {
+	rows := f.trayRows()
+	return renderCompletionTray(rows, f.cursor, completionTrayNaturalWidth(rows))
+}
+
+// ViewWidth renders the filtered list as a tray whose rows are padded or clamped
+// ANSI-safely to width display columns.
+func (f *FileComplete) ViewWidth(width int) string {
+	return renderCompletionTray(f.trayRows(), f.cursor, width)
 }

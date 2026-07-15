@@ -1,10 +1,6 @@
 package components
 
-import (
-	"strings"
-
-	"github.com/looprig/cli/tui/styles"
-)
+import "strings"
 
 // SlashCmd is one slash command's display metadata. The action is dispatched by
 // package tui keyed on Name; this widget only filters and displays.
@@ -15,9 +11,15 @@ type SlashCmd struct {
 
 // SlashCommands is the canonical list (exported so package tui can map Name→action).
 var SlashCommands = []SlashCmd{
-	{"/clear", "clear the conversation"},
-	{"/compact", "compact the conversation"},
-	{"/help", "list commands"},
+	{"/clear", "start a new conversation"},
+	{"/compact", "compact the current conversation"},
+	{"/exit", "exit Looprig"},
+}
+
+var slashRelatedWords = map[string][]string{
+	"/clear":   {"new", "reset", "restart"},
+	"/compact": {"compress", "context", "shorten"},
+	"/exit":    {"quit", "close", "leave"},
 }
 
 // SlashComplete is a filtered command list with a wrapping cursor.
@@ -26,20 +28,53 @@ type SlashComplete struct {
 	cursor int
 }
 
-// NewSlashComplete returns a completer for the commands whose Name has prefix
-// (case-sensitive, prefix includes the leading '/'). Returns nil when nothing
+// NewSlashComplete returns a case-insensitive, relevance-ranked completer for prefix.
+// The optional leading slash is ignored while matching. Returns nil when nothing
 // matches (nil = panel hidden).
 func NewSlashComplete(prefix string) *SlashComplete {
+	query := strings.ToLower(strings.TrimPrefix(prefix, "/"))
+	if query == "" {
+		return &SlashComplete{items: append([]SlashCmd(nil), SlashCommands...)}
+	}
+
 	var matches []SlashCmd
-	for _, c := range SlashCommands {
-		if strings.HasPrefix(c.Name, prefix) {
-			matches = append(matches, c)
+	for rank := 0; rank < 5; rank++ {
+		for _, command := range SlashCommands {
+			if slashMatchRank(command, query) == rank {
+				matches = append(matches, command)
+			}
 		}
 	}
 	if len(matches) == 0 {
 		return nil
 	}
 	return &SlashComplete{items: matches, cursor: 0}
+}
+
+func slashMatchRank(command SlashCmd, query string) int {
+	name := strings.ToLower(strings.TrimPrefix(command.Name, "/"))
+	switch {
+	case name == query:
+		return 0
+	case strings.HasPrefix(name, query):
+		return 1
+	}
+
+	related := slashRelatedWords[command.Name]
+	for _, word := range related {
+		if word == query {
+			return 2
+		}
+	}
+	for _, word := range related {
+		if strings.Contains(word, query) {
+			return 3
+		}
+	}
+	if strings.Contains(name, query) {
+		return 4
+	}
+	return -1
 }
 
 // Selected returns the item under the cursor.
@@ -57,16 +92,22 @@ func (s *SlashComplete) Down() {
 	s.cursor = (s.cursor + 1) % len(s.items)
 }
 
-// View renders the filtered list, marking the cursor row.
-func (s *SlashComplete) View() string {
-	rows := make([]string, len(s.items))
+func (s *SlashComplete) trayRows() []completionTrayRow {
+	rows := make([]completionTrayRow, len(s.items))
 	for i, item := range s.items {
-		row := "  " + item.Name + "  " + item.Desc
-		if i == s.cursor {
-			rows[i] = styles.UserStyle.Render("> " + item.Name + "  " + item.Desc)
-			continue
-		}
-		rows[i] = row
+		rows[i] = completionTrayRow{primary: item.Name, secondary: item.Desc}
 	}
-	return strings.Join(rows, "\n")
+	return rows
+}
+
+// View renders the filtered list at its natural content width.
+func (s *SlashComplete) View() string {
+	rows := s.trayRows()
+	return renderCompletionTray(rows, s.cursor, completionTrayNaturalWidth(rows))
+}
+
+// ViewWidth renders the filtered list as a tray whose rows are padded or clamped
+// ANSI-safely to width display columns.
+func (s *SlashComplete) ViewWidth(width int) string {
+	return renderCompletionTray(s.trayRows(), s.cursor, width)
 }
