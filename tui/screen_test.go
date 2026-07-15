@@ -55,11 +55,11 @@ func compactResultFromCmd(t *testing.T, cmd tea.Cmd) (compactResultMsg, bool) {
 	return compactResultMsg{}, false
 }
 
-// runGracefulQuitSequence executes the two leaves returned by the shell's graceful
-// shutdown choreography and verifies the second leaf is Bubble Tea's quit signal.
-// tea.Sequence intentionally hides its concrete message type, so reflection is used
-// only to unwrap its []tea.Cmd representation in this black-box test.
-func runGracefulQuitSequence(t *testing.T, cmd tea.Cmd) {
+// gracefulQuitLeaves extracts the two leaves returned by the shell's graceful
+// shutdown choreography. tea.Sequence intentionally hides its concrete message
+// type, so reflection is used only to unwrap its []tea.Cmd representation in this
+// black-box test.
+func gracefulQuitLeaves(t *testing.T, cmd tea.Cmd) (tea.Cmd, tea.Cmd) {
 	t.Helper()
 	if cmd == nil {
 		t.Fatal("graceful quit cmd = nil")
@@ -77,6 +77,14 @@ func runGracefulQuitSequence(t *testing.T, cmd tea.Cmd) {
 	if !ok {
 		t.Fatalf("graceful quit second leaf = %T, want tea.Cmd", seq.Index(1).Interface())
 	}
+	return closeCmd, quitCmd
+}
+
+// runGracefulQuitSequence executes the bounded close then verifies the final leaf
+// is Bubble Tea's quit signal.
+func runGracefulQuitSequence(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	closeCmd, quitCmd := gracefulQuitLeaves(t, cmd)
 	_ = closeCmd()
 	quitMsg := quitCmd()
 	if _, ok := quitMsg.(tea.QuitMsg); !ok {
@@ -2595,6 +2603,63 @@ func TestModernInterruptAndQuit(t *testing.T) {
 			t.Fatalf("second ctrl+c cmd = %v, want nil while first close is pending", second)
 		}
 		runGracefulQuitSequence(t, first)
+		if agent.closeCalls != 1 {
+			t.Errorf("agent Close calls = %d, want exactly 1", agent.closeCalls)
+		}
+	})
+
+	t.Run("all keys are inert while graceful close is in flight", func(t *testing.T) {
+		closeEntered := make(chan struct{})
+		closeRelease := make(chan struct{})
+		agent := &fakeAgent{
+			activeLoopID: callID(1),
+			closeEntered: closeEntered,
+			closeRelease: closeRelease,
+		}
+		openCalls := 0
+		m := newScreenSized(t, agent, 80, 24)
+		m.sub = newFakeSubscription()
+		m.openAgent = func(context.Context) (Agent, error) {
+			openCalls++
+			return &fakeAgent{activeLoopID: callID(2)}, nil
+		}
+		m.interaction.input.SetValue("/clear")
+
+		m, shutdown := updateScreen(t, m, ctrlKey('c'))
+		closeCmd, quitCmd := gracefulQuitLeaves(t, shutdown)
+		closeDone := make(chan tea.Msg, 1)
+		go func() { closeDone <- closeCmd() }()
+		<-closeEntered
+
+		m, enterCmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if enterCmd != nil {
+			t.Errorf("enter during shutdown cmd = %v, want nil", enterCmd)
+		}
+		m, printableCmd := updateScreen(t, m, runeKey('x'))
+		if printableCmd != nil {
+			t.Errorf("printable key during shutdown cmd = %v, want nil", printableCmd)
+		}
+		if got := m.interaction.input.Value(); got != "/clear" {
+			t.Errorf("draft during shutdown = %q, want unchanged /clear", got)
+		}
+		if m.status != StatusIdle {
+			t.Errorf("status during shutdown = %d, want StatusIdle (no /clear reset)", m.status)
+		}
+		if m.handoff != nil {
+			t.Error("/clear handoff created during shutdown")
+		}
+		if openCalls != 0 {
+			t.Errorf("openAgent calls during shutdown = %d, want 0", openCalls)
+		}
+
+		close(closeRelease)
+		if msg := <-closeDone; msg != nil {
+			t.Errorf("close command message = %T, want nil", msg)
+		}
+		quitMsg := quitCmd()
+		if _, ok := quitMsg.(tea.QuitMsg); !ok {
+			t.Errorf("quit command message = %T, want tea.QuitMsg", quitMsg)
+		}
 		if agent.closeCalls != 1 {
 			t.Errorf("agent Close calls = %d, want exactly 1", agent.closeCalls)
 		}

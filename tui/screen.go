@@ -807,6 +807,13 @@ func (m *Screen) beginGracefulQuit() tea.Cmd {
 // nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
 // input — falls through to the composer.
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Once shutdown owns the agent, every later key is inert until Bubble Tea
+	// processes the queued QuitMsg. This guard must precede global chords, prompts,
+	// viewport navigation, and composer routing so none can mutate state or dispatch
+	// work while the bounded agent close is in flight.
+	if m.quitting {
+		return m, nil
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m, m.beginGracefulQuit()
