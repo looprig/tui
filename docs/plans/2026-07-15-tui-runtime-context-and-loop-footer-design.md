@@ -1,24 +1,34 @@
-# TUI runtime context, controls, and loop footer — design
+# TUI runtime status, controls, session browser, and loop footer design
 
 Date: 2026-07-15  
 Status: approved design  
-Scope: `harness` + `cli` + `swe`; no `sandbox` or `inference` API change
+Scope: `harness` + `tui` + `coderig`; no `confinement`, `sandbox`, or `inference` API change
 
 ## Goal
 
-Make the CLI show the runtime that actually governs the focused loop, keep every primer and
-currently relevant delegate discoverable, and let the user change supported runtime settings
-through the existing slash-command tray. The design must work for rigs other than SWE without
-hard-coding SWE topology or assuming every rig offers runtime choices.
+Show the runtime that actually governs the focused loop, keep every primer and relevant delegate
+discoverable, let users change the choices their rig exposes, and let them resume previous sessions
+without leaving the TUI.
+
+The design remains useful for rigs other than CodeRig. The TUI does not hard-code CodeRig topology,
+model names, access ordinals, or the assumption that every rig supports runtime mutation or session
+history.
 
 The surface is organized by ownership:
 
 - The status line shows live turn state, elapsed time, the focused loop's effective model and
-  effort, and that loop's latest measured context occupancy.
+  effort, and its latest measured context occupancy.
 - The composer shows the focused loop's mode on its bottom padding row.
-- The footer shows the rig name, session environment, all primers, and running delegates.
-- Runtime mutation uses slash commands and the existing blue completion tray. No centered modal
-  and no new keyboard shortcuts are part of this phase.
+- The footer shows the rig name, access level, workspace root, primers, and relevant delegates.
+- Runtime mutation uses typed optional capabilities and the existing completion tray.
+- Session discovery and resume use an optional process-scoped browser because the catalog and store
+  outlive any individual agent.
+- Presentation focus belongs to the TUI. It never changes the Harness active loop merely because a
+  user views another loop.
+
+The name "runtime status" is used instead of "runtime context" where practical because CodeRig
+already uses runtime context to mean prompt material such as the date, working directory, and Git
+state.
 
 ## Final layout
 
@@ -29,48 +39,50 @@ The surface is organized by ownership:
 │  Fix the flaky session reset test
 │                                                               Plan/Build
 
-│  SWE · Trusted ENV(/Users/ipotter/code/looprig) · ● planner (a1b2) · ○ builder (c3d4)
+│  CodeRig · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
 ```
 
 The composer has a three-row minimum: one top padding row, a one-row editor, and one bottom
-padding row. Newlines grow only the editor region, preserving the top and bottom rows. The
-existing editor cap remains in force; after the cap, the textarea scrolls internally.
+padding row. Newlines grow only the editor region. The existing editor cap remains in force; after
+the cap, the textarea scrolls internally.
 
-The footer wraps at loop-segment boundaries when it cannot fit. Continuation rows retain the
-gray rail and align with the first loop rather than repeating `SWE` and the environment:
+The footer wraps at loop-segment boundaries. Continuation rows retain the accent rail and align
+with the first loop instead of repeating the rig, access, and workspace:
 
 ```text
-│  SWE · Trusted ENV(/Users/ipotter/code/looprig) · ● planner (a1b2) · ○ builder (c3d4)
-│                                                     ○ reviewer (e5f6) · ○ operator (g7h8)
+│  CodeRig · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
+│                                          ○ reviewer (e5f6) · ○ operator (g7h8)
 ```
 
-Long workspace roots first replace the user's home with `~`, then middle-elide. Loop display
-names truncate before their four-character IDs. The footer never soft-wraps implicitly: layout
-computes physical rows so Bubble Tea's inline renderer keeps an exact height.
+Workspace roots replace the user's home with `~`, then middle-elide. Loop display names truncate
+before their four-character IDs. Layout computes every physical row explicitly so Bubble Tea's
+inline renderer keeps an exact height.
 
 ## Visual and interaction language
 
-- Active status keeps the existing lime-to-blue animation and filled `●`; idle keeps the subtle
-  hollow `○`.
+- Active status keeps the existing lime-to-blue animation and filled `●`; idle keeps `○`.
 - The focused loop uses `●`; every other loop uses `○`.
-- Loop segments use the established semantic-link hover: a slow blue glow and text-only
-  underline. Clicking a loop focuses its transcript and calls the harness active-loop setter so
-  subsequent default input targets the same loop.
-- Model, effort, mode, and environment use the same link hover only when at least two valid
-  choices exist. A single fixed value is muted and does not react to hover.
-- Context occupancy is display-only and never receives link styling.
-- The footer uses middle dots as separators. It does not use the completion tray's selected-row
-  background because loop focus is already encoded by `●` and link hover.
+- Loop segments use the established semantic-link hover: a slow blue glow and text-only underline.
+- Clicking a loop changes only the TUI's focused transcript and submission target. It does not call
+  `SessionController.SetActiveLoop`.
+- Model, effort, mode, and access use link hover only when at least two valid choices exist. A
+  single fixed value is muted and non-interactive.
+- Context occupancy is display-only.
+- The footer uses middle dots as separators and no selected-row background because focus is already
+  encoded by `●` and hover.
 
 Clicking an editable runtime value opens its corresponding slash-value tray. If the composer
-already contains a draft, the interaction model saves it, temporarily presents the slash
-command, and restores the draft after apply or Escape. A click must never destroy user input.
+contains a draft, the interaction model saves it, temporarily presents the command, and restores
+the draft after apply or Escape.
 
-## Environment terminology
+## Access terminology
 
-The CLI presents the sandbox ladder as:
+The user-facing concept is **access**, not environment. The selectable value changes the
+session's security limit; it does not change the workspace, host, or execution provider.
 
-| Internal sandbox value | User-facing label |
+CodeRig maps its confinement ladder as follows:
+
+| Internal value | User-facing label |
 |---|---|
 | `ZeroTrust` | `Untrusted` |
 | `ReadOnly` | `Read Only` |
@@ -78,114 +90,90 @@ The CLI presents the sandbox ladder as:
 | `Trusted` | `Trusted` |
 | `Unconfined` | `Unconfined` |
 
-`sandbox.Write` remains unchanged. The exported enum is defined in the separate `sandbox`
-repository and used by the separate `swe` repository, so renaming it violates the requested
-"only if it is not a multi-repository change" constraint. Configuration parsing may accept both
-`write` and `writable`; the UI always renders `Writable`.
+The existing internal `Write` name remains unchanged. Configuration parsing may accept both
+`write` and `writable`; the TUI always renders `Writable`.
 
-The environment setting is session-scoped. CodeRig's launch-time security limit is both the
-initial value and maximum runtime value. The runtime choices are every permitted rung at or
-below that cap. A session capped at `Writable`, for example, offers `Untrusted`, `Read Only`,
-and `Writable`, but not `Trusted`. `Unconfined` is returned only by an adapter whose composition
-root explicitly permits and acknowledges it. Per-role and parent clamps can remain more
-restrictive than the session setting; changing the environment never bypasses those clamps.
+Access is session-scoped. CodeRig's launch-time security limit is the maximum runtime value. The
+adapter exposes every permitted rung at or below that cap. A session capped at `Writable` offers
+`Untrusted`, `Read Only`, and `Writable`, but not `Trusted`. `Unconfined` is returned only when the
+composition root explicitly permits it. Per-role and parent clamps may remain more restrictive;
+raising session access never bypasses them.
 
-## Runtime-choice discovery
+## Optional capabilities
 
-The CLI must not infer choices from current values or hard-code provider/model names. The agent
-adapter exposes two read-only snapshots and narrow mutation methods:
+The required `tui.Agent` interface remains unchanged. Runtime controls and session browsing are
+optional capabilities beside it, so existing agents, fakes, and third-party adapters continue to
+compile and rigs without choices keep a clean surface.
+
+Following the package-boundary design, the canonical types live with the state machine in
+`internal/presentation` and are aliased from the root `tui` facade. No new public package is
+introduced, and `internal/presentation` never imports the root package.
+
+Conceptually, the runtime capabilities are separated by responsibility:
 
 ```go
-type LoopRuntimeOptions struct {
-    CurrentMode   loop.ModeName
-    CurrentModel  inference.ModelKey
-    CurrentEffort inference.Effort
-    Modes         []ModeOption
-    Models        []ModelOption
-    Efforts       []inference.Effort
+type RuntimeCatalog interface {
+    LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error)
+    AccessOptions(context.Context) (AccessOptions, error)
 }
 
-type EnvironmentRuntimeOptions struct {
-    Current EnvironmentID
-    Root    string
-    Choices []EnvironmentOption
+type RuntimeController interface {
+    SetMode(context.Context, uuid.UUID, ModeID) error
+    SetModel(context.Context, uuid.UUID, ModelID) error
+    SetEffort(context.Context, uuid.UUID, EffortID) error
+    SetAccess(context.Context, AccessID) error
 }
 ```
 
-The concrete API uses typed IDs and defensive copies. A model selection sends a model key back
-to the adapter; the adapter resolves that key to the trusted, secret-free descriptor from its
-catalog before calling `loop.ChangeModel`. The CLI never manufactures a model descriptor from
-typed text. Environment IDs are likewise adapter-defined typed values rather than imported
-`sandbox.Mode`s, keeping the generic CLI independent of the sandbox module.
-
-Following the CLI's interface-segregation rule, runtime discovery and mutation are focused
-interfaces embedded by `tui.Agent`, not flags added to a large configuration object. There is
-no `hidden/read-only/editable` permission mechanism. Choice count alone determines the UI:
+An adapter may implement discovery without mutation. Choice count determines presentation:
 
 - Zero choices: hide the field and command.
-- One choice: show the fixed value where applicable, but provide no command, hover, or click.
-- Two or more choices: show the interactive value and register its slash command.
+- One choice: show the fixed value where useful, but provide no command, hover, or click.
+- Two or more choices plus mutation capability: show the interactive value and command.
+- Two or more choices without mutation capability: show the current event-derived value as
+  read-only.
 
-Options are queried when a value tray opens, not cached indefinitely. The screen also refreshes
-after focus, mode, model, or environment changes. A stale option can therefore be refused safely
-by the adapter without producing an optimistic UI update.
+Available choices and current state have different authorities. Catalog snapshots contain only
+available options and their typed IDs. They do not contain `CurrentMode`, `CurrentModel`,
+`CurrentEffort`, or current access. Current values are folded exclusively from enduring events.
+
+Options are queried when a value tray opens and refreshed after focus or a committed runtime
+change. A stale option is revalidated by the adapter and Harness. The TUI never applies an
+optimistic runtime value.
 
 ### Modes
 
-Harness already retains every bound mode, but public `loop.Handle` exposes only the current mode
-and model. Add a separate read-only `loop.ModeCatalog` interface implemented by the concrete
-session loop handle. It returns a defensive copy of selectable names from the bound definition;
-it does not expose tools, prompts, or permission internals.
+Harness retains every bound mode, but `loop.Handle` currently exposes only the effective mode and
+model. Add a separate read-only `loop.ModeCatalog` capability implemented by native live handles.
+It returns a defensive copy of selectable names from the bound definition and exposes no tools,
+prompts, or permission internals.
 
 The unnamed base mode is labeled `Default`. A definition with no named modes presents no mode
-field and no `/mode` command. Once a named mode exists, `Default` and all named modes are
-selectable, so `/mode` has at least two entries. Other adapters may return a single fixed named
-mode; the CLI displays it muted and still omits `/mode`.
-
-Mode changes call the focused loop controller's `SetMode`. They take effect at the next turn
-boundary and atomically restore that mode's model, effort, tools, tool limits, and instructions.
-The status and composer update only from the committed reply/enduring event. Direct model or
-effort changes override the selected mode's inference values until a later mode change resets
-them; this phase does not add a separate “custom override” badge.
+field or `/mode`. Mode changes call the focused loop controller's `SetMode`, take effect at a turn
+boundary, and update the TUI only when the committed event arrives.
 
 ### Models
 
-SWE derives selectable normal-turn models from its validated model catalog in stable order:
+CodeRig derives selectable normal-turn models from its validated model catalog in stable order.
+Title-generation-only models are excluded. Duplicate model keys collapse to their first
+occurrence, and incompatible models are removed.
 
-1. all `Standard` entries;
-2. all `Premium` entries;
-3. the focused loop's current model, inserted only when absent.
-
-`Economy` remains title-generation-only and is not offered. Duplicate model keys collapse to
-their first occurrence. The adapter returns only models compatible with that loop's fixed
-transport/context binding and current runtime requirements. Runtime mutation resolves the
-selected key back to the catalog descriptor and calls `loop.ChangeModel`; the harness remains the
-final validator.
-
-If the resulting list contains fewer than two choices, `/model` is absent and the status model
-is non-interactive.
+The TUI returns only the selected typed model ID. CodeRig resolves it to a trusted, secret-free
+descriptor before calling `loop.ChangeModel`; the Harness remains the final validator. The TUI
+never manufactures a descriptor from typed text.
 
 ### Effort
 
-The inference enum's syntactic validity does not prove that a model supports every value.
-Effort choices therefore come from the adapter for the focused loop's current model. SWE uses
-the model's `Caps.Thinking` plus its API format:
+Effort choices come from the adapter for the focused loop's current model. CodeRig maps thinking
+capability and provider format to the effort values the provider actually supports. The TUI does
+not assume every dialect-neutral enum value is meaningful.
 
-- no thinking capability or an unknown format: current/default only;
-- OpenAI reasoning: Auto, Low, Medium, High (`Max` is omitted because the codec clamps it to
-  High);
-- Anthropic or Gemini thinking: Auto, Low, Medium, High, Max.
+### Access
 
-`Auto` maps to `inference.EffortNone`. The adapter may narrow this list for a specific model.
-The CLI never assumes that the five dialect-neutral enum values are all meaningful. If fewer
-than two effective choices remain, `/effort` is absent.
-
-### Environment
-
-SWE builds the environment choices from the session ceiling configured at the rig composition
-root. The selected environment changes through `SessionController.SetSecurityLimit`, is
-journaled as `SecurityLimitChanged`, and is restored with the session. `/env` is absent only
-when the adapter returns fewer than two permitted values.
+CodeRig builds access choices from the configured session cap. Selection calls
+`SessionController.SetSecurityLimit`, is journaled as `SecurityLimitChanged`, and restores with
+the session. The generic TUI receives adapter-defined `AccessID` values and does not import
+sandbox or confinement policy types.
 
 ## Slash-command trays
 
@@ -197,85 +185,70 @@ The visible command catalog becomes dynamic. Existing commands remain:
 /exit
 ```
 
-Runtime commands are added only when their focused scope has multiple choices:
+Runtime commands appear only when their scope is editable:
 
 ```text
 /model
 /effort
-/env
+/access
 /mode
 ```
 
-Typing or clicking a runtime command reuses the completion panel above the composer. It has two
-states:
+`/sessions` appears when a session browser is configured. `/resume` is an exact synonym and a
+related search term; only `/sessions` needs to occupy a row in the command tray.
 
-1. **Command state** filters command names and existing related-word aliases.
-2. **Value state** begins after the command plus a space, filters that command's current choices,
-   and uses the same selected blue rail, three-step background transition, mouse movement, and
-   Up/Down navigation as today's `/` and `@` trays.
+Runtime commands reuse the completion panel above the composer:
 
-Examples:
+1. **Command state** filters command names and related-word aliases.
+2. **Value state** begins after the command plus a space, filters current choices, and reuses the
+   selected background, animation, mouse movement, and Up/Down navigation of today's trays.
 
-```text
-/mode b
+Tab completes the selected row. Enter applies the exact or selected typed value. Escape closes
+the tray and restores a click-preserved draft. Arbitrary fuzzy text never crosses the mutation
+boundary.
 
-│ plan       planning configuration
-▌ build      implementation configuration
-│ review     review configuration
-```
-
-Tab completes the selected row, preserving its current completion meaning. Enter applies an
-exact or selected value. Escape closes the tray and restores a click-preserved draft. Runtime
-values match case-insensitively by label and explicit aliases; commands retain their existing
-related-word matching. Arbitrary fuzzy resolution never crosses the mutation boundary: the
-adapter receives only the typed ID attached to a catalog row.
-
-This phase adds no Tab/Shift+Tab mode switching and no Left/Right loop switching. Existing key
-bindings remain unchanged. Keyboard shortcuts and centered modals are deferred.
+This phase adds no Tab/Shift+Tab runtime cycling, Left/Right loop switching, or centered modal.
 
 ## Authoritative screen state
 
-The TUI keeps a per-loop runtime projection folded from enduring events:
+The TUI folds a per-loop runtime projection from enduring events:
 
-- `LoopStarted`: display name, primer/delegate provenance, initial mode, model, limits, effort.
-- `LoopModeChanged`: current mode plus its resolved model/limits/effort.
-- `LoopInferenceChanged`: current model/limits/effort without changing the mode.
-- `ContextMeasured`: latest authoritative input-token count and input limit.
-- `LoopIdle` and turn lifecycle: delegate visibility and live state.
-- `SecurityLimitChanged`: current session environment.
-- `ActiveLoopChanged`: harness active target, independent of presentation focus unless the user
-  made the selection through the footer.
+- `LoopStarted`: name, primer/delegate provenance, initial mode, model, limits, and effort.
+- `LoopModeChanged`: effective mode, model, limits, and effort.
+- `LoopInferenceChanged`: effective model, limits, and effort without changing mode.
+- `ContextMeasured`: latest input-token count and input limit.
+- Loop and turn lifecycle: live state and delegate visibility.
+- `SecurityLimitChanged`: current session access.
+
+`ActiveLoopChanged` does not move presentation focus. The initial `Agent.ActiveLoopID()` may seed
+the first focus, after which explicit TUI navigation owns it. Focused submissions already use
+`SubmitToLoop`, so local focus needs no Harness mutation.
 
 The latest `ContextMeasured` for the focused loop drives the right-aligned meter. Percentage is
-`InputTokens / InputLimit`; the bar clamps its fill at 100% while the numeric label may exceed
-100% because over-limit measurements remain valid audit evidence. A heuristic measurement is
-prefixed with `~`. With no measurement or zero limit, the meter is omitted.
+`InputTokens / InputLimit`; the bar clamps at 100% while the numeric value may exceed 100%. A
+heuristic measurement is prefixed with `~`. With no measurement or zero limit, the meter is
+omitted.
 
-Runtime display changes only after an authoritative event or successful controller reply. A
-failed command leaves the previous values intact and commits a faint typed-error notice.
+Runtime display changes only after authoritative events. A failed command leaves previous values
+intact and commits a faint typed-error notice.
 
 ## Status line
-
-The focused loop's status line renders:
 
 ```text
 ● streaming… (25s · gpt-5.4 · high)                         ███░░░░░ 42%
 ```
 
-Rules:
-
-- Elapsed time appears only for a running focused loop, using the existing event/tick clock.
-- Model is always shown when known. Effort is shown as `auto`, `low`, `medium`, `high`, or `max`.
-- Separators collapse cleanly when elapsed or effort is absent.
-- Model and effort receive link styling and hit regions only with multiple choices.
-- Context is right-aligned. On narrow terminals, the meter drops blocks first and retains the
-  numeric percentage; then effort drops before model. The lifecycle label is never removed.
-- Active lifecycle text retains the existing animated gradient; runtime metadata stays stable so
-  the whole line does not shimmer.
+- Elapsed time appears only for a running focused loop.
+- Model is shown when known. Effort renders as `auto`, `low`, `medium`, `high`, or `max`.
+- Separators collapse when elapsed or effort is absent.
+- Model and effort receive hit regions only with multiple editable choices.
+- On narrow terminals, context blocks drop before the numeric percentage, then effort drops
+  before model. Lifecycle text is never removed.
+- Runtime metadata remains stable while lifecycle text animates.
 
 ## Composer mode line
 
-The composer uses the existing left accent rail on every physical row. The bottom padding row
+The composer uses the existing accent rail on every physical row. The bottom padding row
 right-aligns the focused loop mode:
 
 ```text
@@ -284,118 +257,219 @@ right-aligns the focused loop mode:
 │                                                                  Build
 ```
 
-No named modes means no label. A single fixed mode is muted. Multiple modes use link hover and a
-click opens `/mode `. Multiline input grows between the two padding rows and leaves the mode
-anchored at the bottom.
+No named modes means no label. A fixed mode is muted. Multiple editable modes use link hover and
+click to open `/mode `. Multiline input grows between the two padding rows.
 
-## Loop footer and topology bootstrap
+## Loop footer and fresh-session bootstrap
 
-Primers are `LoopStarted` roots: no spawning loop cause and no parent tool-use ID. Every primer
-remains visible for the whole session. Delegates follow primers in creation order and remain
-visible while running or gated. An idle focused delegate remains temporarily visible so its
-transcript does not disappear beneath the pointer; after focus moves away, it leaves the footer.
+Primers are `LoopStarted` roots with no spawning-loop cause and no parent tool-use ID. Every
+primer remains visible for the session. Delegates follow primers in creation order and remain
+visible while running or gated. A focused idle delegate remains visible until focus moves away.
 
-The current adapter misses initial primer events in a fresh session because the rig creates loops
-before the TUI subscribes and `ReplayBacklog` currently returns history only for restored
-sessions. Extend the adapter's bootstrap replay to return already-durable public enduring events
-for new sessions as well. A fresh session has no user turns before adapter construction, so this
-replay supplies topology/runtime state without duplicating conversation content. Live delegates
-continue through the single all-loops subscription.
+Fresh CodeRig sessions create their primers before the TUI subscribes, while
+`sessionadapter.New` intentionally has no replay backlog. Add a generic replay-aware constructor,
+conceptually `sessionadapter.NewWithReplay`, that cold-replays already-durable public enduring
+events for a newly created session. `New` may retain its no-backlog behavior for simple/headless
+consumers. CodeRig uses the replay-aware constructor for both new and restored TUI sessions.
 
-The footer has no fixed loop-count cap. It creates another physical row when needed, as requested,
-and the surface height budget subtracts every row before sizing the live tail. Mouse hit regions
-are computed from the same wrapped layout used to render, preventing render/hit-test drift.
+This supplies topology and runtime state without CodeRig-specific behavior in presentation. Live
+events continue through the single all-loops subscription. Cold replay completes before live
+attachment, and boundary tests prove no event is lost or folded twice.
+
+The footer has no fixed loop-count cap. It adds physical rows as needed, and the surface budget
+subtracts every row before sizing the live tail. Render and mouse hit regions use the same wrapped
+layout.
+
+## Session browser
+
+Session browsing belongs to a process-scoped optional capability because the shared store and its
+catalog outlive the current `Agent`:
+
+```go
+type SessionBrowser interface {
+    ListSessions(context.Context) ([]SessionSummary, error)
+    ResumeSession(context.Context, SessionID) (Agent, error)
+}
+```
+
+The exact API may keep new-session opening separate through the existing `OpenAgent`. A backwards-
+compatible TUI option supplies `SessionBrowser`; it is not embedded in `Agent`.
+
+CodeRig implements the browser over `SessionStoreFactory`. It maps Harness `SessionMeta` into a
+generic summary containing session ID, title, lifecycle state, created time, last-active time,
+agent kind, loop count, and configuration compatibility. Listing reads the replay-free catalog
+and remains most-recently-active-first.
+
+### Session tray
+
+`/sessions` and `/resume` open the same tray. The current session is excluded. Each previous
+session uses two content rows with one blank padding row between records:
+
+```text
+│
+│  Fix persistence race                            idle · 12m ago
+│  CodeRig · 3 loops · created Jul 15 · 8f2a1c3d
+│
+│  Build ACP foreign-loop support                 failed · 2h ago
+│  CodeRig · 5 loops · created Jul 14 · 31c90e72
+│
+│  Document runtime access controls              stopped · 1d ago
+│  CodeRig · 3 loops · created Jul 13 · a82db146
+│
+```
+
+The accent rail is uninterrupted and visually independent of the records. There are no boxes or
+corner glyphs. Typography, padding, and the selected background distinguish records.
+
+- The first row shows the title, lifecycle state, and relative last activity.
+- The second shows rig/agent kind, loop count, creation date, and a short session ID.
+- Long titles truncate before state and recency. Metadata drops in reverse importance on narrow
+  terminals; the session ID remains available to filtering even when hidden.
+- Up and Down move by session, not physical row. Mouse hover and click treat both content rows as
+  one item. The selected background covers the two content rows, not the blank padding.
+- The visible window is measured in records. An eight-content-row budget shows four sessions plus
+  their inter-record padding as the surface budget permits.
+- Typing filters title, full or short ID, state, and rig name. Escape cancels without changing the
+  current session.
+- Empty catalogs show `No previous sessions`. Listing failures produce a non-fatal notice and
+  leave the current session untouched.
+
+### Session switching
+
+Selecting a session is an explicit ownership handoff:
+
+1. If the current session is idle, begin the close-and-resume handoff immediately.
+2. If it is running, compacting, or waiting on a gate, request a session interrupt and show
+   `interrupting…`.
+3. Wait for the authoritative terminal event, then show `resuming…`.
+4. Close the current session before opening the selected one so exclusive workspace resources can
+   transfer safely.
+5. Restore the selected backlog, rebuild all projections, then attach live events.
+
+An interrupt refusal cancels the switch and leaves the current session open. Once close begins
+there is no rollback: as with `/clear`, a close or restore failure is terminal because ownership
+of the old session has already been released. In-flight queued input and open gates are cancelled
+by the explicit interrupt-and-close operation.
+
+A configuration mismatch is surfaced before handoff when the catalog can determine it. This
+design does not silently opt into `AllowConfigMismatch`; a future explicit action may do so.
 
 ## Failure and concurrency behavior
 
-- Catalog queries for an unknown/exited loop fail closed with no dynamic choices.
-- A choice that becomes stale between rendering and Enter is revalidated by the adapter and
-  harness; no optimistic state is applied.
-- Mode/model/effort changes target the focused loop captured when the command opens. Changing
-  focus while its tray is open closes and rebuilds the tray rather than silently retargeting.
-- Environment changes are session-scoped and do not depend on focused loop.
-- Tightening sandbox mode affects the next permission check immediately; an already-running OS
-  command finishes under the policy with which it started. Loosening remains capped by the rig.
-- Every asynchronous runtime change is context-bounded and returns a typed result message to the
-  Bubble Tea update loop. The UI never blocks in `Update`.
-- Restored events rebuild current mode/model/effort/environment/context before the live
-  subscription attaches. Last durable change wins.
+- Catalog queries for unknown or exited loops fail closed with no dynamic choices.
+- Stale runtime selections are revalidated by the adapter and Harness.
+- Mode/model/effort changes target the loop captured when the command opens. Focus changes close
+  and rebuild the tray rather than silently retargeting it.
+- Access changes are session-scoped.
+- Tightening access affects the next permission check. An already-running OS command finishes
+  under the policy with which it started. Loosening remains capped by the rig.
+- Every asynchronous query, mutation, interrupt, and handoff is context-bounded and reports a
+  typed Bubble Tea message. `Update` never blocks.
+- Cold history rebuilds mode, model, effort, access, context, and topology before live attachment.
 
 ## Alternatives considered
 
-### Hard-code choices in the CLI — rejected
+### Embed runtime and session methods in `Agent` — rejected
 
-This is simple initially but makes the generic CLI know SWE tiers, sandbox ordinals, and provider
-effort quirks. It can offer invalid choices and cannot represent other rigs.
+This would force every agent, fake, and third-party adapter to implement capabilities the rig may
+not possess. Session browsing also has process lifetime, not current-agent lifetime.
 
-### Put all choices in enduring events — rejected
+### Put current values in option catalogs — rejected
 
-Events should preserve the runtime that actually executed, not mutable catalogs. Persisting every
-available model or sandbox choice would make restore depend on stale configuration and bloat the
-journal. Events remain authoritative for current state; the live adapter owns available choices.
+It creates two authorities and allows query results to disagree with durable events. Events own
+current state; catalogs own only available choices.
 
-### Centered runtime modal — deferred
+### Hard-code choices in the TUI — rejected
 
-A modal could avoid temporarily using the composer, but the current inline/native-scrollback
-renderer does not own a stable full-screen canvas. The existing tray is already understood,
-tested, mouse-aware, and compatible with the surface height budget.
+It would make the generic TUI know CodeRig models, access ordinals, and provider effort quirks.
 
-## Repository scope and delivery order
+### Mutate Harness active loop on footer focus — rejected
 
-1. **Harness:** add the narrow read-only mode-catalog capability on live loop handles and tests.
-2. **CLI:** define typed runtime discovery/mutation interfaces; build projections, dynamic slash
-   trays, status/composer/footer rendering, clicks, wrapping, and fakes.
-3. **SWE:** implement the interfaces over the session controller, validated model catalog,
-   effort mapping, and configured security cap; expand new-session bootstrap replay.
-4. Publish/bump in dependency order and re-vendor generated dependency snapshots. Do not edit
-   vendor copies by hand.
+Focused submission already targets a loop explicitly. A viewing action should not change the
+session-wide default used by other clients.
 
-`sandbox.Write` is not renamed, so the sandbox repository is not part of this delivery. The
-inference package already has model keys, context limits, capabilities, and effort values needed
-by the adapter, so it also needs no API change.
+### Put session browsing on CodeRig alone — rejected
+
+The store implementation belongs to CodeRig, but the interaction is a reusable optional TUI
+capability that other rigs can implement.
+
+### Box every session record — rejected
+
+Boxes and corner marks compete with the tray's continuous accent rail. Blank padding, two-line
+typography, and a two-row selection background provide enough grouping with less visual noise.
+
+### Centered modal — deferred
+
+The existing tray is understood, tested, mouse-aware, and compatible with the inline surface
+height budget.
+
+## Delivery phases
+
+### Phase 1: authoritative visibility
+
+1. Harness mode catalog.
+2. Optional TUI runtime contracts and pure event reducer.
+3. Generic new-session bootstrap replay in `sessionadapter`.
+4. Read-only status metadata, context meter, composer mode, and wrapped loop footer.
+
+Phase 1 is independently releasable and validates the read model before mutations.
+
+### Phase 2: controls and navigation
+
+1. Dynamic command and value trays.
+2. CodeRig runtime catalogs and typed mutations for mode, model, effort, and access.
+3. Runtime clicks, hover, draft preservation, and stale-choice handling.
+4. Optional session browser, two-line session tray, and interrupt-then-resume handoff.
+
+Publish and bump modules in dependency order. Generated vendor snapshots are re-vendored and
+never edited by hand.
 
 ## Testing
 
 ### Harness
 
-- Mode catalog returns base and named modes in stable order.
-- Returned slices are defensive copies.
+- Mode catalog returns base and named modes in stable order with defensive copies.
 - New, restored, primer, and delegate handles expose the same catalog.
 
-### CLI
+### TUI
 
-- Dynamic slash-command registration for zero/one/multiple choices.
-- Nested value-tray filtering, selection, Tab completion, Enter apply, Escape, mouse movement,
-  three-step background transition, and stale-choice refusal.
-- Click-opened runtime tray preserves and restores a non-empty draft.
-- Status formatting across idle/running/transient states, missing fields, narrow widths,
-  clickable hit regions, and measured/heuristic/over-limit context.
-- Three-row composer minimum, multiline growth, editor cap, mode alignment, and missing/fixed/
-  interactive mode states.
-- Multiple primers, live delegates, focused-idle delegate retention, wrapped footer rows,
-  environment path elision, click focus+active mutation, and hover link animation.
-- Cold bootstrap plus live subscription does not duplicate events.
-- Fuzz width and arbitrary catalog labels to guarantee no wrap-induced height or hit-test drift.
+- Optional capability detection leaves existing agents unchanged.
+- Current runtime values come only from event folding; option catalogs contain no current value.
+- Dynamic commands cover zero, one, and multiple choices.
+- Value trays cover filtering, selection, Tab, Enter, Escape, mouse, animation, stale choices, and
+  click-preserved drafts.
+- Status covers idle/running/transient states, missing values, narrow widths, hit regions, and
+  measured, heuristic, and over-limit context.
+- Composer covers three-row minimum, multiline growth, cap, mode alignment, and fixed/editable
+  modes.
+- Footer covers multiple primers, delegates, focused-idle retention, wrapping, local-only focus,
+  workspace elision, and hover.
+- Bootstrap plus live subscription has neither gaps nor duplicates.
+- Session tray covers two content rows, blank padding, continuous rail, record-based navigation,
+  filtering, empty/error states, mouse hit regions, and narrow terminals.
+- Session switching covers idle handoff, running/gated interrupt, terminal-event wait, refusal,
+  close failure, restore failure, stale results, and shutdown during handoff.
+- Fuzz arbitrary widths and catalog labels to prevent implicit wrapping or hit-test drift.
 
-### SWE
+### CodeRig
 
-- Model choice ordering, deduplication, economy exclusion, compatibility filtering, and trusted
-  key-to-descriptor resolution.
-- Effort choices by thinking capability/API format, including OpenAI `Max` exclusion.
-- Environment ladders for every cap, `Writable` display mapping, alias parsing, and rejection of
-  levels above the cap.
-- Mode/model/effort mutations target the requested loop; environment mutation targets the
-  session; typed errors propagate unchanged.
-- New and restored session bootstrap produces identical primer/runtime projections.
+- Model ordering, deduplication, filtering, and trusted ID-to-descriptor resolution.
+- Effort choices by capability and provider format.
+- Access ladders for every cap, `Writable` display mapping, aliases, and above-cap rejection.
+- Mode/model/effort mutations target the captured loop; access targets the session.
+- New and restored bootstrap produce equivalent runtime and topology projections.
+- Session browser maps catalog metadata, excludes the current session, preserves recent-first
+  order, and refuses incompatible or unavailable restores without silent override.
 
-Every module runs its race suite. CLI additionally runs formatting, lint, security checks, and
-render-width tests required by its repository policy before release commits.
+Every module runs its race suite. TUI additionally runs formatting, lint, security, and render-
+width checks required by its repository policy.
 
 ## Deferred work
 
 - Tab/Shift+Tab runtime cycling.
-- Left/Right loop switching or a dedicated footer-focus mode.
+- Left/Right loop switching or dedicated footer-focus mode.
 - Center-screen modal pickers.
-- “Send to all loops.”
+- Sending one prompt to multiple loops.
 - Per-field visibility/editability policy flags.
-- A visual marker for direct model/effort overrides relative to the selected mode.
+- A marker for direct model/effort overrides relative to the selected mode.
+- Explicit config-mismatch override from the session tray.
