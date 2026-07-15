@@ -87,6 +87,14 @@ type Screen struct {
 	// release with it UNSET is treated as a click. It is reset on each fresh press.
 	mouseDragging bool
 
+	// hoveredEntry and hoveredLoop are the two pointer-action affordances. A committed
+	// transcript header is stored only when its rendered row is marked clickable; a loop
+	// id is stored only when the active bar's HitTest resolves its segment. Zero means no
+	// hover. View applies the shared animated lime-to-blue gradient dynamically, so an
+	// animation tick never needs to rebuild transcript lines.
+	hoveredEntry displayID
+	hoveredLoop  uuid.UUID
+
 	// turnStartedAt records each running loop's current-turn start time — set from the
 	// loop's TurnStarted event CreatedAt, deleted on its terminal (TurnDone/Failed/
 	// Interrupted). The focused loop's entry drives the live status-line elapsed timer
@@ -105,14 +113,13 @@ type Screen struct {
 	// and otherwise stops, so the timer never ticks forever once the session goes idle.
 	ticking bool
 
-	// anim holds the status line's animation state: its frame counter flows the status-label
-	// + dot lime↔blue gradient (renderStatusLine's phase). A SINGLE anim tick chain, started at
+	// anim holds the shell's animation state: its frame counter flows the status-label + dot
+	// and hovered-action lime↔blue gradients. A SINGLE anim tick chain, started at
 	// Init and re-armed every blinkInterval, advances it for the life of the program and stops
 	// only on quit (quitting) — kept continuous for lifecycle simplicity rather than gated on
-	// status. Only ACTIVE states render the gradient, so the shimmer flows only while something
-	// is happening; IDLE renders a static faint line (renderStatusLine), so an idle tick costs
-	// just a no-op recompose. It is meaningful ONLY to View's status line; the committed
-	// transcript never consults it, and an anim tick recomposes ONLY the status line.
+	// status. Only ACTIVE states render the status gradient, while a hovered transcript header
+	// or loop segment renders the same gradient at any status. The committed transcript never
+	// consults it: View applies hover styling dynamically without rebuilding stored lines.
 	anim animState
 
 	// quitting latches on ctrl+c or /exit so the continuous anim tick chain self-terminates instead of
@@ -135,16 +142,16 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg{at: t} })
 }
 
-// animMsg is one status-line animation tick carrying its own time (unused at the UI; it
-// satisfies tea.Tick's func(time.Time) tea.Msg shape). Handling it advances the status
-// gradient phase (m.anim) by one frame and re-arms the next tick, so the shimmer runs
-// continuously — idle included — for the life of the program. It never touches the transcript.
+// animMsg is one shell-animation tick carrying its own time (unused at the UI; it satisfies
+// tea.Tick's func(time.Time) tea.Msg shape). Handling it advances the shared gradient phase
+// (m.anim) by one frame and re-arms the next tick, so status and hover shimmer run continuously
+// for the life of the program. It never touches the transcript.
 type animMsg time.Time
 
-// animCmd schedules ONE status-line animation tick after blinkInterval — Screen's animation
-// cadence (commands.go) — delivering an animMsg. handleAnim re-arms it every tick until the
-// shell is quitting, so the modern status gradient animates continuously without a per-turn
-// gate. It never re-renders the transcript.
+// animCmd schedules ONE shell-animation tick after blinkInterval — Screen's animation cadence
+// (commands.go) — delivering an animMsg. handleAnim re-arms it every tick until the shell is
+// quitting, so the modern gradients animate continuously without a per-turn gate. It never
+// re-renders the transcript.
 func animCmd() tea.Cmd {
 	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return animMsg(t) })
 }
@@ -501,14 +508,14 @@ func (m *Screen) handleTick(msg tickMsg) tea.Cmd {
 	return m.maybeStartTick()
 }
 
-// handleAnim advances the status-line gradient one frame and re-arms the next anim tick,
+// handleAnim advances the shell gradients one frame and re-arms the next anim tick,
 // UNLESS the shell is quitting (then the chain stops so no tick leaks past tea.Quit). It is a
 // PURE recompose: it advances ONLY m.anim (the gradient phase) and never re-renders the
-// transcript buffer (renderFocused/SetLines) — the transcript is unchanged on an anim tick,
-// and View recomposes the status line from the new frame every render, so advancing the frame
-// and returning the reschedule is the whole update. It runs continuously at every status, but
-// only ACTIVE states render the gradient — while idle the recompose yields the same static
-// faint line (no shimmer). The turn timer keeps its own 1s tick.
+// transcript buffer (renderFocused/SetLines) — the transcript is unchanged on an anim tick.
+// View recomposes the status line and any hovered action from the new frame, so advancing the
+// frame and returning the reschedule is the whole update. It runs continuously at every status;
+// the status shimmers only while active, while pointer hover can shimmer at any status. The turn
+// timer keeps its own 1s tick.
 func (m *Screen) handleAnim() tea.Cmd {
 	if m.quitting {
 		return nil
@@ -921,16 +928,47 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // have no mouse behavior (keys drive completion and the composer/prompt).
 func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
+		// Scrolling changes which content occupies the pointer's row. Clear the old target
+		// rather than leaving an affordance attached to content no longer under the pointer.
+		m.hoveredEntry = 0
+		m.hoveredLoop = uuid.UUID{}
 		return m.viewport.handleMouse(w)
 	}
 	mouse := msg.Mouse()
-	switch m.regionAt(mouse.Y) {
+	region := m.regionAt(mouse.Y)
+	if _, moving := msg.(tea.MouseMotionMsg); moving {
+		m.updateHover(region, mouse)
+	}
+	switch region {
 	case regionContent:
 		return m.contentMouse(msg, mouse)
 	case regionBar:
 		return m.barMouse(msg, mouse)
 	default: // regionStatus, regionTray, regionBox, regionGap — keyboard-driven or inert.
 		return nil
+	}
+}
+
+// updateHover maps a cell-motion event to the same hit targets clicks use. A held-left
+// motion is a text drag, not a hover. Every motion first clears both targets, ensuring
+// gaps and keyboard-only chrome immediately return to their inert appearance.
+func (m *Screen) updateHover(region screenRegion, mouse tea.Mouse) {
+	m.hoveredEntry = 0
+	m.hoveredLoop = uuid.UUID{}
+	if mouse.Button == tea.MouseLeft {
+		return
+	}
+	switch region {
+	case regionContent:
+		if id, ok := m.viewport.clickableEntryAt(mouse.Y); ok {
+			m.hoveredEntry = id
+		}
+	case regionBar:
+		if m.width > 0 {
+			if id, ok := m.bar().HitTest(mouse.X); ok {
+				m.hoveredLoop = id
+			}
+		}
 	}
 }
 
@@ -994,11 +1032,11 @@ func (m *Screen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 		return m.viewport.handleMouse(msg)
 	case tea.MouseReleaseMsg:
 		cmd := m.viewport.handleMouse(msg) // finishes any drag; copyCmd for a real selection
-		// A plain click (no motion) on an entry's HEADER line (sub == 0 — e.g. the
-		// "│ thinking" / "thinking · N lines" header) toggles that entry's fold; a click on a
-		// body row does NOT toggle (design: header-click). A drag is a selection, never a toggle.
+		// A plain click (no motion) on a row explicitly marked clickable (e.g. a
+		// "│ thought" header or tool-run summary) toggles that entry's fold. Passive headers
+		// and body rows do not toggle. A drag is a selection, never a toggle.
 		if !m.mouseDragging {
-			if id, sub, ok := m.viewport.entryAt(mouse.Y); ok && sub == 0 {
+			if id, ok := m.viewport.clickableEntryAt(mouse.Y); ok {
 				m.collapse.Toggle(id)
 				m.rerender()
 			}
@@ -1217,6 +1255,9 @@ func (m Screen) renderFocused() []renderedLine {
 			// Expanded: emit every entry in the run individually, each keyed on its own id.
 			for k := i; k < j; k++ {
 				lines := renderEntryLines(committed[k], width, false)
+				if k == i {
+					lines = markClickableHeader(lines)
+				}
 				out = append(out, lines...)
 				if n := len(lines); n > 0 {
 					if intraTurnSeparator(committed, k) {
@@ -1231,6 +1272,9 @@ func (m Screen) renderFocused() []renderedLine {
 		}
 
 		lines := renderEntryLines(committed[i], width, m.collapse.Effective(committed[i].ID))
+		if committed[i].Kind == kindAssistant && thinkingText(committed[i].Blocks) != "" {
+			lines = markClickableHeader(lines)
+		}
 		// MODERN-ONLY: bracket the user row with rail pad rows (a padded card), then paint the
 		// gray panel behind the whole block — pads included (scrollback keeps user rows bare).
 		if committed[i].Kind == kindUser {
@@ -1263,6 +1307,16 @@ func (m Screen) renderFocused() []renderedLine {
 	// committed row.
 	out = append(out, m.queuedTailLines()...)
 	return out
+}
+
+// markClickableHeader marks the first rendered row as an effective click target. Callers
+// invoke it only for content with a visible alternate fold state (thinking blocks and the
+// first node of an expanded tool run).
+func markClickableHeader(lines []renderedLine) []renderedLine {
+	if len(lines) > 0 {
+		lines[0].clickable = true
+	}
+	return lines
 }
 
 // blankSeparator is the MODERN-ONLY breathing-space row appended after a committed entry: an
@@ -1381,7 +1435,14 @@ func (m Screen) bar() loopBar {
 	gated := m.interaction.pendingGateLoops()
 	active := m.effectiveActiveLoopID()
 	entries := activeBarEntries(infos, gated, m.focusedLoopID, active)
-	return loopBar{entries: entries, focused: m.focusedLoopID, active: active, max: loopBarCap}
+	return loopBar{
+		entries: entries,
+		focused: m.focusedLoopID,
+		active:  active,
+		max:     loopBarCap,
+		hovered: m.hoveredLoop,
+		phase:   m.anim.frame,
+	}
 }
 
 // activeBarEntries maps the loop table into bar entries, keeping LIVE loops plus the FOCUSED,
@@ -1532,9 +1593,8 @@ func formatElapsed(d time.Duration) string {
 // View composes the frame top to bottom — the viewport content (the focused projection with
 // collapse), one status line, a blank gap, an optional completion tray, the bottom box, a
 // blank gap, and the active-loops bar — and returns a per-frame View with the modern
-// configuration: AltScreen on and
-// cell-motion mouse (the v2
-// per-frame fields the copy-while-scrolling design turns on), plus the composer's Kitty
+// configuration: AltScreen on and all-motion mouse (the v2 per-frame mode required for
+// pointer-only hover as well as copy-while-scrolling), plus the composer's Kitty
 // keyboard request (see Screen.View for why). It returns an empty view until the first sized
 // frame (avoids a 0×0 first frame).
 func (m Screen) View() tea.View {
@@ -1543,7 +1603,7 @@ func (m Screen) View() tea.View {
 	}
 	v := tea.NewView(m.composeBody(m.layout()))
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion
 	v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
 	return v
 }
@@ -1564,7 +1624,7 @@ func (m Screen) composeBody(lay screenLayout) string {
 	vp.SetSize(m.contentWidth(), lay.contentH)
 
 	rows := make([]string, 0, m.height)
-	if content := vp.View(); content != "" {
+	if content := vp.viewHovered(m.hoveredEntry, m.anim.frame); content != "" {
 		rows = append(rows, strings.Split(content, "\n")...)
 	}
 	if len(rows) > lay.contentH {

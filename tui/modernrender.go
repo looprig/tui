@@ -82,10 +82,11 @@ func paintUserBackground(lines []renderedLine, width int) []renderedLine {
 	out := make([]renderedLine, len(lines))
 	for i, ln := range lines {
 		out[i] = renderedLine{
-			styled: styles.FillLineBackground(ln.styled, width),
-			plain:  ln.plain,
-			entry:  ln.entry,
-			sub:    ln.sub,
+			styled:    styles.FillLineBackground(ln.styled, width),
+			plain:     ln.plain,
+			entry:     ln.entry,
+			sub:       ln.sub,
+			clickable: ln.clickable,
 		}
 	}
 	return out

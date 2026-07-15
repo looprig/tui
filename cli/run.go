@@ -173,7 +173,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 	//
 	// The only program option ever needed is the ttylog redirect (WithOutput). The TUI is
 	// Screen, the ALT-SCREEN viewport: its View() returns AltScreen=true and
-	// MouseMode=MouseModeCellMotion (turned on per-frame in the shell, NOT via a program
+	// MouseMode=MouseModeAllMotion (turned on per-frame in the shell, NOT via a program
 	// option), so Bubble Tea owns a managed full-screen frame and captures the mouse. That
 	// makes the redirect MORE load-bearing than under a normal-screen renderer, not less: a
 	// stray third-party write to stdout/stderr would otherwise punch straight through and

@@ -225,24 +225,19 @@ func (m *viewportModel) endSelect() tea.Cmd {
 	return copyCmd(text)
 }
 
-// entryAt resolves the source entry's displayID AND intra-entry line index (sub) at
-// viewport-local row localY (0 = the top visible row), for the composing shell's
-// header-click collapse toggle: it maps the local row to a content index (offset + localY)
-// in the active buffer and returns that line's entry provenance and its sub index. It
-// returns (0, 0, false) for a row outside the visible region or past the content — so a
-// click below the last line resolves nothing. The sub lets the caller gate the toggle to a
-// HEADER row (sub == 0), so a click on an entry's body does not fold it. It reads the active
-// buffer (the frozen snapshot mid-drag, else the live lines), matching what View drew.
-func (m viewportModel) entryAt(localY int) (displayID, int, bool) {
+// clickableEntryAt resolves an actionable header at viewport-local row localY. It uses
+// the same active buffer as View and selection, and trusts the row-level clickable bit
+// produced by renderFocused rather than assuming every sub-zero row is interactive.
+func (m viewportModel) clickableEntryAt(localY int) (displayID, bool) {
 	if localY < 0 || localY >= m.height {
-		return 0, 0, false
+		return 0, false
 	}
 	buf := m.activeBuffer()
 	row := m.offset + localY
-	if row < 0 || row >= len(buf) {
-		return 0, 0, false
+	if row < 0 || row >= len(buf) || !buf[row].clickable {
+		return 0, false
 	}
-	return buf[row].entry, buf[row].sub, true
+	return buf[row].entry, true
 }
 
 // activeBuffer is the buffer selection and rendering read: the frozen snapshot while a
@@ -331,6 +326,14 @@ func (m viewportModel) SelectedText() string {
 // line is drawn from its styled string verbatim. The selected span is built from plain,
 // never by splicing reverse into styled (which would corrupt the ANSI).
 func (m viewportModel) View() string {
+	return m.viewHovered(0, 0)
+}
+
+// viewHovered draws the ordinary viewport plus a flowing lime-to-blue foreground on
+// the one actionable header identified by hovered. The line is redrawn from plain text
+// so nested renderer ANSI cannot mask the hover color; selection remains higher priority.
+// A zero hovered id means no hover (committed display ids start at one).
+func (m viewportModel) viewHovered(hovered displayID, phase uint) string {
 	if m.height <= 0 {
 		return ""
 	}
@@ -347,6 +350,10 @@ func (m viewportModel) View() string {
 	for i := start; i < end; i++ {
 		if hasSel && i >= selStart.row && i <= selEnd.row {
 			rows = append(rows, highlightLine(buf[i].plain, i, selStart, selEnd))
+			continue
+		}
+		if hovered != 0 && buf[i].clickable && buf[i].entry == hovered {
+			rows = append(rows, gradientLabel(buf[i].plain, phase))
 			continue
 		}
 		rows = append(rows, buf[i].styled)

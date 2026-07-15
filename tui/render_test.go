@@ -136,7 +136,7 @@ func itoa(i int) string {
 }
 
 // TestToolNodeStatus covers the tool-lifecycle → rail-node tint mapping: OK (and any
-// unknown status) is the faint hollow node, error and cancelled are the failed (red)
+// unknown status) is the lime hollow node, error and cancelled are the failed (red)
 // node, and running is the pulsing node. stripANSI cannot distinguish the node colors,
 // so this maps the status directly to its styles.NodeStatus.
 func TestToolNodeStatus(t *testing.T) {
@@ -295,7 +295,7 @@ func TestRenderToolCalls(t *testing.T) {
 			name:  "ok card shows the hollow node glyph",
 			calls: []ToolCallView{{ToolName: "ReadFile", Status: ToolOK}},
 			width: 80,
-			// Color (faint vs red) is asserted by TestToolNodeStatus; stripANSI is color-blind,
+			// Color (lime vs red) is asserted by TestToolNodeStatus; stripANSI is color-blind,
 			// so both OK and failed render the same "○" glyph here.
 			want: []string{"○"},
 		},

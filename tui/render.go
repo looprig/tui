@@ -133,7 +133,7 @@ func renderToolCalls(calls []ToolCallView, expandTools bool, width int) string {
 
 // toolNodeStatus maps a tool's lifecycle status to its rail-node tint: error and
 // cancelled are the failed (red) node, running is the pulsing node, and OK (or any
-// unrecognised status) is the faint hollow node (fail-visible, never a panic).
+// unrecognised status) is the lime hollow node (fail-visible, never a panic).
 func toolNodeStatus(s ToolStatus) styles.NodeStatus {
 	switch s {
 	case ToolError, ToolCancelled:

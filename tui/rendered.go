@@ -13,12 +13,15 @@ import (
 // text — the ONLY thing selection measures, extracts and copies, so no escape sequence
 // ever reaches the clipboard and cell↔rune math operates on measurable text. entry and
 // sub locate the line: entry is the source entry's displayID (for click-to-collapse and
-// stable anchoring) and sub is the 0-based line index within that entry.
+// stable anchoring) and sub is the 0-based line index within that entry. clickable is
+// deliberately row-level provenance: only a header whose click produces a visible fold
+// change sets it, so hover styling can never make passive transcript text look actionable.
 type renderedLine struct {
-	styled string    // drawn (ANSI) — from the existing renderer, unchanged
-	plain  string    // ANSI-free visible text; the ONLY thing selection extracts/copies
-	entry  displayID // provenance: which entry this line belongs to
-	sub    int       // intra-entry line index (0-based)
+	styled    string    // drawn (ANSI) — from the existing renderer, unchanged
+	plain     string    // ANSI-free visible text; the ONLY thing selection extracts/copies
+	entry     displayID // provenance: which entry this line belongs to
+	sub       int       // intra-entry line index (0-based)
+	clickable bool      // true only when clicking this exact row performs a visible action
 }
 
 // renderEntryLines renders one committed entry to its provenance-carrying lines. It
@@ -62,7 +65,7 @@ func toolRunSummaryLines(run []entry, width int) []renderedLine {
 	styled := railNodeStyled(styles.ToolNode(status), text, styles.ToolCallStyle, 0, width)
 	out := make([]renderedLine, len(styled))
 	for i, line := range styled {
-		out[i] = renderedLine{styled: line, plain: plainFromStyled(line), entry: runID, sub: i}
+		out[i] = renderedLine{styled: line, plain: plainFromStyled(line), entry: runID, sub: i, clickable: i == 0}
 	}
 	return out
 }

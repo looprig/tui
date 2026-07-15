@@ -112,7 +112,7 @@ var nexusChroma = ansi.Chroma{
 var LitDot = lipgloss.NewStyle().Foreground(DotColor).Render("●") + " "
 
 // NodeStatus selects a rail node's tint. A hollow-circle tool/subagent node is
-// faint when OK, red when failed, and a pulsing filled glyph while running.
+// lime when OK, red when failed, and a pulsing filled glyph while running.
 type NodeStatus uint8
 
 const (
@@ -140,7 +140,7 @@ func ToolNode(s NodeStatus) string {
 	case NodeRunning:
 		return lipgloss.NewStyle().Foreground(DotColor).Render(dotNodeRunning) + " "
 	default: // NodeOK
-		return lipgloss.NewStyle().Faint(true).Render(dotNodeHollow) + " "
+		return lipgloss.NewStyle().Foreground(DotColor).Render(dotNodeHollow) + " "
 	}
 }
 

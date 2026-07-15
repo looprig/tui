@@ -548,3 +548,15 @@ func TestRailNodeGlyphs(t *testing.T) {
 		})
 	}
 }
+
+// TestSuccessfulToolNodeUsesBrandLime pins the completed-tool affordance: success keeps
+// the quiet hollow-circle shape, but uses the same lime foreground as the filled assistant
+// node. Failure remains independently red through the NodeFailed branch.
+func TestSuccessfulToolNodeUsesBrandLime(t *testing.T) {
+	t.Parallel()
+
+	want := lipgloss.NewStyle().Foreground(DotColor).Render(dotNodeHollow) + " "
+	if got := ToolNode(NodeOK); got != want {
+		t.Errorf("ToolNode(NodeOK) = %q, want lime hollow node %q", got, want)
+	}
+}

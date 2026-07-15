@@ -184,8 +184,8 @@ func TestModernRendersLiveSegment(t *testing.T) {
 }
 
 // TestModernViewAltScreenAndMouse pins the modern View configuration: an unsized model
-// yields the empty, non-alt-screen frame; a sized model yields the alt-screen + cell-motion
-// mouse frame the copy-while-scrolling design requires.
+// yields the empty, non-alt-screen frame; a sized model yields the alt-screen + all-motion
+// mouse frame pointer-only hover and copy-while-scrolling require.
 func TestModernViewAltScreenAndMouse(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +196,7 @@ func TestModernViewAltScreenAndMouse(t *testing.T) {
 		wantMouse tea.MouseMode
 		wantEmpty bool
 	}{
-		{name: "sized frame is alt-screen + cell motion", sized: true, wantAlt: true, wantMouse: tea.MouseModeCellMotion},
+		{name: "sized frame is alt-screen + all motion", sized: true, wantAlt: true, wantMouse: tea.MouseModeAllMotion},
 		{name: "unsized frame is inert", sized: false, wantAlt: false, wantMouse: tea.MouseModeNone, wantEmpty: true},
 	}
 
@@ -702,6 +702,97 @@ func TestModernContentClickCollapse(t *testing.T) {
 				t.Errorf("line-count change = %v (before=%d after=%d), want change=%v", changed, before, len(m.viewport.lines), tt.wantChange)
 			}
 		})
+	}
+}
+
+// TestModernClickableHeaderHoverFlowsBrandGradient pins the pointer affordance for
+// transcript actions: hovering a collapsible header changes only its styled rendering,
+// the brand gradient advances with the shared animation phase, and moving onto ordinary
+// body text removes the affordance without changing visible content.
+func TestModernClickableHeaderHoverFlowsBrandGradient(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary)})
+	m = feed(t, m, stepDoneFrom(primary, aiMessage("first reason\nsecond reason", "the answer")))
+
+	base := m.View().Content
+	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: 4, Y: 0, Button: tea.MouseNone})
+	hover0 := m.View().Content
+	if hover0 == base {
+		t.Fatal("hovering collapsible header did not change its styled rendering")
+	}
+	if stripANSI(hover0) != stripANSI(base) {
+		t.Error("header hover changed visible transcript text, want style-only affordance")
+	}
+
+	m, _ = updateScreen(t, m, animMsg(time.Time{}))
+	hover1 := m.View().Content
+	if hover1 == hover0 {
+		t.Fatal("hovered header styling did not advance with animation phase")
+	}
+
+	bodyY := -1
+	for i, line := range m.viewport.lines {
+		if strings.Contains(line.plain, "the answer") {
+			bodyY = i - m.viewport.offset
+			break
+		}
+	}
+	if bodyY < 0 {
+		t.Fatal("fixture has no visible narration body row")
+	}
+	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: 4, Y: bodyY, Button: tea.MouseNone})
+	baseHeader := strings.Split(base, "\n")[0]
+	gotHeader := strings.Split(m.View().Content, "\n")[0]
+	if gotHeader != baseHeader {
+		t.Errorf("ordinary body hover retained a clickable header style; got %q want %q", gotHeader, baseHeader)
+	}
+}
+
+// TestModernLoopBarHoverFlowsBrandGradient pins the second clickable surface: a loop
+// segment animates while hovered, while its separator and the empty tail stay inert.
+func TestModernLoopBarHoverFlowsBrandGradient(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	sub := callID(2)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+	m = feed(t, m, loopStarted(sub, "reviewer"))
+
+	barLine := func(m Screen) string {
+		lines := strings.Split(m.View().Content, "\n")
+		return lines[len(lines)-1]
+	}
+	segs, _ := m.bar().layout()
+	span, ok := barSpanOf(segs, sub)
+	if !ok {
+		t.Fatalf("bar has no segment for subagent; segs=%+v", segs)
+	}
+	base := barLine(m)
+	lay := m.layout()
+	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: span.start, Y: lay.barY, Button: tea.MouseNone})
+	hover0 := barLine(m)
+	if hover0 == base {
+		t.Fatal("hovering loop segment did not change its styled rendering")
+	}
+	if stripANSI(hover0) != stripANSI(base) {
+		t.Error("loop hover changed visible bar text, want style-only affordance")
+	}
+
+	m, _ = updateScreen(t, m, animMsg(time.Time{}))
+	hover1 := barLine(m)
+	if hover1 == hover0 {
+		t.Fatal("hovered loop styling did not advance with animation phase")
+	}
+
+	m, _ = updateScreen(t, m, tea.MouseMotionMsg{X: span.end, Y: lay.barY, Button: tea.MouseNone})
+	if got := barLine(m); got != base {
+		t.Errorf("bar gap hover retained a clickable style; got %q want %q", got, base)
 	}
 }
 
