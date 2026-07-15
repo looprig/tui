@@ -2583,6 +2583,23 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		}
 	})
 
+	t.Run("second ctrl+c while graceful close is in flight is a no-op", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{activeLoopID: callID(1)}
+		m := runningScreen(t, agent)
+
+		m, first := updateScreen(t, m, ctrlKey('c'))
+		m, second := updateScreen(t, m, ctrlKey('c'))
+
+		if second != nil {
+			t.Fatalf("second ctrl+c cmd = %v, want nil while first close is pending", second)
+		}
+		runGracefulQuitSequence(t, first)
+		if agent.closeCalls != 1 {
+			t.Errorf("agent Close calls = %d, want exactly 1", agent.closeCalls)
+		}
+	})
+
 	t.Run("selected exit clears compose and performs graceful shutdown", func(t *testing.T) {
 		t.Parallel()
 		agent := &fakeAgent{activeLoopID: callID(1)}
@@ -2613,6 +2630,25 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		runGracefulQuitSequence(t, cmd)
 		if agent.closeCalls != 1 {
 			t.Errorf("/exit agent Close calls = %d, want 1", agent.closeCalls)
+		}
+	})
+
+	t.Run("ctrl+c after exit does not schedule a second close", func(t *testing.T) {
+		t.Parallel()
+		agent := &fakeAgent{activeLoopID: callID(1)}
+		m := runningScreen(t, agent)
+		m.interaction.input.SetValue("/exit")
+		m.interaction.slash = components.NewSlashComplete("/exit")
+
+		m, exitCmd := updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		m, repeated := updateScreen(t, m, ctrlKey('c'))
+
+		if repeated != nil {
+			t.Fatalf("ctrl+c after /exit cmd = %v, want nil while exit close is pending", repeated)
+		}
+		runGracefulQuitSequence(t, exitCmd)
+		if agent.closeCalls != 1 {
+			t.Errorf("agent Close calls = %d, want exactly 1", agent.closeCalls)
 		}
 	})
 
@@ -2654,6 +2690,10 @@ func TestModernInterruptAndQuit(t *testing.T) {
 				}
 				if agent.closeCalls != 0 {
 					t.Errorf("agent closed before reopen resolved: calls=%d", agent.closeCalls)
+				}
+				m, repeated := updateScreen(t, m, ctrlKey('c'))
+				if repeated != nil {
+					t.Fatalf("repeated quit while resetting cmd = %v, want nil", repeated)
 				}
 			})
 		}
@@ -2707,6 +2747,7 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		fresh := &fakeAgent{activeLoopID: callID(2), closeEntered: closeEntered, closeRelease: releaseClose}
 		m := newScreenSized(t, old, 80, 24)
 		m.status = StatusResetting
+		m.quitting = true
 		m.quitAfterReopen = true
 
 		m, closeCmd := updateScreen(t, m, reopenResultMsg{agent: fresh})
@@ -2716,6 +2757,12 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		closeResult := make(chan tea.Msg, 1)
 		go func() { closeResult <- closeCmd() }()
 		<-closeEntered
+
+		var repeated tea.Cmd
+		m, repeated = updateScreen(t, m, ctrlKey('c'))
+		if repeated != nil {
+			t.Fatalf("repeated quit during deferred replacement close = %v, want nil", repeated)
+		}
 
 		finalized := make(chan error, 1)
 		go func() { finalized <- m.FinalizeHandoff() }()
@@ -2743,6 +2790,10 @@ func TestModernInterruptAndQuit(t *testing.T) {
 		}
 		if m.Agent() != nil {
 			t.Error("live agent remains after close result")
+		}
+		m, repeated = updateScreen(t, m, ctrlKey('c'))
+		if repeated != nil {
+			t.Fatalf("repeated quit after close result = %v, want nil", repeated)
 		}
 	})
 }

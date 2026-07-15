@@ -775,11 +775,16 @@ func (m *Screen) handleCloseForQuitResult(msg closeForQuitResultMsg) tea.Cmd {
 	return tea.Quit
 }
 
-// beginGracefulQuit owns the shared ctrl+c and /exit shutdown choreography. If a
-// /clear handoff is in flight it defers teardown until handleReopenResult claims the
-// replacement. Otherwise it stops animation, closes and clears the subscription
-// best-effort, then closes the agent under the bounded command before quitting.
+// beginGracefulQuit owns the shared ctrl+c and /exit shutdown choreography. Once
+// quitting is latched, repeats are no-ops so only one close command can own the
+// agent. If a /clear handoff is in flight it defers teardown until
+// handleReopenResult claims the replacement. Otherwise it stops animation, closes
+// and clears the subscription best-effort, then closes the agent under the bounded
+// command before quitting.
 func (m *Screen) beginGracefulQuit() tea.Cmd {
+	if m.quitting {
+		return nil
+	}
 	if m.status == StatusResetting {
 		m.quitting = true
 		m.quitAfterReopen = true
