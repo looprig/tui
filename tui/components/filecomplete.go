@@ -80,3 +80,9 @@ func (f *FileComplete) View() string {
 func (f *FileComplete) ViewWidth(width int) string {
 	return renderCompletionTray(f.trayRows(), f.cursor, width)
 }
+
+// ViewWindow renders a full-width tray capped to maxRows and keeps the selected path in the
+// visible window. View and ViewWidth remain the unbounded variants.
+func (f *FileComplete) ViewWindow(width, maxRows int) string {
+	return renderCompletionTrayWindow(f.trayRows(), f.cursor, width, maxRows)
+}

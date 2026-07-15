@@ -51,3 +51,25 @@ func renderCompletionTray(rows []completionTrayRow, selected, width int) string 
 	}
 	return strings.Join(rendered, "\n")
 }
+
+// renderCompletionTrayWindow renders at most maxRows while keeping selected visible. The
+// window follows the cursor once it moves past the initially visible rows and shifts back at
+// the end so every non-empty window uses its full row budget.
+func renderCompletionTrayWindow(rows []completionTrayRow, selected, width, maxRows int) string {
+	if maxRows <= 0 || len(rows) == 0 {
+		return ""
+	}
+	if maxRows >= len(rows) {
+		return renderCompletionTray(rows, selected, width)
+	}
+
+	selected = max(0, min(selected, len(rows)-1))
+	start := selected - maxRows + 1
+	if start < 0 {
+		start = 0
+	}
+	if start+maxRows > len(rows) {
+		start = len(rows) - maxRows
+	}
+	return renderCompletionTray(rows[start:start+maxRows], selected-start, width)
+}

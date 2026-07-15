@@ -378,7 +378,7 @@ func TestModernCompletionTrayLayoutAndRegions(t *testing.T) {
 	closed := m.layout()
 
 	m.interaction.slash = components.NewSlashComplete("/")
-	tray := m.completionTrayView()
+	tray := m.completionTrayView(m.height)
 	if tray == "" {
 		t.Fatal("completionTrayView() = empty, want slash tray")
 	}
@@ -487,11 +487,94 @@ func TestModernCompletionTrayHiddenOutsideComposeMode(t *testing.T) {
 			m.interaction.slash = components.NewSlashComplete("/")
 			m.interaction.files = components.NewFileComplete([]components.FileItem{{Path: "tui/screen.go"}})
 			m.interaction.mode = mode
-			if got := m.completionTrayView(); got != "" {
+			if got := m.completionTrayView(m.height); got != "" {
 				t.Errorf("completionTrayView() in prompt mode = %q, want empty", got)
 			}
 			if got := m.layout().trayH; got != 0 {
 				t.Errorf("prompt-mode trayH = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestModernCompletionTrayBoundedByShortFrame(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		open     func(*Screen)
+		selected string
+		fullH    int
+	}{
+		{
+			name: "slash tray",
+			open: func(m *Screen) {
+				m.interaction.slash = components.NewSlashComplete("/")
+			},
+			selected: "/clear",
+			fullH:    3,
+		},
+		{
+			name: "eight-item file tray with scrolled selection",
+			open: func(m *Screen) {
+				items := make([]components.FileItem, 8)
+				for i := range items {
+					items[i] = components.FileItem{Path: fmt.Sprintf("file-%d.go", i)}
+				}
+				m.interaction.files = components.NewFileComplete(items)
+				for range 6 {
+					m.interaction.files.Down()
+				}
+			},
+			selected: "@file-6.go",
+			fullH:    8,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 30)
+			closed := m.layout()
+			fixedH := m.height - closed.contentH
+			shortH := fixedH + 2
+			m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: m.width, Height: shortH})
+			tt.open(&m)
+
+			lay := m.layout()
+			if got := lay.trayH; got != 2 {
+				t.Errorf("short-frame trayH = %d, want available 2", got)
+			}
+			if lay.barY != m.height-1 {
+				t.Errorf("short-frame barY = %d, want last row %d", lay.barY, m.height-1)
+			}
+			body := m.composeBody(lay)
+			if got := lipgloss.Height(body); got > m.height {
+				t.Errorf("short-frame body height = %d, want <= frame height %d", got, m.height)
+			}
+			trayRows := strings.Join(strings.Split(body, "\n")[lay.trayTop:lay.boxTop], "\n")
+			if !strings.Contains(ansi.Strip(trayRows), tt.selected) {
+				t.Errorf("bounded tray = %q, want selected candidate %q visible", ansi.Strip(trayRows), tt.selected)
+			}
+
+			tallH := fixedH + tt.fullH + 2
+			m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: m.width, Height: tallH})
+			tall := m.layout()
+			if got := tall.trayH; got != tt.fullH {
+				t.Errorf("tall-frame trayH = %d, want full tray height %d", got, tt.fullH)
+			}
+			if tall.barY != m.height-1 {
+				t.Errorf("tall-frame barY = %d, want last row %d", tall.barY, m.height-1)
+			}
+
+			m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: m.width, Height: fixedH})
+			noRoom := m.layout()
+			if noRoom.trayH != 0 {
+				t.Errorf("fixed-chrome-only trayH = %d, want hidden tray", noRoom.trayH)
+			}
+			if noRoom.barY != m.height-1 {
+				t.Errorf("fixed-chrome-only barY = %d, want last row %d", noRoom.barY, m.height-1)
 			}
 		})
 	}

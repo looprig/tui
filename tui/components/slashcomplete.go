@@ -113,3 +113,9 @@ func (s *SlashComplete) View() string {
 func (s *SlashComplete) ViewWidth(width int) string {
 	return renderCompletionTray(s.trayRows(), s.cursor, width)
 }
+
+// ViewWindow renders a full-width tray capped to maxRows and keeps the selected command in
+// the visible window. View and ViewWidth remain the unbounded variants.
+func (s *SlashComplete) ViewWindow(width, maxRows int) string {
+	return renderCompletionTrayWindow(s.trayRows(), s.cursor, width, maxRows)
+}

@@ -257,6 +257,34 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 	}
 }
 
+func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
+	t.Parallel()
+
+	s := NewSlashComplete("/")
+	if s == nil {
+		t.Fatal("NewSlashComplete(\"/\") = nil, want non-nil")
+	}
+	s.Down()
+	s.Down() // /exit is beyond the initial two-row window.
+
+	view := s.ViewWindow(40, 2)
+	if got := lipgloss.Height(view); got != 2 {
+		t.Fatalf("ViewWindow() height = %d, want 2; view=%q", got, view)
+	}
+	if !strings.Contains(stripANSI(view), "/exit") {
+		t.Errorf("ViewWindow() = %q, want selected /exit visible", view)
+	}
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(stripANSI(line), "/exit") && !strings.HasPrefix(line, selectedOpen) {
+			t.Errorf("visible /exit row is not selected: %q", line)
+		}
+	}
+	if got := s.ViewWindow(40, 0); got != "" {
+		t.Errorf("ViewWindow(maxRows=0) = %q, want empty", got)
+	}
+}
+
 func TestSlashCompleteViewWidthClampsANSISafely(t *testing.T) {
 	t.Parallel()
 

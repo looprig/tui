@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode"
@@ -89,6 +90,39 @@ func TestFileCompleteViewWidthShowsFullAtPathsAndTraySelection(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], strings.TrimSuffix(styles.CardSelectedStyle.Render("@tui/components/"), "\x1b[m")) {
 		t.Errorf("selected path is not rendered with CardSelectedStyle: %q", lines[1])
+	}
+}
+
+func TestFileCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
+	t.Parallel()
+
+	items := make([]FileItem, 8)
+	for i := range items {
+		items[i] = FileItem{Path: fmt.Sprintf("file-%d.go", i)}
+	}
+	f := NewFileComplete(items)
+	if f == nil {
+		t.Fatal("NewFileComplete() = nil, want non-nil")
+	}
+	for range 6 {
+		f.Down()
+	}
+
+	view := f.ViewWindow(40, 3)
+	if got := lipgloss.Height(view); got != 3 {
+		t.Fatalf("ViewWindow() height = %d, want 3; view=%q", got, view)
+	}
+	if !strings.Contains(ansi.Strip(view), "@file-6.go") {
+		t.Errorf("ViewWindow() = %q, want selected @file-6.go visible", view)
+	}
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(ansi.Strip(line), "@file-6.go") && !strings.HasPrefix(line, selectedOpen) {
+			t.Errorf("visible @file-6.go row is not selected: %q", line)
+		}
+	}
+	if got := f.ViewWindow(40, 0); got != "" {
+		t.Errorf("ViewWindow(maxRows=0) = %q, want empty", got)
 	}
 }
 

@@ -1004,10 +1004,10 @@ type screenLayout struct {
 }
 
 // layout derives the region geometry from the current frame: the bottom box is measured
-// first (its height varies with the composer/prompt), along with the optional completion tray,
-// then the status, the blank pad row above it, the two blank gap rows, and the bar reserve one
-// row each, and the viewport content gets whatever remains (floored at 0). Because it is
-// deterministic in the model state, View and regionAt compute the identical layout.
+// first (its height varies with the composer/prompt). The fixed chrome is reserved before the
+// optional completion tray receives its remaining-row budget; the viewport content gets
+// whatever remains after that (floored at 0). Because it is deterministic in the model state,
+// View and regionAt compute the identical layout.
 //
 // The row order is pad → status → gap → optional tray → box → gap → bar. There is deliberately
 // no blank row between tray and box, so their accent rails read as one continuous surface.
@@ -1022,11 +1022,16 @@ func (m Screen) layout() screenLayout {
 	if boxH < 1 {
 		boxH = 1
 	}
+	fixedH := padH + statusH + gapH + boxH + gapH + barH
+	trayBudget := m.height - fixedH
+	if trayBudget < 0 {
+		trayBudget = 0
+	}
 	trayH := 0
-	if tray := m.completionTrayView(); tray != "" {
+	if tray := m.completionTrayView(trayBudget); tray != "" {
 		trayH = lipgloss.Height(tray)
 	}
-	contentH := m.height - padH - statusH - gapH - trayH - boxH - gapH - barH
+	contentH := m.height - fixedH - trayH
 	if contentH < 0 {
 		contentH = 0
 	}
@@ -1375,19 +1380,20 @@ func (m Screen) bottomBoxView() string {
 	return bottomBox(m.surfaceInputs())
 }
 
-// completionTrayView renders the active compose-mode completion list at the full terminal
-// width. Slash commands and @path files are mutually exclusive in interactionModel; slash
-// wins defensively if an invalid state supplies both. Prompt modes suppress stale completers
-// because their controls replace the composer until the pending prompt is resolved.
-func (m Screen) completionTrayView() string {
-	if m.interaction.mode != modeCompose {
+// completionTrayView renders at most maxRows of the active compose-mode completion list at
+// the full terminal width, with the selected candidate kept visible. Slash commands and @path
+// files are mutually exclusive in interactionModel; slash wins defensively if an invalid
+// state supplies both. Prompt modes suppress stale completers because their controls replace
+// the composer until the pending prompt is resolved.
+func (m Screen) completionTrayView(maxRows int) string {
+	if m.interaction.mode != modeCompose || maxRows <= 0 {
 		return ""
 	}
 	switch {
 	case m.interaction.slash != nil:
-		return m.interaction.slash.ViewWidth(m.width)
+		return m.interaction.slash.ViewWindow(m.width, maxRows)
 	case m.interaction.files != nil:
-		return m.interaction.files.ViewWidth(m.width)
+		return m.interaction.files.ViewWindow(m.width, maxRows)
 	default:
 		return ""
 	}
@@ -1546,7 +1552,7 @@ func (m Screen) composeBody(lay screenLayout) string {
 	rows = append(rows, "")             // inert pad: content → status
 	rows = append(rows, m.statusLine()) // status line
 	rows = append(rows, "")             // inert gap: status → tray/box
-	if tray := m.completionTrayView(); tray != "" {
+	if tray := m.completionTrayView(lay.trayH); tray != "" {
 		rows = append(rows, strings.Split(tray, "\n")...) // completion tray (touches input)
 	}
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
