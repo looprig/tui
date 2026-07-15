@@ -95,6 +95,17 @@ func TestNewSlashComplete(t *testing.T) {
 	}
 }
 
+func TestSlashMatchRankNormalizesRelatedWords(t *testing.T) {
+	original := slashRelatedWords["/clear"]
+	slashRelatedWords["/clear"] = []string{"NEW"}
+	t.Cleanup(func() { slashRelatedWords["/clear"] = original })
+
+	got := NewSlashComplete("/new")
+	if got == nil || got.Selected().Name != "/clear" {
+		t.Fatalf("NewSlashComplete(\"/new\") = %#v, want /clear from case-insensitive related word", got)
+	}
+}
+
 func TestSlashCompleteSelected(t *testing.T) {
 	t.Parallel()
 

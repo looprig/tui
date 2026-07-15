@@ -3,8 +3,10 @@ package components
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/looprig/cli/tui/styles"
 )
 
@@ -108,5 +110,64 @@ func TestFileCompleteViewWidthClampsUnicodePathANSISafely(t *testing.T) {
 	}
 	if strings.ContainsRune(stripANSI(view), '\uFFFD') {
 		t.Fatalf("ViewWidth() split a Unicode sequence: %q", view)
+	}
+}
+
+func TestFileCompleteViewWidthSanitizesControlCharactersWithoutChangingSelection(t *testing.T) {
+	t.Parallel()
+
+	const width = 64
+	tests := []struct {
+		name        string
+		path        string
+		wantDisplay string
+	}{
+		{name: "newline", path: "line\nbreak", wantDisplay: "line�break"},
+		{name: "tab", path: "tab\tfile", wantDisplay: "tab�file"},
+		{name: "carriage return", path: "return\rfile", wantDisplay: "return�file"},
+		{name: "escape CSI", path: "color\x1b[31mred\x1b[0m", wantDisplay: "color�[31mred�[0m"},
+		{name: "C1 CSI", path: "c1\u009b31mred", wantDisplay: "c1�31mred"},
+		{name: "OSC", path: "title\x1b]0;pwn\aend", wantDisplay: "title�]0;pwn�end"},
+	}
+	items := make([]FileItem, len(tests))
+	for i, tt := range tests {
+		items[i] = FileItem{Path: tt.path}
+	}
+	f := NewFileComplete(items)
+	if f == nil {
+		t.Fatal("NewFileComplete() = nil, want non-nil")
+	}
+
+	view := f.ViewWidth(width)
+	lines := strings.Split(view, "\n")
+	if len(lines) != len(tests) {
+		t.Fatalf("ViewWidth() rendered %d rows for %d candidates; view=%q", len(lines), len(tests), view)
+	}
+	for i, tt := range tests {
+		line := lines[i]
+		if got := lipgloss.Width(line); got != width {
+			t.Errorf("%s row width = %d, want %d; row=%q", tt.name, got, width, line)
+		}
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "@"+tt.wantDisplay) {
+			t.Errorf("%s row = %q, want sanitized path %q", tt.name, plain, "@"+tt.wantDisplay)
+		}
+		for _, r := range plain {
+			if unicode.IsControl(r) {
+				t.Errorf("%s row contains control character %U: %q", tt.name, r, plain)
+			}
+		}
+	}
+	for _, injected := range []string{"\x1b[31m", "\x1b[0m", "\u009b31m", "\x1b]0;pwn\a"} {
+		if strings.Contains(view, injected) {
+			t.Errorf("ViewWidth() retained injected terminal sequence %q", injected)
+		}
+	}
+
+	for i, tt := range tests {
+		if got := f.Selected().Path; got != tt.path {
+			t.Errorf("candidate %d Selected().Path = %q, want original exact path %q", i, got, tt.path)
+		}
+		f.Down()
 	}
 }

@@ -1,5 +1,10 @@
 package components
 
+import (
+	"strings"
+	"unicode"
+)
+
 // FileItem is one @path completion candidate. Path is the value to complete to (e.g.
 // "src" or "src/main.go"); IsDir drives the trailing "/" affordance and whether
 // selecting it keeps the panel open to drill in.
@@ -36,11 +41,24 @@ func (f *FileComplete) Down() { f.cursor = (f.cursor + 1) % len(f.items) }
 // label is the complete displayed @path, plus a trailing "/" for a directory so a
 // folder reads as drillable at a glance.
 func (i FileItem) label() string {
-	name := "@" + i.Path
+	name := "@" + sanitizeFilePath(i.Path)
 	if i.IsDir {
 		return name + "/"
 	}
 	return name
+}
+
+// sanitizeFilePath makes an arbitrary filesystem name safe to paint in a terminal.
+// It is deliberately display-only: FileItem.Path remains byte-for-byte unchanged for
+// selection and completion. Replacing every Unicode control rune also neutralizes the
+// ESC, C1 CSI/OSC, and terminator bytes used by terminal control sequences.
+func sanitizeFilePath(path string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '\uFFFD'
+		}
+		return r
+	}, path)
 }
 
 func (f *FileComplete) trayRows() []completionTrayRow {

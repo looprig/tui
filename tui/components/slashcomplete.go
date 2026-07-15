@@ -62,11 +62,13 @@ func slashMatchRank(command SlashCmd, query string) int {
 
 	related := slashRelatedWords[command.Name]
 	for _, word := range related {
+		word = strings.ToLower(word)
 		if word == query {
 			return 2
 		}
 	}
 	for _, word := range related {
+		word = strings.ToLower(word)
 		if strings.Contains(word, query) {
 			return 3
 		}
