@@ -98,6 +98,12 @@ type Screen struct {
 	hoverGlowFrame uint
 	hoverGlowEpoch uint64
 
+	// trayGlowFrame drives only the selected completion row's background. Keyboard and
+	// pointer selection changes restart it at the neutral panel background; its independent
+	// epoch prevents stale ticks from an earlier row advancing the new selection.
+	trayGlowFrame uint
+	trayGlowEpoch uint64
+
 	// turnStartedAt records each running loop's current-turn start time — set from the
 	// loop's TurnStarted event CreatedAt, deleted on its terminal (TurnDone/Failed/
 	// Interrupted). The focused loop's entry drives the live status-line elapsed timer
@@ -167,6 +173,14 @@ func hoverGlowCmd(epoch uint64) tea.Cmd {
 	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return hoverGlowMsg{epoch: epoch} })
 }
 
+const trayGlowFinalFrame = hoverGlowFinalFrame
+
+type trayGlowMsg struct{ epoch uint64 }
+
+func trayGlowCmd(epoch uint64) tea.Cmd {
+	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return trayGlowMsg{epoch: epoch} })
+}
+
 // loopBarCap is the visible-cap the modern active-loops bar renders under: at most
 // this many loop segments show, the rest folding into a "… +N" overflow marker so the bar
 // never grows unbounded across a long session's accumulated loops.
@@ -195,6 +209,7 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) S
 		focusedLoopID: agent.ActiveLoopID(),
 		turnStartedAt: make(map[uuid.UUID]time.Time),
 		restoring:     true,
+		trayGlowFrame: trayGlowFinalFrame,
 	}
 	m.interaction = styleComposer(m.interaction)
 	return m
@@ -315,6 +330,9 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case hoverGlowMsg:
 		cmd := m.handleHoverGlow(msg)
+		return m, cmd
+	case trayGlowMsg:
+		cmd := m.handleTrayGlow(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -551,6 +569,26 @@ func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
 		return nil
 	}
 	return hoverGlowCmd(msg.epoch)
+}
+
+func (m *Screen) handleTrayGlow(msg trayGlowMsg) tea.Cmd {
+	if msg.epoch != m.trayGlowEpoch || (m.interaction.slash == nil && m.interaction.files == nil) {
+		return nil
+	}
+	if m.trayGlowFrame >= trayGlowFinalFrame {
+		return nil
+	}
+	m.trayGlowFrame++
+	if m.trayGlowFrame >= trayGlowFinalFrame {
+		return nil
+	}
+	return trayGlowCmd(msg.epoch)
+}
+
+func (m *Screen) startTrayGlow() tea.Cmd {
+	m.trayGlowFrame = 0
+	m.trayGlowEpoch++
+	return trayGlowCmd(m.trayGlowEpoch)
 }
 
 // handleRestored releases the initial replay barrier. A non-empty historical fold installs
@@ -915,6 +953,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
 // default submit path (mapAction → submit → Submit) is untouched.
 func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	beforeKind, beforeCursor, beforeOpen := m.completionCursor()
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
@@ -946,15 +985,33 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.resize()
 	}
-	return m, tea.Batch(cmd, blink)
+	var trayGlow tea.Cmd
+	if msg.String() == "up" || msg.String() == "down" {
+		afterKind, afterCursor, afterOpen := m.completionCursor()
+		if beforeOpen && afterOpen && beforeKind == afterKind && beforeCursor != afterCursor {
+			trayGlow = m.startTrayGlow()
+		}
+	}
+	return m, tea.Batch(cmd, blink, trayGlow)
+}
+
+func (m Screen) completionCursor() (kind byte, cursor int, open bool) {
+	switch {
+	case m.interaction.slash != nil:
+		return 's', m.interaction.slash.Cursor(), true
+	case m.interaction.files != nil:
+		return 'f', m.interaction.files.Cursor(), true
+	default:
+		return 0, 0, false
+	}
 }
 
 // handleMouse routes a mouse event by the region it falls in. The wheel scrolls the content
 // wherever the pointer sits (the viewport reads only the wheel's direction), so it is routed
 // unconditionally. A content-region click/drag/release drives the viewport's select/copy and
 // (on a plain click) toggles the clicked entry's fold. A bar-region LEFT click focuses the
-// loop whose segment covers the column (barMouse → focusLoop). The status/tray/box regions
-// have no mouse behavior (keys drive completion and the composer/prompt).
+// loop whose segment covers the column (barMouse → focusLoop). Pointer motion over a tray
+// row updates its completion cursor. The status/box regions remain inert.
 func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if w, ok := msg.(tea.MouseWheelMsg); ok {
 		// Scrolling changes which content occupies the pointer's row. Clear the old target
@@ -974,6 +1031,8 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		regionCmd = m.contentMouse(msg, mouse)
 	case regionBar:
 		regionCmd = m.barMouse(msg, mouse)
+	case regionTray:
+		regionCmd = m.trayMouse(msg, mouse)
 	}
 	if hoverCmd == nil {
 		return regionCmd
@@ -982,6 +1041,29 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return hoverCmd
 	}
 	return tea.Batch(hoverCmd, regionCmd)
+}
+
+// trayMouse maps pointer motion to the visible completion row. The tray is selection-only:
+// motion never completes, dispatches, or submits the highlighted item.
+func (m *Screen) trayMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
+	if _, ok := msg.(tea.MouseMotionMsg); !ok {
+		return nil
+	}
+	lay := m.layout()
+	row := mouse.Y - lay.trayTop
+	if row < 0 || row >= lay.trayH {
+		return nil
+	}
+	if m.interaction.slash != nil {
+		if m.interaction.slash.SelectWindowRow(row, lay.trayH) {
+			return m.startTrayGlow()
+		}
+	} else if m.interaction.files != nil {
+		if m.interaction.files.SelectWindowRow(row, lay.trayH) {
+			return m.startTrayGlow()
+		}
+	}
+	return nil
 }
 
 // updateHover maps a cell-motion event to the same hit targets clicks use. A held-left
@@ -1175,7 +1257,7 @@ func (m Screen) layout() screenLayout {
 
 // screenRegion is a frame region the mouse can fall in — the content viewport, the status
 // line, the completion tray, the bottom box, the loop bar, or an inert gap row — the
-// discriminant handleMouse routes on. Tray rows are explicitly inert in this first version.
+// discriminant handleMouse routes on. Tray rows react to pointer motion only.
 type screenRegion uint8
 
 const (
@@ -1190,8 +1272,8 @@ const (
 // regionAt maps a terminal row y to its frame region using the same layout View draws, so
 // mouse routing (content select/copy vs a bar focus click) matches what the user sees. The
 // inert blank pad row above the status line, the two blank gap rows (and any row past the bar)
-// are regionGap — inert, no mouse behavior. Completion tray rows are regionTray, also inert,
-// so they can never be mistaken for transcript content or composer rows.
+// are regionGap — inert, no mouse behavior. Completion tray rows are regionTray so pointer
+// motion can select them without ever being mistaken for transcript content or composer rows.
 func (m Screen) regionAt(y int) screenRegion {
 	lay := m.layout()
 	switch {
@@ -1531,9 +1613,9 @@ func (m Screen) completionTrayView(maxRows int) string {
 	}
 	switch {
 	case m.interaction.slash != nil:
-		return m.interaction.slash.ViewWindow(m.width, maxRows)
+		return m.interaction.slash.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
 	case m.interaction.files != nil:
-		return m.interaction.files.ViewWindow(m.width, maxRows)
+		return m.interaction.files.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
 	default:
 		return ""
 	}

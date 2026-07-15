@@ -75,7 +75,7 @@ func TestFileCompleteViewWidthShowsFullAtPathsAndTraySelection(t *testing.T) {
 	}
 
 	panelOpen, _ := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	if !strings.HasPrefix(lines[0], panelOpen) {
 		t.Errorf("unselected row does not open with PanelBg: %q", lines[0])
 	}
@@ -83,12 +83,13 @@ func TestFileCompleteViewWidthShowsFullAtPathsAndTraySelection(t *testing.T) {
 		t.Errorf("unselected row does not use AccentBarStyle: %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], selectedOpen) {
-		t.Errorf("selected row does not open with CardSelectedBg: %q", lines[1])
+		t.Errorf("selected row does not open with TraySelectedBg: %q", lines[1])
 	}
 	if !strings.Contains(lines[1], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
 		t.Errorf("selected row does not use CardRailStyle: %q", lines[1])
 	}
-	if !strings.Contains(lines[1], strings.TrimSuffix(styles.CardSelectedStyle.Render("@tui/components/"), "\x1b[m")) {
+	selectedLabel := styles.CardSelectedStyle.Background(styles.TraySelectedBg).Render("@tui/components/")
+	if !strings.Contains(lines[1], strings.TrimSuffix(selectedLabel, "\x1b[m")) {
 		t.Errorf("selected path is not rendered with CardSelectedStyle: %q", lines[1])
 	}
 }
@@ -115,7 +116,7 @@ func TestFileCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(ansi.Strip(view), "@file-6.go") {
 		t.Errorf("ViewWindow() = %q, want selected @file-6.go visible", view)
 	}
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(ansi.Strip(line), "@file-6.go") && !strings.HasPrefix(line, selectedOpen) {
 			t.Errorf("visible @file-6.go row is not selected: %q", line)
@@ -123,6 +124,34 @@ func TestFileCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	}
 	if got := f.ViewWindow(40, 0); got != "" {
 		t.Errorf("ViewWindow(maxRows=0) = %q, want empty", got)
+	}
+}
+
+func TestFileCompleteMouseSelectionKeepsVisibleWindowStable(t *testing.T) {
+	t.Parallel()
+
+	items := make([]FileItem, 8)
+	for i := range items {
+		items[i] = FileItem{Path: fmt.Sprintf("file-%d.go", i)}
+	}
+	f := NewFileComplete(items)
+	for i := 0; i < 6; i++ {
+		f.Down()
+	}
+	before := stripANSI(f.ViewWindow(40, 3))
+	if !strings.HasPrefix(before, "▌ @file-4.go") {
+		t.Fatalf("fixture window = %q, want @file-4.go first", before)
+	}
+
+	if changed := f.SelectWindowRow(0, 3); !changed {
+		t.Fatal("SelectWindowRow(0) did not change selection")
+	}
+	after := stripANSI(f.ViewWindow(40, 3))
+	if !strings.HasPrefix(after, "▌ @file-4.go") {
+		t.Errorf("mouse selection shifted visible window: %q", after)
+	}
+	if got := f.Selected().Path; got != "file-4.go" {
+		t.Errorf("selected path = %q, want file-4.go", got)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/cli/tui/components"
+	"github.com/looprig/cli/tui/styles"
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
@@ -443,6 +444,121 @@ func TestModernCompletionTrayLayoutAndRegions(t *testing.T) {
 	}
 	if got := m.regionAt(lay.trayTop + lay.trayH - 1); got != regionTray {
 		t.Errorf("regionAt(last tray row) = %d, want inert regionTray %d", got, regionTray)
+	}
+}
+
+func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		open     func(*Screen)
+		selected func(*Screen) string
+		want     string
+	}{
+		{
+			name: "slash command",
+			open: func(m *Screen) {
+				m.interaction.slash = components.NewSlashComplete("/")
+			},
+			selected: func(m *Screen) string { return m.interaction.slash.Selected().Name },
+			want:     "/compact",
+		},
+		{
+			name: "file path",
+			open: func(m *Screen) {
+				m.interaction.files = components.NewFileComplete([]components.FileItem{
+					{Path: "first.go"},
+					{Path: "second.go"},
+				})
+			},
+			selected: func(m *Screen) string { return m.interaction.files.Selected().Path },
+			want:     "second.go",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			agent := &fakeAgent{activeLoopID: callID(1)}
+			m := newScreenSized(t, agent, 48, 24)
+			tt.open(&m)
+			lay := m.layout()
+
+			m, _ = updateScreen(t, m, tea.MouseMotionMsg{
+				X:      8,
+				Y:      lay.trayTop + 1,
+				Button: tea.MouseNone,
+			})
+
+			if got := tt.selected(&m); got != tt.want {
+				t.Errorf("selected row after mouse motion = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestModernCompletionTraySelectionRunsBackgroundTransition(t *testing.T) {
+	t.Parallel()
+
+	triggers := []struct {
+		name string
+		run  func(*testing.T, Screen) (Screen, tea.Cmd)
+	}{
+		{
+			name: "arrow key",
+			run: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
+				return updateScreen(t, m, keyPress("down"))
+			},
+		},
+		{
+			name: "mouse motion",
+			run: func(t *testing.T, m Screen) (Screen, tea.Cmd) {
+				lay := m.layout()
+				return updateScreen(t, m, tea.MouseMotionMsg{X: 8, Y: lay.trayTop + 1, Button: tea.MouseNone})
+			},
+		},
+	}
+
+	for _, tt := range triggers {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+			m.interaction.slash = components.NewSlashComplete("/")
+
+			m, cmd := tt.run(t, m)
+			if got := m.interaction.slash.Selected().Name; got != "/compact" {
+				t.Fatalf("selected command = %q, want /compact", got)
+			}
+			if cmd == nil {
+				t.Fatal("selection change did not start background transition")
+			}
+			if m.trayGlowFrame != 0 {
+				t.Fatalf("initial tray glow frame = %d, want 0", m.trayGlowFrame)
+			}
+
+			epoch := m.trayGlowEpoch
+			for frame := uint(0); frame <= trayGlowFinalFrame; frame++ {
+				line := strings.Split(m.completionTrayView(m.height), "\n")[1]
+				open, _ := styles.DeriveBackgroundSGR(traySelectionColor(frame))
+				if !strings.HasPrefix(line, open) {
+					t.Errorf("frame %d selected row does not open with transition background: %q", frame, line)
+				}
+				if frame == trayGlowFinalFrame {
+					break
+				}
+				var next tea.Cmd
+				m, next = updateScreen(t, m, trayGlowMsg{epoch: epoch})
+				if m.trayGlowFrame != frame+1 {
+					t.Fatalf("tray glow frame = %d, want %d", m.trayGlowFrame, frame+1)
+				}
+				if frame+1 < trayGlowFinalFrame && next == nil {
+					t.Fatalf("tray glow stopped early at frame %d", frame+1)
+				}
+			}
+		})
 	}
 }
 

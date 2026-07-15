@@ -223,7 +223,7 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 	}
 
 	panelOpen, _ := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	for i, line := range lines {
 		if got := lipgloss.Width(line); got != width {
 			t.Errorf("row %d width = %d, want %d", i, got, width)
@@ -238,12 +238,13 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 	}
 
 	if !strings.HasPrefix(lines[0], selectedOpen) {
-		t.Errorf("selected row does not open with CardSelectedBg: %q", lines[0])
+		t.Errorf("selected row does not open with TraySelectedBg: %q", lines[0])
 	}
 	if !strings.Contains(lines[0], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
 		t.Errorf("selected row does not use CardRailStyle: %q", lines[0])
 	}
-	if !strings.Contains(lines[0], strings.TrimSuffix(styles.CardSelectedStyle.Render("/clear"), "\x1b[m")) {
+	selectedLabel := styles.CardSelectedStyle.Background(styles.TraySelectedBg).Render("/clear")
+	if !strings.Contains(lines[0], strings.TrimSuffix(selectedLabel, "\x1b[m")) {
 		t.Errorf("selected primary label is not rendered with CardSelectedStyle: %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], panelOpen) {
@@ -274,7 +275,7 @@ func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(stripANSI(view), "/exit") {
 		t.Errorf("ViewWindow() = %q, want selected /exit visible", view)
 	}
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(stripANSI(line), "/exit") && !strings.HasPrefix(line, selectedOpen) {
 			t.Errorf("visible /exit row is not selected: %q", line)
@@ -282,6 +283,23 @@ func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	}
 	if got := s.ViewWindow(40, 0); got != "" {
 		t.Errorf("ViewWindow(maxRows=0) = %q, want empty", got)
+	}
+}
+
+func TestSlashCompleteViewWindowBackgroundUsesProvidedSelectionFill(t *testing.T) {
+	t.Parallel()
+
+	s := NewSlashComplete("/")
+	bg := lipgloss.Color("#112233")
+	view := s.ViewWindowBackground(40, 3, bg)
+	line := strings.Split(view, "\n")[0]
+	open, _ := styles.DeriveBackgroundSGR(bg)
+	if !strings.HasPrefix(line, open) {
+		t.Errorf("selected row does not open with provided background: %q", line)
+	}
+	wantLabel := lipgloss.NewStyle().Bold(true).Background(bg).Render("/clear")
+	if !strings.Contains(line, strings.TrimSuffix(wantLabel, "\x1b[m")) {
+		t.Errorf("selected label does not use provided background: %q", line)
 	}
 }
 

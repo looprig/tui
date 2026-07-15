@@ -1,6 +1,11 @@
 package components
 
-import "strings"
+import (
+	"image/color"
+	"strings"
+
+	"github.com/looprig/cli/tui/styles"
+)
 
 // SlashCmd is one slash command's display metadata. The action is dispatched by
 // package tui keyed on Name; this widget only filters and displays.
@@ -24,8 +29,10 @@ var slashRelatedWords = map[string][]string{
 
 // SlashComplete is a filtered command list with a wrapping cursor.
 type SlashComplete struct {
-	items  []SlashCmd
-	cursor int
+	items        []SlashCmd
+	cursor       int
+	windowStart  int
+	windowPinned bool
 }
 
 // NewSlashComplete returns a case-insensitive, relevance-ranked completer for prefix.
@@ -84,14 +91,48 @@ func (s *SlashComplete) Selected() SlashCmd {
 	return s.items[s.cursor]
 }
 
+// Cursor returns the absolute selected index in the filtered list.
+func (s *SlashComplete) Cursor() int { return s.cursor }
+
 // Up moves the cursor up, wrapping to the bottom.
 func (s *SlashComplete) Up() {
 	s.cursor = (s.cursor - 1 + len(s.items)) % len(s.items)
+	s.windowPinned = false
 }
 
 // Down moves the cursor down, wrapping to the top.
 func (s *SlashComplete) Down() {
 	s.cursor = (s.cursor + 1) % len(s.items)
+	s.windowPinned = false
+}
+
+// SelectWindowRow moves the cursor to a row in the currently rendered maxRows window.
+// It returns whether the selection changed; rows outside the visible window are ignored.
+func (s *SlashComplete) SelectWindowRow(row, maxRows int) bool {
+	visible := min(len(s.items), maxRows)
+	if row < 0 || row >= visible {
+		return false
+	}
+	start := s.visibleWindowStart(maxRows)
+	next := start + row
+	if next == s.cursor {
+		return false
+	}
+	s.cursor = next
+	s.windowStart = start
+	s.windowPinned = true
+	return true
+}
+
+func (s *SlashComplete) visibleWindowStart(maxRows int) int {
+	visible := min(len(s.items), maxRows)
+	if s.windowPinned && visible > 0 {
+		start := max(0, min(s.windowStart, len(s.items)-visible))
+		if s.cursor >= start && s.cursor < start+visible {
+			return start
+		}
+	}
+	return completionTrayWindowStart(len(s.items), s.cursor, maxRows)
 }
 
 func (s *SlashComplete) trayRows() []completionTrayRow {
@@ -117,5 +158,10 @@ func (s *SlashComplete) ViewWidth(width int) string {
 // ViewWindow renders a full-width tray capped to maxRows and keeps the selected command in
 // the visible window. View and ViewWidth remain the unbounded variants.
 func (s *SlashComplete) ViewWindow(width, maxRows int) string {
-	return renderCompletionTrayWindow(s.trayRows(), s.cursor, width, maxRows)
+	return renderCompletionTrayWindowBackgroundAt(s.trayRows(), s.cursor, width, maxRows, s.visibleWindowStart(maxRows), styles.TraySelectedBg)
+}
+
+// ViewWindowBackground renders the bounded tray with a caller-provided selected-row fill.
+func (s *SlashComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
+	return renderCompletionTrayWindowBackgroundAt(s.trayRows(), s.cursor, width, maxRows, s.visibleWindowStart(maxRows), selectedBg)
 }

@@ -99,6 +99,28 @@ func TestHoverGlowColor(t *testing.T) {
 	}
 }
 
+func TestTraySelectionColor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		frame uint
+		want  string
+	}{
+		{frame: 0, want: "#303030"},
+		{frame: 1, want: "#343B43"},
+		{frame: 2, want: "#374758"},
+		{frame: 3, want: "#3A526B"},
+		{frame: 99, want: "#3A526B"},
+	}
+	for _, tt := range tests {
+		r, g, b, _ := traySelectionColor(tt.frame).RGBA()
+		got := fmt.Sprintf("#%02X%02X%02X", r>>8, g>>8, b>>8)
+		if got != tt.want {
+			t.Errorf("traySelectionColor(%d) = %q, want %q", tt.frame, got, tt.want)
+		}
+	}
+}
+
 // TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText locks the approved link spans:
 // reasoning excludes its rail, a collapsed tool run underlines only its count label, and an
 // expanded tool node stays colored but does not misrepresent the tool name as the collapse link.

@@ -1,6 +1,7 @@
 package components
 
 import (
+	"image/color"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -25,12 +26,16 @@ func completionTrayNaturalWidth(rows []completionTrayRow) int {
 }
 
 func renderCompletionTray(rows []completionTrayRow, selected, width int) string {
+	return renderCompletionTrayBackground(rows, selected, width, styles.TraySelectedBg)
+}
+
+func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int, selectedBg color.Color) string {
 	if width <= 0 || len(rows) == 0 {
 		return ""
 	}
 
 	panelOpen, panelReset := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, selectedReset := styles.DeriveBackgroundSGR(styles.CardSelectedBg)
+	selectedOpen, selectedReset := styles.DeriveBackgroundSGR(selectedBg)
 	rendered := make([]string, len(rows))
 	for i, row := range rows {
 		rail := styles.AccentBarStyle.Render(styles.AccentBar)
@@ -38,7 +43,7 @@ func renderCompletionTray(rows []completionTrayRow, selected, width int) string 
 		open, reset := panelOpen, panelReset
 		if i == selected {
 			rail = styles.CardRailStyle.Render(styles.AccentBar)
-			primary = styles.CardSelectedStyle.Render(primary)
+			primary = styles.CardSelectedStyle.Background(selectedBg).Render(primary)
 			open, reset = selectedOpen, selectedReset
 		}
 
@@ -52,24 +57,28 @@ func renderCompletionTray(rows []completionTrayRow, selected, width int) string 
 	return strings.Join(rendered, "\n")
 }
 
-// renderCompletionTrayWindow renders at most maxRows while keeping selected visible. The
-// window follows the cursor once it moves past the initially visible rows and shifts back at
-// the end so every non-empty window uses its full row budget.
-func renderCompletionTrayWindow(rows []completionTrayRow, selected, width, maxRows int) string {
+func renderCompletionTrayWindowBackgroundAt(rows []completionTrayRow, selected, width, maxRows, start int, selectedBg color.Color) string {
 	if maxRows <= 0 || len(rows) == 0 {
 		return ""
 	}
 	if maxRows >= len(rows) {
-		return renderCompletionTray(rows, selected, width)
+		return renderCompletionTrayBackground(rows, selected, width, selectedBg)
 	}
+	start = max(0, min(start, len(rows)-maxRows))
+	return renderCompletionTrayBackground(rows[start:start+maxRows], selected-start, width, selectedBg)
+}
 
-	selected = max(0, min(selected, len(rows)-1))
+func completionTrayWindowStart(rowCount, selected, maxRows int) int {
+	if rowCount <= 0 || maxRows <= 0 || maxRows >= rowCount {
+		return 0
+	}
+	selected = max(0, min(selected, rowCount-1))
 	start := selected - maxRows + 1
 	if start < 0 {
 		start = 0
 	}
-	if start+maxRows > len(rows) {
-		start = len(rows) - maxRows
+	if start+maxRows > rowCount {
+		start = rowCount - maxRows
 	}
-	return renderCompletionTray(rows[start:start+maxRows], selected-start, width)
+	return start
 }

@@ -1,8 +1,11 @@
 package components
 
 import (
+	"image/color"
 	"strings"
 	"unicode"
+
+	"github.com/looprig/cli/tui/styles"
 )
 
 // FileItem is one @path completion candidate. Path is the value to complete to (e.g.
@@ -17,8 +20,10 @@ type FileItem struct {
 // panel, the disk-backed sibling of SlashComplete. It is display-only: package tui
 // computes the candidate list (the filesystem read) and feeds it here.
 type FileComplete struct {
-	items  []FileItem
-	cursor int
+	items        []FileItem
+	cursor       int
+	windowStart  int
+	windowPinned bool
 }
 
 // NewFileComplete returns a completer over items, or nil when empty (nil = hidden).
@@ -32,11 +37,49 @@ func NewFileComplete(items []FileItem) *FileComplete {
 // Selected returns the item under the cursor.
 func (f *FileComplete) Selected() FileItem { return f.items[f.cursor] }
 
+// Cursor returns the absolute selected index in the filtered list.
+func (f *FileComplete) Cursor() int { return f.cursor }
+
 // Up moves the cursor up, wrapping to the bottom.
-func (f *FileComplete) Up() { f.cursor = (f.cursor - 1 + len(f.items)) % len(f.items) }
+func (f *FileComplete) Up() {
+	f.cursor = (f.cursor - 1 + len(f.items)) % len(f.items)
+	f.windowPinned = false
+}
 
 // Down moves the cursor down, wrapping to the top.
-func (f *FileComplete) Down() { f.cursor = (f.cursor + 1) % len(f.items) }
+func (f *FileComplete) Down() {
+	f.cursor = (f.cursor + 1) % len(f.items)
+	f.windowPinned = false
+}
+
+// SelectWindowRow moves the cursor to a row in the currently rendered maxRows window.
+// It returns whether the selection changed; rows outside the visible window are ignored.
+func (f *FileComplete) SelectWindowRow(row, maxRows int) bool {
+	visible := min(len(f.items), maxRows)
+	if row < 0 || row >= visible {
+		return false
+	}
+	start := f.visibleWindowStart(maxRows)
+	next := start + row
+	if next == f.cursor {
+		return false
+	}
+	f.cursor = next
+	f.windowStart = start
+	f.windowPinned = true
+	return true
+}
+
+func (f *FileComplete) visibleWindowStart(maxRows int) int {
+	visible := min(len(f.items), maxRows)
+	if f.windowPinned && visible > 0 {
+		start := max(0, min(f.windowStart, len(f.items)-visible))
+		if f.cursor >= start && f.cursor < start+visible {
+			return start
+		}
+	}
+	return completionTrayWindowStart(len(f.items), f.cursor, maxRows)
+}
 
 // label is the complete displayed @path, plus a trailing "/" for a directory so a
 // folder reads as drillable at a glance.
@@ -84,5 +127,10 @@ func (f *FileComplete) ViewWidth(width int) string {
 // ViewWindow renders a full-width tray capped to maxRows and keeps the selected path in the
 // visible window. View and ViewWidth remain the unbounded variants.
 func (f *FileComplete) ViewWindow(width, maxRows int) string {
-	return renderCompletionTrayWindow(f.trayRows(), f.cursor, width, maxRows)
+	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows), styles.TraySelectedBg)
+}
+
+// ViewWindowBackground renders the bounded tray with a caller-provided selected-row fill.
+func (f *FileComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
+	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows), selectedBg)
 }
