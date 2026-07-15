@@ -4,9 +4,9 @@
 
 **Goal:** Show focused-loop model, effort, mode, and context occupancy; show rig environment plus primers/live delegates; and change available runtime values through dynamic slash-command trays.
 
-**Architecture:** Harness exposes a narrow read-only mode catalog on live loop handles. CLI owns typed runtime option contracts, pure event projections, dynamic command/value completion, and rendering. SWE adapts its validated model catalog, inference metadata, session security ceiling, and loop/session controllers to those contracts; authoritative events remain the source of displayed current state.
+**Architecture:** Harness exposes a narrow read-only mode catalog on live loop handles. TUI owns typed runtime option contracts, pure event projections, dynamic command/value completion, and rendering. CodeRig adapts its validated model catalog, inference metadata, session security limit, and loop/session controllers to those contracts; authoritative events remain the source of displayed current state.
 
-**Tech Stack:** Go, Bubble Tea v2, Bubbles textarea, Lipgloss v2, harness enduring events, SWE model catalog, sandbox security ceiling.
+**Tech Stack:** Go, Bubble Tea v2, Bubbles textarea, Lipgloss v2, Harness enduring events, CodeRig model catalog, and session security limits.
 
 ---
 
@@ -190,7 +190,7 @@ Use table-driven event sequences covering:
 - `LoopModeChanged` replaces mode and resolved runtime;
 - `LoopInferenceChanged` replaces model/effort without changing mode;
 - `ContextMeasured` replaces the loop's latest measurement;
-- `SecurityCeilingChanged` updates environment current state;
+- `SecurityLimitChanged` updates environment current state;
 - events from two loops never bleed into each other;
 - replay and live folds produce identical snapshots.
 
@@ -659,7 +659,7 @@ Expected: FAIL because mutations and new-session replay are missing.
 
 Resolve loop controllers through `sess.LoopController`. Resolve model keys only through the trusted
 runtime catalog. Call `SetMode`, `Change(ChangeModel)`, `Change(ChangeEffort)`,
-`SetSecurityCeiling`, and `SetActiveLoop` directly; preserve typed errors.
+`SetSecurityLimit`, and `SetActiveLoop` directly; preserve typed errors.
 
 **Step 5: Expand cold replay for new sessions**
 

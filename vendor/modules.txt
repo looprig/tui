@@ -214,15 +214,25 @@ github.com/looprig/core/logging
 github.com/looprig/core/uuid
 # github.com/looprig/harness v0.11.0 => ../harness
 ## explicit; go 1.26.4
-github.com/looprig/harness/pkg/ceiling
+github.com/looprig/harness/internal/pathutil
+github.com/looprig/harness/pkg/command
 github.com/looprig/harness/pkg/event
 github.com/looprig/harness/pkg/gate
 github.com/looprig/harness/pkg/hustle
 github.com/looprig/harness/pkg/identity
+github.com/looprig/harness/pkg/journal
+github.com/looprig/harness/pkg/loop
+github.com/looprig/harness/pkg/security
+github.com/looprig/harness/pkg/session
+github.com/looprig/harness/pkg/sessionstore
 github.com/looprig/harness/pkg/tool
+github.com/looprig/harness/pkg/workspacestore
 # github.com/looprig/inference v0.2.0 => ../inference
 ## explicit; go 1.26.4
 github.com/looprig/inference
+# github.com/looprig/storage v0.2.0 => ../storage
+## explicit; go 1.25.0
+github.com/looprig/storage
 # github.com/lucasb-eyer/go-colorful v1.4.0
 ## explicit; go 1.12
 github.com/lucasb-eyer/go-colorful
@@ -800,6 +810,7 @@ honnef.co/go/tools/stylecheck/st1021
 honnef.co/go/tools/stylecheck/st1022
 honnef.co/go/tools/stylecheck/st1023
 honnef.co/go/tools/unused
+# github.com/looprig/storage => ../storage
 # github.com/looprig/harness => ../harness
 # github.com/looprig/core => ../core
 # github.com/looprig/inference => ../inference

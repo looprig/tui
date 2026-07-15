@@ -83,7 +83,7 @@ repository and used by the separate `swe` repository, so renaming it violates th
 "only if it is not a multi-repository change" constraint. Configuration parsing may accept both
 `write` and `writable`; the UI always renders `Writable`.
 
-The environment setting is session-scoped. SWE's launch-time security ceiling is both the
+The environment setting is session-scoped. CodeRig's launch-time security limit is both the
 initial value and maximum runtime value. The runtime choices are every permitted rung at or
 below that cap. A session capped at `Writable`, for example, offers `Untrusted`, `Read Only`,
 and `Writable`, but not `Trusted`. `Unconfined` is returned only by an adapter whose composition
@@ -183,8 +183,8 @@ than two effective choices remain, `/effort` is absent.
 ### Environment
 
 SWE builds the environment choices from the session ceiling configured at the rig composition
-root. The selected environment changes through `SessionController.SetSecurityCeiling`, is
-journaled as `SecurityCeilingChanged`, and is restored with the session. `/env` is absent only
+root. The selected environment changes through `SessionController.SetSecurityLimit`, is
+journaled as `SecurityLimitChanged`, and is restored with the session. `/env` is absent only
 when the adapter returns fewer than two permitted values.
 
 ## Slash-command trays
@@ -242,7 +242,7 @@ The TUI keeps a per-loop runtime projection folded from enduring events:
 - `LoopInferenceChanged`: current model/limits/effort without changing the mode.
 - `ContextMeasured`: latest authoritative input-token count and input limit.
 - `LoopIdle` and turn lifecycle: delegate visibility and live state.
-- `SecurityCeilingChanged`: current session environment.
+- `SecurityLimitChanged`: current session environment.
 - `ActiveLoopChanged`: harness active target, independent of presentation focus unless the user
   made the selection through the footer.
 

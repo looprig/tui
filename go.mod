@@ -1,6 +1,8 @@
-module github.com/looprig/cli
+module github.com/looprig/tui
 
 go 1.26.4
+
+replace github.com/looprig/storage => ../storage
 
 tool (
 	github.com/securego/gosec/v2/cmd/gosec
@@ -16,7 +18,10 @@ require (
 	github.com/looprig/harness v0.11.0
 )
 
-require github.com/looprig/inference v0.2.0 // indirect
+require (
+	github.com/looprig/inference v0.2.0
+	github.com/looprig/storage v0.2.0 // indirect
+)
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -33,7 +38,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260525132238-948f4557a654 // indirect
-	github.com/charmbracelet/x/ansi v0.11.7 // indirect
+	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -96,7 +101,7 @@ require (
 	honnef.co/go/tools v0.7.0 // indirect
 )
 
-// Local, unpublished dependency on the looprig SDK. looprig-console is extracted
+// Local, unpublished dependency on the looprig SDK. The TUI module is extracted
 // FROM the current looprig working tree, so it must build against that exact tree
 // (published tags lag). At release: drop this replace and pin a real looprig tag.
 replace github.com/looprig/harness => ../harness

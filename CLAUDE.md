@@ -1,16 +1,16 @@
 # CLAUDE.md — Development Guidelines
 
-## SOLID Principles (strictly enforced)
+## Design guidance
 
-**Single Responsibility** — Every struct, function, and package has exactly one reason to change. If you can't describe what it does in one sentence without "and", split it.
+Keep packages and types cohesive. Split code when responsibilities have different owners, invariants, or reasons to change, not because a description contains a particular word.
 
-**Open/Closed** — Extend behavior via interfaces and composition. Never modify a working type to add new behavior; add a new type or wrap it.
+Prefer simple changes to existing types when the behavior belongs there. Use composition when capabilities are genuinely independent.
 
 **Liskov Substitution** — Every implementation of an interface must honor the full contract. If a concrete type can't satisfy a method without panicking, returning errors the caller doesn't expect, or silently doing less, redesign the interface.
 
 **Interface Segregation** — Interfaces are small and focused. A caller should never be forced to depend on methods it doesn't use. Prefer many small interfaces over one large one.
 
-**Dependency Inversion** — Depend on interfaces, not concrete types. High-level packages must not import low-level packages directly. Wire dependencies at the composition root (main or a factory), never inside business logic.
+Define small interfaces at the package that consumes them when substitution, testing, or a stable boundary requires one. Concrete dependencies are fine when they are the intended abstraction.
 
 ## Security — First-Class, Not an Afterthought
 
@@ -30,7 +30,10 @@
 
 ## Dependencies
 
-This module is the presentation layer extracted from github.com/looprig/harness; it depends on that SDK for core types (content, event, transcript, …).
+This module is the interactive terminal presentation layer. The root package is its stable
+public facade; the coupled Bubble Tea application lives in `internal/presentation`. Internal
+packages never import the root facade. The module depends on github.com/looprig/harness for
+runtime contracts, and Harness never imports TUI.
 
 **Prefer stdlib.** Always reach for the Go standard library first. If a need can be met with stdlib — even with a bit more code — use stdlib.
 
@@ -42,7 +45,7 @@ This module is the presentation layer extracted from github.com/looprig/harness;
 - `github.com/securego/gosec/v2` — security static analysis tool (dev/tool only)
 - `golang.org/x/vuln/cmd/govulncheck` — official Go vulnerability scanner (dev/tool only)
 - `honnef.co/go/tools/cmd/staticcheck` — extended static analysis (dev/tool only)
-- `github.com/charmbracelet/bubbletea` — Elm-architecture TUI runtime; required by tui + cmd/cli (stdlib has no terminal raw-mode/TUI framework). **v2 approved (2026-06-15):** the TUI is migrating to Bubble Tea v2 (and co-versioned Bubbles/Lipgloss v2) for the Kitty keyboard protocol (true Shift+Enter newline) and other v2 features. Use v2 APIs throughout — v1.3.10 cannot distinguish Shift+Enter from Enter. **Migration landed (2026-06-15): the v2 import path is the `charm.land/...` vanity module, i.e. `charm.land/bubbletea/v2` (NOT `github.com/charmbracelet/...`).**
+- `github.com/charmbracelet/bubbletea` — Elm-architecture TUI runtime; required by `internal/presentation` and `runtime` (stdlib has no terminal raw-mode/TUI framework). **v2 approved (2026-06-15):** the TUI uses Bubble Tea v2 and co-versioned Bubbles/Lipgloss v2 for the Kitty keyboard protocol and other v2 features. The v2 import path is the `charm.land/...` vanity module.
 - `github.com/charmbracelet/bubbles` — textarea + viewport widgets for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/bubbles/v2` (subpackages `.../textarea`, `.../viewport`, `.../key`).
 - `github.com/charmbracelet/lipgloss` — terminal styling/layout for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/lipgloss/v2`.
 - `github.com/charmbracelet/glamour` — markdown → ANSI rendering for the TUI transcript; pin a version compatible with Lipgloss v2. v2 import path: `charm.land/glamour/v2` (styles subpackage `charm.land/glamour/v2/styles`).
@@ -70,7 +73,7 @@ srv := &http.Server{
 
 **Shell commands** — Never pass user input to `exec.Command` as a shell string. Always pass args as separate parameters.
 
-> **Documented exception — the `Bash` tool (`tools/bash.go`).** `Bash` runs a single command via `sh -c <command>` — a deliberate violation of the rule above, because a coding agent genuinely needs shell features (pipes, globs, `&&`, redirects) an argv list can't express. The security boundary is the **permission gate**, not the argv shape: `Bash` defaults to **Ask**, so a human reads and approves each command before it runs. `DeniedBashPrefixes` is **advisory** defense-in-depth only (trivially bypassable — `/usr/bin/sudo`, `env sudo`, …) and must never be relied on as a boundary. The real hard boundary — OS-level sandboxing (seccomp/landlock/nsjail) — is **out of scope** and is the prerequisite for ever auto-approving `Bash` broadly; until then `Bash` must stay human-gated. The exec call carries a `// #nosec G204` with this rationale.
+TUI does not implement command tools. It renders permission interactions supplied by sessionadapter and remains independent of concrete tool and sandbox packages.
 
 **File paths** — Always call `filepath.Clean` and verify the result stays within the expected root before opening files from user-supplied paths.
 
@@ -82,7 +85,7 @@ srv := &http.Server{
 
 **Tests** — Always run with `-race`: `go test -race ./...`. A test that passes without `-race` but not with it is not passing.
 
-**Table-driven tests (mandatory).** Every test function uses a `[]struct{ name string; ... }` table. Each table must cover:
+Use table-driven tests when several cases share the same setup and assertion shape. Use a focused test when one scenario is clearer. Across the relevant test suite, cover:
 - Happy path (valid, expected input → expected output)
 - Boundary values (zero, empty, max, minimum valid)
 - Error cases (invalid input, missing required fields, wrong types)
@@ -126,7 +129,7 @@ func TestFoo(t *testing.T) {
 - **Strict typing everywhere.** Never use `any` or `interface{}` except at explicit serialization boundaries (JSON unmarshal, plugin APIs). Immediately narrow to a concrete type; never pass `any` deeper into business logic. No untyped magic numbers or strings — use named constants or typed enums. Prefer named types (`type UserID string`) over bare primitives when the value has domain meaning.
 - All domain concepts are typed structs — no `map[string]interface{}` for domain data.
 - Return errors explicitly; never swallow them with `_`.
-- **All errors must be typed.** Define a concrete error struct for every distinct failure mode. Never return `errors.New("...")` or `fmt.Errorf("...")` from package-level APIs — those lose type identity at the call site. Callers must be able to `errors.As` to the concrete type to inspect cause and context. Sentinel errors (`var ErrFoo = errors.New(...)`) are permitted only for leaf errors with no additional context fields.
+- Use typed or sentinel errors for public failures that callers need to classify, recover from, or inspect. Use wrapped ordinary errors for contextual failures that callers only report.
 - Keep packages shallow and cohesive; avoid circular imports.
-- Write the interface first, then the implementation.
-- If a function exceeds ~30 lines, ask whether it violates SRP before adding more.
+- Introduce interfaces when a consumer boundary or multiple implementations justify them.
+- Split long functions when doing so clarifies ownership, invariants, or control flow. Do not optimize for an arbitrary line count.
