@@ -3,7 +3,7 @@ package command
 import "github.com/looprig/harness/pkg/security"
 
 // SetSecurityLimit is the journaled, replayable command that clamps the session's
-// SECURITY CEILING — the ordinal upper bound on how permissive auto-approval may be
+// security limit, the ordinal upper bound on how permissive auto-approval may be
 // (SPEC §8/§10.2). It is a plain-JSON command (every field round-trips through
 // encoding/json), following the ApproveToolCall pattern. Harness treats Level as an
 // ORDINAL ONLY (0 = most restrictive); the consumer maps the ordinal to a mode/posture,

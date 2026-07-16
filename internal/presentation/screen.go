@@ -13,7 +13,7 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
-	"github.com/looprig/inference"
+	contextcount "github.com/looprig/inference/contextcount"
 	"github.com/looprig/tui/components"
 
 	"github.com/looprig/tui/styles"
@@ -2047,7 +2047,7 @@ func (m Screen) focusedRuntimeStatus() string {
 	if state.hasContext && state.context.InputLimit > 0 {
 		pct := uint64(state.context.InputTokens) * 100 / uint64(state.context.InputLimit)
 		prefix := ""
-		if state.context.Quality == inference.CountQualityHeuristicEstimate {
+		if state.context.Quality == contextcount.CountQualityHeuristicEstimate {
 			prefix = "~"
 		}
 		parts = append(parts, prefix+strconv.FormatUint(pct, 10)+"% context")

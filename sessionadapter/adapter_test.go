@@ -20,7 +20,7 @@ import (
 	"github.com/looprig/harness/pkg/sessionstore"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/harness/pkg/workspacestore"
-	"github.com/looprig/inference"
+	model "github.com/looprig/inference/model"
 	"github.com/looprig/tui"
 )
 
@@ -37,12 +37,12 @@ var _ tui.Agent = (*sessionAdapter)(nil)
 // ignores it for a NEW session (only a restore requires the replayer).
 var errNoReplay = errors.New("no replay for a new session")
 
-func testModel() inference.Model {
-	return inference.Model{
-		Provider:  inference.ProviderName("test"),
-		APIFormat: inference.APIFormat("test"),
+func testModel() model.Model {
+	return model.Model{
+		Provider:  model.ProviderName("test"),
+		APIFormat: model.APIFormat("test"),
 		Name:      "fake-model",
-		Limits:    inference.ContextLimits{WindowTokens: 128_000},
+		Limits:    model.ContextLimits{WindowTokens: 128_000},
 	}
 }
 
@@ -97,12 +97,12 @@ func (*scriptedEventCursor) Close() error { return nil }
 // fakeHandle is a minimal loop.Handle: an id + a model whose caps drive AcceptsImages.
 type fakeHandle struct {
 	id    uuid.UUID
-	model inference.Model
+	model model.Model
 }
 
-func (h *fakeHandle) ID() uuid.UUID          { return h.id }
-func (h *fakeHandle) Mode() loop.ModeName    { return "" }
-func (h *fakeHandle) Model() inference.Model { return h.model }
+func (h *fakeHandle) ID() uuid.UUID       { return h.id }
+func (h *fakeHandle) Mode() loop.ModeName { return "" }
+func (h *fakeHandle) Model() model.Model  { return h.model }
 
 // fakeSub is a controllable event.Subscription: the test feeds deliveries on ch.
 type fakeSub struct {

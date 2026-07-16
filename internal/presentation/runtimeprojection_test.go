@@ -8,7 +8,8 @@ import (
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/loop"
 	"github.com/looprig/harness/pkg/security"
-	"github.com/looprig/inference"
+	contextcount "github.com/looprig/inference/contextcount"
+	model "github.com/looprig/inference/model"
 )
 
 func TestRuntimeProjectionFoldsAuthoritativeLoopAndAccessEvents(t *testing.T) {
@@ -17,19 +18,19 @@ func TestRuntimeProjectionFoldsAuthoritativeLoopAndAccessEvents(t *testing.T) {
 	loopID := callID(1)
 	parentID := callID(2)
 	initial := event.ModelRuntime{
-		Key:    inference.ModelKey{Provider: "provider", Model: "initial"},
-		Limits: inference.ContextLimits{WindowTokens: 128_000},
-		Effort: inference.EffortLow,
+		Key:    model.ModelKey{Provider: "provider", Model: "initial"},
+		Limits: model.ContextLimits{WindowTokens: 128_000},
+		Effort: model.EffortLow,
 	}
 	changed := event.ModelRuntime{
-		Key:    inference.ModelKey{Provider: "provider", Model: "changed"},
-		Limits: inference.ContextLimits{WindowTokens: 256_000},
-		Effort: inference.EffortHigh,
+		Key:    model.ModelKey{Provider: "provider", Model: "changed"},
+		Limits: model.ContextLimits{WindowTokens: 256_000},
+		Effort: model.EffortHigh,
 	}
 	measurement := event.ContextMeasurement{
 		InputTokens: content.TokenCount(42_000),
 		InputLimit:  content.TokenCount(100_000),
-		Quality:     inference.CountQualityHeuristicEstimate,
+		Quality:     contextcount.CountQualityHeuristicEstimate,
 	}
 
 	projection := newRuntimeProjection()
@@ -123,8 +124,8 @@ func TestFoldDisplayAndLiveScreenUseTheSameRuntimeProjection(t *testing.T) {
 		Header:      event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "operator"},
 		InitialMode: "plan",
 		Runtime: event.ModelRuntime{
-			Key:    inference.ModelKey{Provider: "provider", Model: "model"},
-			Effort: inference.EffortMedium,
+			Key:    model.ModelKey{Provider: "provider", Model: "model"},
+			Effort: model.EffortMedium,
 		},
 	}
 
