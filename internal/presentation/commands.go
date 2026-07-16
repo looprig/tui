@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -186,16 +187,34 @@ func reopenAgent(ctx context.Context, old Agent, open OpenAgent, handoff *reopen
 			return result
 		}
 		a, err := open(ctx)
-		if err != nil && a != nil {
-			partialCloseCtx, partialCloseCancel := context.WithTimeout(context.Background(), closeTimeout)
-			if closeErr := a.Close(partialCloseCtx); closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("close partial replacement: %w", closeErr))
+		if err != nil {
+			if !isNilAgent(a) {
+				partialCloseCtx, partialCloseCancel := context.WithTimeout(context.Background(), closeTimeout)
+				if closeErr := a.Close(partialCloseCtx); closeErr != nil {
+					err = errors.Join(err, fmt.Errorf("close partial replacement: %w", closeErr))
+				}
+				partialCloseCancel()
 			}
-			partialCloseCancel()
 			a = nil
 		}
 		result.agent, result.err = a, err
 		return result
+	}
+}
+
+// isNilAgent recognizes both a nil interface and an interface holding a typed nil.
+// Session factories commonly return concrete pointer agents, and converting a failed nil
+// pointer to Agent otherwise makes it appear present and unsafe to clean up.
+func isNilAgent(agent Agent) bool {
+	if agent == nil {
+		return true
+	}
+	value := reflect.ValueOf(agent)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 

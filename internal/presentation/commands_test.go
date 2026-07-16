@@ -437,6 +437,30 @@ func TestReopenAgentClosesPartialReplacementOnError(t *testing.T) {
 	}
 }
 
+// TestReopenAgentPreservesErrorFromTypedNilReplacement reproduces a Go interface edge
+// case at the session-browser boundary: a concrete nil *Agent converted to Agent is not
+// itself nil. Failed construction must not call Close on that unusable value and mask the
+// original restore error with a panic.
+func TestReopenAgentPreservesErrorFromTypedNilReplacement(t *testing.T) {
+	t.Parallel()
+
+	old := &fakeAgent{}
+	restoreErr := errors.New("session: restore config mismatch")
+	var absent *fakeAgent
+	open := func(context.Context) (Agent, error) { return absent, restoreErr }
+
+	res := reopenAgent(context.Background(), old, open, newReopenHandoff())().(reopenResultMsg)
+	if !errors.Is(res.err, restoreErr) {
+		t.Fatalf("reopen error = %v, want original restore error %v", res.err, restoreErr)
+	}
+	if res.agent != nil {
+		t.Fatalf("replacement agent = %T, want nil", res.agent)
+	}
+	if old.closeCalls != 1 {
+		t.Errorf("old Close calls = %d, want exactly 1", old.closeCalls)
+	}
+}
+
 // TestReopenAgentCloseFailureStopsBeforeOpen pins the first half of the ownership handoff:
 // one failed Close attempt is wrapped and returned, and the replacement opener is never called.
 func TestReopenAgentCloseFailureStopsBeforeOpen(t *testing.T) {
