@@ -22,6 +22,7 @@ type DisplayProjection struct {
 	transcript  transcriptModel
 	interaction interactionModel
 	compaction  compactionProjection
+	runtime     runtimeProjection
 	eventCount  int
 	eventIDs    map[uuid.UUID]struct{}
 }
@@ -39,16 +40,18 @@ func FoldDisplay(events []event.Event) DisplayProjection {
 	tr := transcriptModel{}
 	in := newInteractionModel()
 	compaction := compactionProjection{}
+	runtime := newRuntimeProjection()
 	ids := make(map[uuid.UUID]struct{})
 	for _, ev := range events {
 		tr = tr.ApplyEvent(ev)
 		in = in.ApplyEvent(ev)
 		compaction = compaction.ApplyEvent(ev)
+		runtime = runtime.ApplyEvent(ev)
 		if id := ev.EventHeader().EventID; !id.IsZero() {
 			ids[id] = struct{}{}
 		}
 	}
-	return DisplayProjection{transcript: tr, interaction: in, compaction: compaction, eventCount: len(events), eventIDs: ids}
+	return DisplayProjection{transcript: tr, interaction: in, compaction: compaction, runtime: runtime, eventCount: len(events), eventIDs: ids}
 }
 
 // EqualTranscript reports whether p and other have the byte-for-byte identical committed
@@ -171,6 +174,7 @@ type restoredMsg struct {
 	transcript  transcriptModel
 	interaction interactionModel
 	compaction  compactionProjection
+	runtime     runtimeProjection
 	eventCount  int
 	eventIDs    map[uuid.UUID]struct{}
 	err         error
@@ -192,7 +196,7 @@ func restoreBacklogCmd(ctx context.Context, agent Agent) tea.Cmd {
 			return restoredMsg{err: &RestoreBacklogError{Cause: err}}
 		}
 		proj := FoldDisplay(backlog)
-		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, compaction: proj.compaction, eventCount: proj.eventCount, eventIDs: proj.eventIDs}
+		return restoredMsg{transcript: proj.transcript, interaction: proj.interaction, compaction: proj.compaction, runtime: proj.runtime, eventCount: proj.eventCount, eventIDs: proj.eventIDs}
 	}
 }
 

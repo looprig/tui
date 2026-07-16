@@ -95,6 +95,21 @@ func TestNewSlashComplete(t *testing.T) {
 	}
 }
 
+func TestNewSlashCompleteWithCommandsUsesInjectedCatalog(t *testing.T) {
+	commands := []SlashCmd{{Name: "/mode", Desc: "change mode"}}
+	tray := NewSlashCompleteWithCommands("/mo", commands)
+	if tray == nil || tray.Selected().Name != "/mode" {
+		t.Fatalf("selected = %#v, want injected /mode", tray)
+	}
+	commands[0].Name = "/mutated"
+	if tray.Selected().Name != "/mode" {
+		t.Fatal("live tray retained caller command slice")
+	}
+	if NewSlashCompleteWithCommands("/clear", commands) != nil {
+		t.Fatal("injected catalog unexpectedly fell back to static commands")
+	}
+}
+
 func TestSlashMatchRankNormalizesRelatedWords(t *testing.T) {
 	original := slashRelatedWords["/clear"]
 	slashRelatedWords["/clear"] = []string{"NEW"}

@@ -41,19 +41,21 @@ const (
 // driven Elm-style: Update/ApplyEvent return a new interactionModel. It holds NO
 // agent reference — it only PRODUCES a typed uiAction for Screen to act on.
 type interactionModel struct {
-	mode         interactionMode
-	pending      []prompt // FIFO; pending[0] is the active prompt
-	input        components.InputBox
-	slash        *components.SlashComplete // slash-command panel; nil = hidden
-	files        *components.FileComplete  // @path completion panel; nil = hidden
-	composeDraft string                    // editor text saved when a prompt preempts compose
+	mode          interactionMode
+	pending       []prompt // FIFO; pending[0] is the active prompt
+	input         components.InputBox
+	slash         *components.SlashComplete // slash-command panel; nil = hidden
+	files         *components.FileComplete  // @path completion panel; nil = hidden
+	slashCommands []components.SlashCmd
+	composeDraft  string // editor text saved when a prompt preempts compose
 }
 
 // newInteractionModel returns an idle model in compose mode with a focused input.
 func newInteractionModel() interactionModel {
 	return interactionModel{
-		mode:  modeCompose,
-		input: components.NewInputBox(),
+		mode:          modeCompose,
+		input:         components.NewInputBox(),
+		slashCommands: append([]components.SlashCmd(nil), components.SlashCommands...),
 	}
 }
 
@@ -468,7 +470,7 @@ func (m interactionModel) composeEnter() (interactionModel, uiAction) {
 	}
 	if strings.HasPrefix(v, "/") {
 		name := firstToken(v)
-		if isSlashCommand(name) {
+		if m.isSlashCommand(name) {
 			m.input.Reset()
 			m.slash = nil
 			return m, slashAction(name)
@@ -494,7 +496,7 @@ func (m *interactionModel) forwardToInput(msg tea.KeyPressMsg) tea.Cmd {
 	m.slash, m.files = nil, nil
 	switch {
 	case strings.HasPrefix(v, "/") && !strings.ContainsAny(v, " \t\n"):
-		m.slash = components.NewSlashComplete(firstToken(v))
+		m.slash = components.NewSlashCompleteWithCommands(firstToken(v), m.slashCommands)
 	default:
 		if partial, ok := inputpkg.ActiveAtToken(v); ok {
 			m.files = components.NewFileComplete(inputpkg.ListFiles(partial))
@@ -524,17 +526,20 @@ func slashAction(name string) uiAction {
 // isSlashCommand reports whether name is a visible command or the exact hidden
 // /help compatibility command. Hidden commands are deliberately kept out of the
 // component command table so they never appear in completion or helpText.
-func isSlashCommand(name string) bool {
+func (m interactionModel) isSlashCommand(name string) bool {
 	if name == "/help" {
 		return true
 	}
-	for _, c := range components.SlashCommands {
+	for _, c := range m.slashCommands {
 		if c.Name == name {
 			return true
 		}
 	}
 	return false
 }
+
+// isSlashCommand preserves the package-level compatibility check for the static catalog.
+func isSlashCommand(name string) bool { return newInteractionModel().isSlashCommand(name) }
 
 // firstToken returns the first whitespace-delimited token of s, or "" if none.
 func firstToken(s string) string {

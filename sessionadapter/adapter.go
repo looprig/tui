@@ -66,6 +66,13 @@ func New(sess session.SessionController) *Adapter {
 	}
 }
 
+// NewWithReplay wraps a newly created session and cold-replays the public
+// enduring events already committed during rig construction. It is intended for
+// interactive clients that subscribe after primers have been created.
+func NewWithReplay(ctx context.Context, sess session.SessionController, store ReplayOpener) (*Adapter, error) {
+	return newSessionAdapter(ctx, sess, store, true)
+}
+
 // Restore wraps a restored session and reconstructs its public enduring backlog
 // and open-gate index before returning it to the TUI.
 func Restore(ctx context.Context, sess session.SessionController, store ReplayOpener) (*Adapter, error) {

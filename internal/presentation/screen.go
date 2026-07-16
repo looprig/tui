@@ -13,6 +13,8 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/inference"
+	"github.com/looprig/tui/components"
 
 	"github.com/looprig/tui/styles"
 )
@@ -51,6 +53,18 @@ import (
 // flow through the shared sessionCore, so they are shared with Screen rather than re-implemented.
 type Screen struct {
 	sessionCore
+	runtimeCatalog    RuntimeCatalog
+	runtimeController RuntimeController
+	runtime           runtimeProjection
+	runtimeTray       *components.ValueComplete
+	runtimeTrayKind   runtimeTrayKind
+	runtimeTrayLoopID uuid.UUID
+	runtimeRoot       string
+	accessLabels      map[string]string
+	sessionBrowser    SessionBrowser
+	sessionTray       *components.SessionComplete
+	pendingResume     SessionID
+	resuming          bool
 
 	viewport viewportModel // the scrollable/selectable content window
 	collapse collapseState // the retroactive thinking-fold state (ctrl+t + header-click)
@@ -201,17 +215,41 @@ const liveTailEntryID displayID = 0
 // collapse state starts folded (dense; ctrl+t expands), and focus starts on the agent's ACTIVE
 // loop (Agent.ActiveLoopID — the session's current default target); a later selection event
 // never moves it.
-func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
+func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, supplied ...Option) Screen {
+	options := screenOptions{}
+	for _, apply := range supplied {
+		apply(&options)
+	}
+	runtimeCatalog, _ := agent.(RuntimeCatalog)
+	runtimeController, _ := agent.(RuntimeController)
 	m := Screen{
-		sessionCore:   newSessionCore(ctx, agent, open, banner),
-		viewport:      viewportModel{atTail: true},
-		collapse:      newCollapseState(),
-		focusedLoopID: agent.ActiveLoopID(),
-		turnStartedAt: make(map[uuid.UUID]time.Time),
-		restoring:     true,
-		trayGlowFrame: trayGlowFinalFrame,
+		sessionCore:       newSessionCore(ctx, agent, open, banner),
+		runtimeCatalog:    runtimeCatalog,
+		runtimeController: runtimeController,
+		runtime:           newRuntimeProjection(),
+		sessionBrowser:    options.sessionBrowser,
+		viewport:          viewportModel{atTail: true},
+		collapse:          newCollapseState(),
+		focusedLoopID:     agent.ActiveLoopID(),
+		turnStartedAt:     make(map[uuid.UUID]time.Time),
+		restoring:         true,
+		trayGlowFrame:     trayGlowFinalFrame,
 	}
 	m.interaction = styleComposer(m.interaction)
+	if runtimeCatalog != nil && runtimeController != nil {
+		m.interaction.slashCommands = append(m.interaction.slashCommands,
+			components.SlashCmd{Name: "/mode", Desc: "change the focused loop mode"},
+			components.SlashCmd{Name: "/model", Desc: "change the focused loop model"},
+			components.SlashCmd{Name: "/effort", Desc: "change reasoning effort"},
+			components.SlashCmd{Name: "/access", Desc: "change the session access level"},
+		)
+	}
+	if options.sessionBrowser != nil {
+		m.interaction.slashCommands = append(m.interaction.slashCommands,
+			components.SlashCmd{Name: "/sessions", Desc: "resume a previous session"},
+			components.SlashCmd{Name: "/resume", Desc: "resume a previous session"},
+		)
+	}
 	return m
 }
 
@@ -248,7 +286,7 @@ func styleComposer(in interactionModel) interactionModel {
 // arrive first; the restore barrier buffers and continuously re-arms them, then applies them in
 // arrival order after restoredMsg installs history. An empty backlog simply releases the barrier.
 func (m Screen) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.interaction.input.Focus(),
 		func() tea.Msg { return systemReadyMsg{} },
 		restoreBacklogCmd(m.appCtx, m.agent),
@@ -257,7 +295,11 @@ func (m Screen) Init() tea.Cmd {
 		// re-armed by handleAnim, stopped only on quit). It shimmers the gradient only for
 		// ACTIVE states; while idle it just recomposes the static faint status line.
 		animCmd(),
-	)
+	}
+	if m.runtimeCatalog != nil {
+		cmds = append(cmds, queryAccessMetadata(m.appCtx, m.runtimeCatalog))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update advances the model. It is a value receiver so Screen satisfies tea.Model;
@@ -280,6 +322,14 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		cmd := m.handleEvent(msg.ev)
+		if !m.pendingResume.IsZero() && isCompactionTerminal(msg.ev) && !m.compaction.IsActive(m.focusedLoopID) && !m.loopRunning[m.effectiveActiveLoopID()] {
+			m.status = StatusIdle
+		}
+		if !m.pendingResume.IsZero() && isResumeTerminal(msg.ev) && m.status == StatusIdle {
+			resume := m.beginSessionResume(m.pendingResume)
+			m.pendingResume = SessionID{}
+			return m, tea.Batch(cmd, resume)
+		}
 		return m, cmd
 	case restoredMsg:
 		cmd := m.handleRestored(msg)
@@ -302,6 +352,15 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case interruptResultMsg:
 		cmd := m.handleInterruptResult(msg)
+		if msg.err != nil || !msg.cancelled {
+			m.pendingResume = SessionID{}
+			m.status = StatusIdle
+			m.deriveActiveStatus()
+			if msg.err == nil {
+				m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "Session is still active; resume was cancelled")
+				m.rerender()
+			}
+		}
 		return m, cmd
 	case reopenResultMsg:
 		if m.restoring {
@@ -333,6 +392,24 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case trayGlowMsg:
 		cmd := m.handleTrayGlow(msg)
+		return m, cmd
+	case runtimeChoicesMsg:
+		cmd := m.handleRuntimeChoices(msg)
+		return m, cmd
+	case runtimeMutationMsg:
+		cmd := m.handleRuntimeMutation(msg)
+		return m, cmd
+	case accessMetadataMsg:
+		if msg.err == nil {
+			m.runtimeRoot = msg.options.Root
+			m.accessLabels = make(map[string]string, len(msg.options.Choices))
+			for _, option := range msg.options.Choices {
+				m.accessLabels[string(option.ID)] = option.Label
+			}
+		}
+		return m, nil
+	case sessionsListedMsg:
+		cmd := m.handleSessionsListed(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -388,6 +465,131 @@ func (m *Screen) handleSystemReady() tea.Cmd {
 	return nil
 }
 
+func (m *Screen) handleRuntimeChoices(msg runtimeChoicesMsg) tea.Cmd {
+	if msg.err != nil {
+		m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("load runtime choices: %w", msg.err))
+		m.rerender()
+		return nil
+	}
+	tray := components.NewValueComplete(msg.items, "")
+	if tray == nil {
+		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "No choices are available")
+		m.rerender()
+		return nil
+	}
+	m.runtimeTray = tray
+	m.runtimeTrayKind = msg.kind
+	m.runtimeTrayLoopID = msg.loopID
+	if msg.root != "" {
+		m.runtimeRoot = msg.root
+	}
+	m.resize()
+	return m.startTrayGlow()
+}
+
+func (m *Screen) handleRuntimeMutation(msg runtimeMutationMsg) tea.Cmd {
+	if msg.err != nil {
+		m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("change runtime: %w", msg.err))
+		m.rerender()
+	}
+	// Successful mutations deliberately do not update current display. The durable event is
+	// the acknowledgement and the runtime projection will fold it when it arrives.
+	return nil
+}
+
+func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
+	if msg.err != nil {
+		m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("list sessions: %w", msg.err))
+		m.rerender()
+		return nil
+	}
+	items := make([]components.SessionItem, 0, len(msg.sessions))
+	now := time.Now()
+	for _, session := range msg.sessions {
+		title := strings.TrimSpace(session.Title)
+		if title == "" {
+			title = "Untitled session"
+		}
+		id := session.ID.String()
+		shortID := id
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		items = append(items, components.SessionItem{
+			ID:       id,
+			Title:    title,
+			State:    session.State,
+			Activity: relativeActivity(now, session.LastActiveAt),
+			Kind:     session.AgentKind,
+			Loops:    session.LoopCount,
+			Created:  session.CreatedAt.Format("2006-01-02"),
+			ShortID:  shortID,
+		})
+	}
+	m.sessionTray = components.NewSessionComplete(items)
+	if m.sessionTray == nil {
+		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "No previous sessions")
+		m.rerender()
+		return nil
+	}
+	m.resize()
+	return m.startTrayGlow()
+}
+
+func relativeActivity(now, at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	d := now.Sub(at)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d/time.Minute)) + "m ago"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d/time.Hour)) + "h ago"
+	default:
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d ago"
+	}
+}
+
+func (m *Screen) beginSessionResume(id SessionID) tea.Cmd {
+	if m.sessionBrowser == nil || id.IsZero() || m.status == StatusResetting {
+		return nil
+	}
+	m.status = StatusResetting
+	m.resuming = true
+	if m.sub != nil {
+		_ = m.sub.Close()
+		m.sub = nil
+	}
+	m.handoff = newReopenHandoff()
+	return reopenAgent(m.appCtx, m.agent, func(ctx context.Context) (Agent, error) {
+		return m.sessionBrowser.ResumeSession(ctx, id)
+	}, m.handoff)
+}
+
+func isResumeTerminal(ev event.Event) bool {
+	switch ev.(type) {
+	case event.TurnDone, event.TurnFailed, event.TurnInterrupted, event.CompactionCommitted, event.CompactionRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+func isCompactionTerminal(ev event.Event) bool {
+	switch ev.(type) {
+	case event.CompactionCommitted, event.CompactionRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // commitStartup commits the opening entries once per session: the startup banner (always)
 // and the OPTIONAL greeting (only when banner.Greeting is non-blank). Both go through the
 // plain info-notice path — they are rendered opening entries, NOT turns or commands (no
@@ -422,6 +624,7 @@ func (m *Screen) commitStartup() {
 // driven by injected event/tick times (no render-time wall clock).
 func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	ev = stampEphemeralClock(ev, m.now)
+	m.runtime = m.runtime.ApplyEvent(ev)
 	rearm, _ := m.sessionCore.handleEvent(ev)
 	// Commit the "turn ran for Ns" line BEFORE trackTurnClock clears the start time it reads.
 	m.commitTurnRanNotice(ev)
@@ -606,6 +809,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 		m.transcript = installRestoredTranscript(m.transcript, msg.transcript)
 		m.interaction = installRestoredInteraction(m.interaction, msg.interaction)
 		m.compaction = msg.compaction
+		m.runtime = msg.runtime
 	}
 	for _, input := range buffered {
 		switch input.kind {
@@ -616,6 +820,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 					continue
 				}
 			}
+			m.runtime = m.runtime.ApplyEvent(ev)
 			_, _ = m.sessionCore.handleEvent(ev) // reader was re-armed when the delivery was buffered
 			m.commitTurnRanNotice(ev)
 			m.trackTurnClock(ev)
@@ -678,6 +883,7 @@ func installRestoredInteraction(current, restored interactionModel) interactionM
 	restored.input = current.input
 	restored.slash = current.slash
 	restored.files = current.files
+	restored.slashCommands = append([]components.SlashCmd(nil), current.slashCommands...)
 	restored.composeDraft = current.input.Value()
 	return restored
 }
@@ -770,6 +976,10 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	// selection event.
 	m.sessionGeneration++
 	m.focusedLoopID = m.agent.ActiveLoopID()
+	m.runtimeCatalog, _ = m.agent.(RuntimeCatalog)
+	m.runtimeController, _ = m.agent.(RuntimeController)
+	m.runtime = newRuntimeProjection()
+	m.resuming = false
 	m.collapse = newCollapseState()
 	m.viewport = viewportModel{atTail: true}
 	m.startupPending = false
@@ -784,7 +994,12 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 		m.closing = newAgentCloseHandoff(m.agent)
 		return closeAgentForQuit(m.closing)
 	}
-	return cmd
+	m.restoring = true
+	cmds := []tea.Cmd{cmd, restoreBacklogCmd(m.appCtx, m.agent)}
+	if m.runtimeCatalog != nil {
+		cmds = append(cmds, queryAccessMetadata(m.appCtx, m.runtimeCatalog))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Screen) rejectStaleReopenResult(msg reopenResultMsg) tea.Cmd {
@@ -916,6 +1131,64 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focusLoop(m.bar().cycle(-1))
 		return m, nil
 	}
+	if m.runtimeTray != nil {
+		switch msg.String() {
+		case "esc":
+			m.runtimeTray = nil
+			m.runtimeTrayKind = runtimeTrayNone
+			m.resize()
+			return m, nil
+		case "up":
+			m.runtimeTray.Up()
+			return m, m.startTrayGlow()
+		case "down", "tab":
+			m.runtimeTray.Down()
+			return m, m.startTrayGlow()
+		case "enter":
+			selected := m.runtimeTray.Selected()
+			kind, loopID := m.runtimeTrayKind, m.runtimeTrayLoopID
+			m.runtimeTray = nil
+			m.runtimeTrayKind = runtimeTrayNone
+			m.resize()
+			return m, mutateRuntime(m.appCtx, m.runtimeController, kind, loopID, selected.ID)
+		default:
+			return m, nil
+		}
+	}
+	if m.sessionTray != nil {
+		switch msg.String() {
+		case "esc":
+			m.sessionTray = nil
+			m.resize()
+			return m, nil
+		case "up":
+			m.sessionTray.Up()
+			return m, m.startTrayGlow()
+		case "down", "tab":
+			m.sessionTray.Down()
+			return m, m.startTrayGlow()
+		case "enter":
+			id, err := uuid.Parse(m.sessionTray.Selected().ID)
+			m.sessionTray = nil
+			m.resize()
+			if err != nil {
+				m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("resume session: %w", err))
+				m.rerender()
+				return m, nil
+			}
+			if m.status == StatusRunning || m.activePrompt() != nil || m.compaction.IsActive(m.focusedLoopID) {
+				m.pendingResume = id
+				if m.status == StatusRunning {
+					return m, m.sessionCore.interruptRunning()
+				}
+				m.status = StatusInterrupting
+				return m, interruptTurn(m.appCtx, m.agent)
+			}
+			return m, m.beginSessionResume(id)
+		default:
+			return m, nil
+		}
+	}
 	// Precedence (2): an active prompt consumes its own approve/deny/choice/answer keys.
 	if m.activePrompt() != nil {
 		return m.routeToInteraction(msg)
@@ -977,6 +1250,25 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd = m.sessionCore.compactToLoop(m.focusedLoopID)
 	} else if action.Kind == uiRunSlash && action.Slash == "/exit" {
 		cmd = m.beginGracefulQuit()
+	} else if action.Kind == uiRunSlash {
+		var kind runtimeTrayKind
+		switch action.Slash {
+		case "/mode":
+			kind = runtimeTrayMode
+		case "/model":
+			kind = runtimeTrayModel
+		case "/effort":
+			kind = runtimeTrayEffort
+		case "/access":
+			kind = runtimeTrayAccess
+		}
+		if kind != runtimeTrayNone && m.runtimeCatalog != nil && m.runtimeController != nil {
+			cmd = queryRuntimeChoices(m.appCtx, m.runtimeCatalog, kind, m.focusedLoopID)
+		} else if (action.Slash == "/sessions" || action.Slash == "/resume") && m.sessionBrowser != nil {
+			cmd = listSessionsCmd(m.appCtx, m.sessionBrowser)
+		} else {
+			cmd, present = m.sessionCore.mapAction(action)
+		}
 	} else {
 		cmd, present = m.sessionCore.mapAction(action)
 	}
@@ -997,6 +1289,10 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Screen) completionCursor() (kind byte, cursor int, open bool) {
 	switch {
+	case m.sessionTray != nil:
+		return 'r', m.sessionTray.Cursor(), true
+	case m.runtimeTray != nil:
+		return 'v', m.runtimeTray.Cursor(), true
 	case m.interaction.slash != nil:
 		return 's', m.interaction.slash.Cursor(), true
 	case m.interaction.files != nil:
@@ -1054,7 +1350,15 @@ func (m *Screen) trayMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	if row < 0 || row >= lay.trayH {
 		return nil
 	}
-	if m.interaction.slash != nil {
+	if m.sessionTray != nil {
+		if m.sessionTray.SelectWindowRow(row, lay.trayH) {
+			return m.startTrayGlow()
+		}
+	} else if m.runtimeTray != nil {
+		if m.runtimeTray.SelectWindowRow(row, lay.trayH) {
+			return m.startTrayGlow()
+		}
+	} else if m.interaction.slash != nil {
 		if m.interaction.slash.SelectWindowRow(row, lay.trayH) {
 			return m.startTrayGlow()
 		}
@@ -1080,7 +1384,7 @@ func (m *Screen) updateHover(region screenRegion, mouse tea.Mouse) tea.Cmd {
 			}
 		case regionBar:
 			if m.width > 0 {
-				if id, ok := m.bar().HitTest(mouse.X); ok {
+				if id, ok := m.footer().HitTest(mouse.X, mouse.Y-m.layout().barY, m.width); ok {
 					nextLoop = id
 				}
 			}
@@ -1124,7 +1428,7 @@ func (m *Screen) barMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 	if !ok || click.Button != tea.MouseLeft || m.width <= 0 {
 		return nil
 	}
-	if id, hit := m.bar().HitTest(mouse.X); hit {
+	if id, hit := m.footer().HitTest(mouse.X, mouse.Y-m.layout().barY, m.width); hit {
 		m.focusLoop(id)
 	}
 	return nil
@@ -1200,6 +1504,7 @@ type screenLayout struct {
 	boxH     int // the bottom box's rendered height
 	gapBotY  int // the inert blank gap row between the box and the loop bar
 	barY     int // the loop bar row (the very bottom)
+	barH     int // wrapped footer row count
 }
 
 // layout derives the region geometry from the current frame: the bottom box is measured
@@ -1216,7 +1521,11 @@ type screenLayout struct {
 // Tea's single model goroutine (never concurrently — see the serial subtest note in the
 // tests).
 func (m Screen) layout() screenLayout {
-	const padH, statusH, barH, gapH = 1, 1, 1, 1
+	const padH, statusH, gapH = 1, 1, 1
+	barH := lipgloss.Height(m.footerView())
+	if barH < 1 {
+		barH = 1
+	}
 	boxH := lipgloss.Height(m.bottomBoxView())
 	if boxH < 1 {
 		boxH = 1
@@ -1252,6 +1561,7 @@ func (m Screen) layout() screenLayout {
 		boxH:     boxH,
 		gapBotY:  gapBotY,
 		barY:     barY,
+		barH:     barH,
 	}
 }
 
@@ -1285,7 +1595,7 @@ func (m Screen) regionAt(y int) screenRegion {
 		return regionTray
 	case y >= lay.boxTop && y < lay.boxTop+lay.boxH:
 		return regionBox
-	case y == lay.barY:
+	case y >= lay.barY && y < lay.barY+lay.barH:
 		return regionBar
 	default: // the two blank gap rows (and any row past the bar) — inert
 		return regionGap
@@ -1599,7 +1909,27 @@ func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, activ
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
 // or a prompt control when a prompt is active) via the shared surface primitive.
 func (m Screen) bottomBoxView() string {
-	return bottomBox(m.surfaceInputs())
+	view := bottomBox(m.surfaceInputs())
+	if m.interaction.mode != modeCompose {
+		return view
+	}
+	state, ok := m.runtime.loop(m.focusedLoopID)
+	if !ok || state.mode == "" {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 || m.width <= 0 {
+		return view
+	}
+	label := "mode: " + string(state.mode)
+	rail := styles.AccentBarStyle.Render(styles.AccentBar)
+	available := max(0, m.width-lipgloss.Width(rail)-1)
+	if lipgloss.Width(label) > available {
+		label = truncate(label, available)
+	}
+	padding := max(0, available-lipgloss.Width(label))
+	lines[len(lines)-1] = rail + " " + strings.Repeat(" ", padding) + styles.StatusStyle.Render(label)
+	return strings.Join(lines, "\n")
 }
 
 // completionTrayView renders at most maxRows of the active compose-mode completion list at
@@ -1612,6 +1942,10 @@ func (m Screen) completionTrayView(maxRows int) string {
 		return ""
 	}
 	switch {
+	case m.sessionTray != nil:
+		return m.sessionTray.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
+	case m.runtimeTray != nil:
+		return m.runtimeTray.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
 	case m.interaction.slash != nil:
 		return m.interaction.slash.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
 	case m.interaction.files != nil:
@@ -1683,11 +2017,42 @@ func (m Screen) statusInputs() statusInputs {
 // text stays contiguous (substring-findable) rather than split by per-glyph styling, and it is
 // deliberately NOT part of the gradient so it reads as a quiet, static timer beside the shimmer.
 func (m Screen) statusLine() string {
+	if m.resuming {
+		return styles.StatusStyle.Render("resuming…")
+	}
 	line := renderStatusLine(m.focusedStatus(), m.statusInputs(), m.anim.frame)
 	if d, ok := m.turnElapsed(); ok {
 		line += styles.StatusStyle.Render(" (" + formatElapsed(d) + ")")
 	}
+	if metadata := m.focusedRuntimeStatus(); metadata != "" {
+		line += styles.StatusStyle.Render("  " + metadata)
+	}
 	return line
+}
+
+// focusedRuntimeStatus renders event-authoritative metadata for the loop the user is viewing.
+// Catalog options never appear here because availability is not current state.
+func (m Screen) focusedRuntimeStatus() string {
+	state, ok := m.runtime.loop(m.focusedLoopID)
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if state.runtime.Key.Model != "" {
+		parts = append(parts, state.runtime.Key.Model)
+	}
+	if state.runtime.Effort != "" {
+		parts = append(parts, string(state.runtime.Effort))
+	}
+	if state.hasContext && state.context.InputLimit > 0 {
+		pct := uint64(state.context.InputTokens) * 100 / uint64(state.context.InputLimit)
+		prefix := ""
+		if state.context.Quality == inference.CountQualityHeuristicEstimate {
+			prefix = "~"
+		}
+		parts = append(parts, prefix+strconv.FormatUint(pct, 10)+"% context")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // turnElapsed returns the focused loop's live turn-elapsed duration and whether to show it.
@@ -1778,8 +2143,35 @@ func (m Screen) composeBody(lay screenLayout) string {
 	}
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
 	rows = append(rows, "")                                        // inert gap: box → bar
-	rows = append(rows, m.bar().Render(m.width))                   // active-loops bar (very bottom)
+	rows = append(rows, m.footerView())                            // rig + access + local loop focus
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
+}
+
+func (m Screen) footerView() string {
+	return m.footer().View(m.width)
+}
+
+func (m Screen) footer() loopFooter {
+	parts := make([]string, 0, 3)
+	if name := strings.TrimSpace(m.banner.Name); name != "" {
+		parts = append(parts, name)
+	}
+	if m.runtime.hasAccess {
+		id := strconv.FormatUint(uint64(m.runtime.access), 10)
+		label := m.accessLabels[id]
+		if label == "" {
+			label = "Access " + id
+		}
+		parts = append(parts, label)
+	}
+	if m.runtimeRoot != "" {
+		parts = append(parts, m.runtimeRoot)
+	}
+	header := ""
+	if len(parts) > 0 {
+		header = strings.Join(parts, " · ")
+	}
+	return loopFooter{header: header, bar: m.bar()}
 }
 
 // compile-time assertion that Screen is a tea.Model (Init/Update/View, value receiver).

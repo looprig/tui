@@ -20,6 +20,22 @@ type (
 	Screen              = presentation.Screen
 	DisplayProjection   = presentation.DisplayProjection
 	RestoreBacklogError = presentation.RestoreBacklogError
+	RuntimeCatalog      = presentation.RuntimeCatalog
+	RuntimeController   = presentation.RuntimeController
+	ModeID              = presentation.ModeID
+	ModelID             = presentation.ModelID
+	EffortID            = presentation.EffortID
+	AccessID            = presentation.AccessID
+	ModeOption          = presentation.ModeOption
+	ModelOption         = presentation.ModelOption
+	EffortOption        = presentation.EffortOption
+	AccessOption        = presentation.AccessOption
+	LoopRuntimeOptions  = presentation.LoopRuntimeOptions
+	AccessOptions       = presentation.AccessOptions
+	SessionID           = presentation.SessionID
+	SessionSummary      = presentation.SessionSummary
+	SessionBrowser      = presentation.SessionBrowser
+	Option              = presentation.Option
 	Status              = presentation.Status
 	ToolStatus          = presentation.ToolStatus
 	ToolCallView        = presentation.ToolCallView
@@ -38,8 +54,12 @@ const (
 )
 
 // New constructs the interactive terminal screen.
-func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner) Screen {
-	return presentation.New(ctx, agent, open, banner)
+func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, options ...Option) Screen {
+	return presentation.New(ctx, agent, open, banner, options...)
+}
+
+func WithSessionBrowser(browser SessionBrowser) Option {
+	return presentation.WithSessionBrowser(browser)
 }
 
 // FoldDisplay rebuilds the display projection from session events.

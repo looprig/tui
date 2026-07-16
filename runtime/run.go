@@ -136,7 +136,7 @@ var newProgram = func(model tea.Model, opts ...tea.ProgramOption) program {
 // ctx is the caller's root context; Run derives a signal-aware context from it so
 // SIGINT/SIGTERM trigger a clean TUI teardown. newAgent constructs the agent (and is
 // reused as the TUI's /clear thunk); banner is the startup notice metadata.
-func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error), banner Banner) int {
+func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error), banner Banner, options ...tui.Option) int {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -194,7 +194,7 @@ func Run(ctx context.Context, newAgent func(context.Context) (tui.Agent, error),
 		logger.Warn("clear terminal failed", "err", err.Error())
 	}
 
-	screen := tui.New(ctx, agent, open, banner.agentBanner())
+	screen := tui.New(ctx, agent, open, banner.agentBanner(), options...)
 	prog := newProgram(screen, progOpts...)
 
 	// SIGINT/SIGTERM (non-keyboard) cancels ctx → quit the TUI for a clean teardown;

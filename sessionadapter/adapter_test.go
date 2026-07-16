@@ -648,6 +648,29 @@ func TestReplayBacklogNilForNewSession(t *testing.T) {
 	}
 }
 
+func TestNewWithReplayReturnsFreshDurableBootstrap(t *testing.T) {
+	t.Parallel()
+	loopID := mustUUID(t)
+	want := event.LoopStarted{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}}
+	controller := &fakeController{sessionID: mustUUID(t), sub: newFakeSub()}
+	a, err := NewWithReplay(context.Background(), controller, scriptedReplayOpener{
+		replayer: scriptedEventReplayer{cursor: &scriptedEventCursor{events: []event.Event{want}}},
+	})
+	if err != nil {
+		t.Fatalf("NewWithReplay() error = %v", err)
+	}
+	backlog, err := a.ReplayBacklog(context.Background())
+	if err != nil {
+		t.Fatalf("ReplayBacklog() error = %v", err)
+	}
+	if len(backlog) != 1 {
+		t.Fatalf("ReplayBacklog() length = %d, want 1", len(backlog))
+	}
+	if _, ok := backlog[0].(event.LoopStarted); !ok {
+		t.Fatalf("ReplayBacklog()[0] = %T, want LoopStarted", backlog[0])
+	}
+}
+
 // TestCloseShutsDownOnce proves Close is idempotent: it Shuts the session down exactly once.
 func TestCloseShutsDownOnce(t *testing.T) {
 	t.Parallel()

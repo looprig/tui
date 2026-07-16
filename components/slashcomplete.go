@@ -39,14 +39,20 @@ type SlashComplete struct {
 // The optional leading slash is ignored while matching. Returns nil when nothing
 // matches (nil = panel hidden).
 func NewSlashComplete(prefix string) *SlashComplete {
+	return NewSlashCompleteWithCommands(prefix, SlashCommands)
+}
+
+// NewSlashCompleteWithCommands builds a completer from an immutable caller-owned catalog.
+// The slice and aliases are copied so a live tray cannot change underneath keyboard input.
+func NewSlashCompleteWithCommands(prefix string, commands []SlashCmd) *SlashComplete {
 	query := strings.ToLower(strings.TrimPrefix(prefix, "/"))
 	if query == "" {
-		return &SlashComplete{items: append([]SlashCmd(nil), SlashCommands...)}
+		return &SlashComplete{items: append([]SlashCmd(nil), commands...)}
 	}
 
 	var matches []SlashCmd
 	for rank := 0; rank < 5; rank++ {
-		for _, command := range SlashCommands {
+		for _, command := range commands {
 			if slashMatchRank(command, query) == rank {
 				matches = append(matches, command)
 			}
