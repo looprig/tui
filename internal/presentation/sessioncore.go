@@ -406,6 +406,8 @@ func (c *sessionCore) mapAction(a uiAction) (tea.Cmd, bool) {
 		return denyCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID), false
 	case uiAnswer:
 		return provideAnswerCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID, a.Text), false
+	case uiFormRespond:
+		return respondFormCmd(c.appCtx, c.agent, a.GateID, a.FormAction, a.Values), false
 	case uiInterrupt:
 		return c.interruptRunning(), false
 	default: // uiNoop

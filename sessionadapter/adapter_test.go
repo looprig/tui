@@ -2,6 +2,7 @@ package sessionadapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
@@ -686,5 +687,62 @@ func TestCloseShutsDownOnce(t *testing.T) {
 	fc.mu.Unlock()
 	if got != 1 {
 		t.Errorf("Shutdown called %d times, want 1 (idempotent Close)", got)
+	}
+}
+
+// TestRespondFormPassesThroughWithoutIndexLookup proves the form-gate reply path.
+//
+// The two assertions that matter are that the gate id reaches RespondGate unchanged
+// and that NO gate was ever opened to make that work: a form gate is named by its
+// GateOpened envelope, so the adapter must not require the (loop, tool-execution)
+// index that the permission/AskUser trio depends on. An integration's form gate
+// routinely has no tool execution at all, so an index lookup here would fail
+// exactly the gates this path exists to serve.
+func TestRespondFormPassesThroughWithoutIndexLookup(t *testing.T) {
+	t.Parallel()
+	a, fc, _, _ := newFakeAgent(t)
+
+	gateID := mustUUID(t)
+	values := map[string]json.RawMessage{
+		"username": json.RawMessage(`"ada"`),
+		"consent":  json.RawMessage(`true`),
+	}
+	if err := a.RespondForm(context.Background(), gateID, gate.FormActionAccept, values); err != nil {
+		t.Fatalf("RespondForm error = %v", err)
+	}
+	got := fc.responses()
+	if len(got) != 1 {
+		t.Fatalf("RespondGate called %d times, want 1", len(got))
+	}
+	if got[0].GateID != gateID {
+		t.Errorf("gate id = %v, want %v", got[0].GateID, gateID)
+	}
+	if got[0].Action != gate.FormActionAccept {
+		t.Errorf("action = %q, want %q", got[0].Action, gate.FormActionAccept)
+	}
+	if string(got[0].Values["consent"]) != "true" {
+		t.Errorf("consent = %s, want the bool true passed through unchanged", got[0].Values["consent"])
+	}
+	if got[0].Source.Kind != gate.ResponseFromUser {
+		t.Errorf("source = %q, want %q", got[0].Source.Kind, gate.ResponseFromUser)
+	}
+}
+
+// TestRespondFormDeclineCarriesNoValues proves a decline is an explicit non-answer:
+// it records the refusal and submits nothing.
+func TestRespondFormDeclineCarriesNoValues(t *testing.T) {
+	t.Parallel()
+	a, fc, _, _ := newFakeAgent(t)
+
+	gateID := mustUUID(t)
+	if err := a.RespondForm(context.Background(), gateID, gate.FormActionDecline, nil); err != nil {
+		t.Fatalf("RespondForm error = %v", err)
+	}
+	got := fc.responses()
+	if len(got) != 1 || got[0].Action != gate.FormActionDecline {
+		t.Fatalf("responses = %+v, want one decline", got)
+	}
+	if len(got[0].Values) != 0 {
+		t.Errorf("a decline submitted values: %+v", got[0].Values)
 	}
 }

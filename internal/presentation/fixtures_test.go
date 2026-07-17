@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 )
 
@@ -112,6 +114,13 @@ type fakeAgent struct {
 	lastCallID    uuid.UUID
 	lastScope     tool.ApprovalScope
 	lastAnswer    string
+
+	// form-gate recorder: the same capture-and-report shape for RespondForm.
+	formErr        error
+	formCalled     bool
+	lastGateID     gate.ID
+	lastFormAction string
+	lastFormValues map[string]json.RawMessage
 
 	// replay-backlog recorder: backlog is returned verbatim (a restored session's
 	// historical Enduring events for repaint; nil for a NEW session), replayErr is the
@@ -227,6 +236,14 @@ func (f *fakeAgent) ProvideAnswer(_ context.Context, loopID, callID uuid.UUID, a
 	f.lastCallID = callID
 	f.lastAnswer = answer
 	return f.answerErr
+}
+
+func (f *fakeAgent) RespondForm(_ context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error {
+	f.formCalled = true
+	f.lastGateID = gateID
+	f.lastFormAction = action
+	f.lastFormValues = values
+	return f.formErr
 }
 
 func (f *fakeAgent) ReplayBacklog(_ context.Context) ([]event.Event, error) {

@@ -336,6 +336,28 @@ func (a *sessionAdapter) ProvideAnswer(ctx context.Context, loopID, callID uuid.
 	})
 }
 
+// RespondForm answers a structured form gate named directly by gateID.
+//
+// It performs no gate-index lookup, and that is the point: the index exists to
+// recover a gate id the TUI never saw, because a permission or AskUser prompt is
+// built from a per-kind request event that carries only a ToolExecutionID. A form
+// gate is observed through GateOpened, which carries the gate id itself, so
+// looking it up would be inventing a round trip through a key (the tool execution)
+// that an integration's form gate need not even have.
+//
+// Values are passed through unchanged. The session validates them against the
+// gate's authoritative schema and refuses an action the gate never offered, so
+// this adapter neither validates nor sanitizes — doing so here would be a second,
+// divergent copy of a rule the session already owns.
+func (a *sessionAdapter) RespondForm(ctx context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error {
+	return a.sess.RespondGate(ctx, gate.GateResponse{
+		GateID: gateID,
+		Action: action,
+		Values: values,
+		Source: gate.ResponseSource{Kind: gate.ResponseFromUser},
+	})
+}
+
 // Close shuts the session down exactly once (the rig owns every other lifetime concern — the
 // workspace lease, snapshots, and GC — so there is no second root or watcher cancel).
 func (a *sessionAdapter) Close(ctx context.Context) error {

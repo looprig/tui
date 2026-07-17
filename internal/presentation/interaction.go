@@ -7,6 +7,7 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/components"
 	inputpkg "github.com/looprig/tui/internal/input"
@@ -33,6 +34,9 @@ const (
 	modeChoicePrompt
 	// modeAnswerPrompt shows a free-text AskUser request (no choices).
 	modeAnswerPrompt
+	// modeFormPrompt shows a structured form gate (gate.KindForm): a field editor
+	// the user fills in and submits.
+	modeFormPrompt
 )
 
 // interactionModel owns the bottom interaction surface: the compose editor, the
@@ -116,6 +120,19 @@ func (m interactionModel) ApplyEvent(ev event.Event) interactionModel {
 		m.enqueueForLoop(promptFromPermission(ev.ToolExecutionID, ev.Request), ev.EventHeader().LoopID)
 	case event.UserInputRequested:
 		m.enqueueForLoop(promptFromUserInput(ev.ToolExecutionID, ev.Question, ev.Choices), ev.EventHeader().LoopID)
+	case event.GateOpened:
+		// ONLY form gates are folded from GateOpened. A permission or AskUser gate
+		// also opens one, but those already enqueue from their own per-kind request
+		// event above — folding them here too would double-queue the same prompt.
+		// A form gate has no such event: it is raised by an integration host, and
+		// this envelope is the only thing the TUI ever sees of it.
+		if ev.Gate.Kind == gate.KindForm {
+			m.enqueueForLoop(promptFromForm(ev.Gate), ev.EventHeader().LoopID)
+		}
+	case event.GateResolved:
+		// A gate answered elsewhere (a policy timeout, another client) must not
+		// leave a stale editor on screen asking for an answer already given.
+		m = m.clearGate(ev.GateID)
 	case event.TurnDone, event.TurnFailed, event.TurnInterrupted:
 		m = m.ClearPromptsForLoop(ev.EventHeader().LoopID)
 	}
@@ -142,7 +159,7 @@ func (m *interactionModel) enqueueForLoop(p prompt, loopID uuid.UUID) {
 // to the head's mode; subsequent appends leave the active head and mode untouched.
 func (m *interactionModel) enqueue(p prompt) {
 	for i := range m.pending {
-		if m.pending[i].ToolExecutionID == p.ToolExecutionID && m.pending[i].LoopID == p.LoopID {
+		if samePrompt(m.pending[i], p) {
 			return // already pending — ignore the duplicate (same loop's same gate, re-delivered)
 		}
 	}
@@ -151,6 +168,57 @@ func (m *interactionModel) enqueue(p prompt) {
 	}
 	m.pending = append(m.pending, p)
 	m.syncModeToHead()
+}
+
+// samePrompt reports whether a and b are the same pending request.
+//
+// A form prompt is identified by its GATE id, which GateOpened names outright.
+// The (LoopID, ToolExecutionID) pair the other kinds use is not an identity for
+// it: an integration's form gate need not belong to a tool call at all, so its
+// Subject.ToolExecutionID is routinely zero, and two such gates on one loop would
+// collide on that pair and silently drop the second. The gate id has no such
+// ambiguity, so it is preferred whenever either prompt carries one.
+//
+// The prompt KIND is deliberately not part of the identity. A gate is identified
+// by WHICH gate it is, not by how it is rendered, and the existing contract is
+// that (LoopID, ToolExecutionID) names one gate across kinds — so a permission and
+// an AskUser prompt sharing that pair are one re-delivered gate, not two.
+func samePrompt(a, b prompt) bool {
+	if a.LoopID != b.LoopID {
+		return false
+	}
+	if a.GateID != (gate.ID{}) || b.GateID != (gate.ID{}) {
+		return a.GateID == b.GateID
+	}
+	return a.ToolExecutionID == b.ToolExecutionID
+}
+
+// clearGate drops the pending prompt whose gate id is id and reveals what remains.
+//
+// It matches on the gate id ONLY, and a zero id matches nothing. That guard is
+// load-bearing rather than defensive: permission and AskUser prompts are enqueued
+// from their per-kind events and carry no gate id, so without it a single
+// GateResolved would match every one of them at once and wipe the queue.
+func (m interactionModel) clearGate(id gate.ID) interactionModel {
+	if id == (gate.ID{}) || len(m.pending) == 0 {
+		return m
+	}
+	kept := make([]prompt, 0, len(m.pending))
+	for _, p := range m.pending {
+		if p.GateID != id {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == len(m.pending) {
+		return m // nothing matched — no compose clobber
+	}
+	m.pending = kept
+	if len(m.pending) == 0 {
+		m.restoreCompose()
+	} else {
+		m.syncModeToHead()
+	}
+	return m
 }
 
 // pop removes the active (head) prompt and reveals the next one. When the queue
@@ -233,6 +301,8 @@ func (m *interactionModel) syncModeToHead() {
 	switch {
 	case p.Kind == promptPermission:
 		m.mode = modePermissionPrompt
+	case p.Kind == promptForm:
+		m.mode = modeFormPrompt
 	case p.freeText:
 		m.mode = modeAnswerPrompt
 		// The input box IS the answer field, so it must start empty: the compose
@@ -286,9 +356,89 @@ func (m interactionModel) Update(msg tea.KeyPressMsg) (interactionModel, uiActio
 		return model, action, nil
 	case modeAnswerPrompt:
 		return m.answerKey(msg)
+	case modeFormPrompt:
+		model, action := m.formKey(msg)
+		return model, action, nil
 	default:
 		return m.composeKey(msg)
 	}
+}
+
+// formKey routes a key in modeFormPrompt (head is a promptForm).
+//
+// esc declines and enter submits, but each only when the gate's Controls actually
+// offer that action — the session refuses an action a gate never advertised, so an
+// unoffered key is a no-op here rather than a doomed request. enter additionally
+// requires every required field to be answered; an incomplete submit sets the
+// validation notice instead of sending a response the session would reject.
+//
+// The remaining keys edit the focused field: ↑/↓ move between fields, ←/→ cycle a
+// select, space toggles a confirm, and printable runes plus backspace type into a
+// text field. An unsupported form has no editor, so only esc does anything.
+func (m interactionModel) formKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+	head := *m.ActivePrompt()
+	if msg.Code == tea.KeyEsc {
+		if !head.offersAction(gate.FormActionDecline) {
+			return m, noop
+		}
+		return m.pop(), uiAction{
+			Kind: uiFormRespond, LoopID: head.LoopID, GateID: head.GateID,
+			FormAction: gate.FormActionDecline,
+		}
+	}
+	if head.unsupported {
+		return m, noop
+	}
+	if isEnter(msg) {
+		return m.submitForm(head)
+	}
+	return m.editFormField(msg)
+}
+
+// submitForm accepts the form when the gate offers accept and every required field
+// is answered; otherwise it flags the incomplete form and stays open.
+func (m interactionModel) submitForm(head prompt) (interactionModel, uiAction) {
+	if !head.offersAction(gate.FormActionAccept) {
+		return m, noop
+	}
+	if !head.formComplete() {
+		m.pending = cloneHead(m.pending)
+		m.pending[0].invalid = true
+		return m, noop
+	}
+	return m.pop(), uiAction{
+		Kind: uiFormRespond, LoopID: head.LoopID, GateID: head.GateID,
+		FormAction: gate.FormActionAccept, Values: head.formValues(),
+	}
+}
+
+// editFormField applies an editing key to the focused field. Every path clones the
+// head first: the value-copy model shares pending's backing array with the caller
+// (see cloneHead), so mutating in place would write through the caller's slice.
+// Any edit clears a stale validation notice.
+func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+	m.pending = cloneHead(m.pending)
+	head := &m.pending[0]
+	head.invalid = false
+	switch msg.Code {
+	case tea.KeyUp:
+		head.moveFocus(-1)
+		return m, noop
+	case tea.KeyDown, tea.KeyTab:
+		head.moveFocus(1)
+		return m, noop
+	case tea.KeyLeft:
+		head.cycleChoice(-1)
+		return m, noop
+	case tea.KeyRight:
+		head.cycleChoice(1)
+		return m, noop
+	case tea.KeyBackspace:
+		head.backspaceText()
+		return m, noop
+	}
+	head.typeRune(msg)
+	return m, noop
 }
 
 // permissionKey routes a key in modePermissionPrompt (head is a promptPermission).

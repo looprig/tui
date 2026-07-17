@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 )
 
@@ -165,6 +167,18 @@ func provideAnswerCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID
 		c, cancel := context.WithTimeout(ctx, promptDispatchTimeout)
 		defer cancel()
 		return promptResultMsg{err: agent.ProvideAnswer(c, loopID, callID, answer)}
+	}
+}
+
+// respondFormCmd issues a bounded RespondForm for a pending form gate and reports
+// the result, so Update never blocks on the session validating the answer. gateID
+// names the gate directly (GateOpened carried it); action is a gate.FormAction*
+// value and values an accept's answers.
+func respondFormCmd(ctx context.Context, agent Agent, gateID gate.ID, action string, values map[string]json.RawMessage) tea.Cmd {
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, promptDispatchTimeout)
+		defer cancel()
+		return promptResultMsg{err: agent.RespondForm(c, gateID, action, values)}
 	}
 }
 

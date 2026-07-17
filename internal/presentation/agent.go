@@ -2,10 +2,12 @@ package presentation
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 )
 
@@ -82,6 +84,15 @@ type Agent interface {
 	// the right loop. It is the TUI-facing name for the session's ProvideUserInput;
 	// the wrapper delegates to it.
 	ProvideAnswer(ctx context.Context, loopID, callID uuid.UUID, answer string) error
+	// RespondForm answers a structured form gate (gate.KindForm) identified by
+	// gateID. Unlike the three above it names the GATE directly: a form gate is
+	// observed through GateOpened, which carries the gate id, so there is nothing to
+	// look up. action is one of the gate.FormAction* values; values carries an
+	// accept's answers keyed by schema field name, already encoded as the JSON types
+	// the schema calls for, and is nil for any other action. The session validates
+	// them against the gate's authoritative schema and rejects an action the gate
+	// never offered, so this is a request, not a command.
+	RespondForm(ctx context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error
 }
 
 // AllLoopsEventFilter is the TUI's declared interest for a session subscription: BOTH

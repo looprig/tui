@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui"
 )
@@ -47,6 +49,9 @@ func (a *fakeAgent) Approve(context.Context, uuid.UUID, uuid.UUID, tool.Approval
 }
 func (a *fakeAgent) Deny(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (a *fakeAgent) ProvideAnswer(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (a *fakeAgent) RespondForm(context.Context, gate.ID, string, map[string]json.RawMessage) error {
 	return nil
 }
 func (a *fakeAgent) Close(context.Context) error {

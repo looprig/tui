@@ -1,10 +1,16 @@
 package presentation
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/styles"
 )
@@ -21,7 +27,98 @@ const (
 	// promptUserInput is an AskUser request: the user picks a choice or types a
 	// free-text answer.
 	promptUserInput
+	// promptForm is a structured human-input gate (gate.KindForm): a bounded set
+	// of typed fields the user fills in and submits. Unlike the other two it is
+	// built from a GateOpened envelope rather than a per-kind loop event, because a
+	// form gate is raised by an integration host and has no loop-side request event.
+	promptForm
 )
+
+// formField is one editable row of a form prompt: the schema's description of the
+// field plus the live value the user is editing.
+//
+// The three value fields are kind-exclusive rather than one string, because the
+// answer's JSON TYPE is part of the contract: gate.ParseFormAnswers wants a string
+// for text and select but a bool for confirm, and collapsing them to a string here
+// would push a "was this really a bool?" guess onto the encode step.
+type formField struct {
+	Name     string
+	Label    string
+	Kind     gate.FieldKind
+	Required bool
+	Options  []gate.Option
+	Text     string // FieldText: the typed value
+	Choice   int    // FieldSelect: index into Options
+	Confirm  bool   // FieldConfirm: the toggle state
+}
+
+// display renders the field's current value for the editor row.
+func (f formField) display() string {
+	switch f.Kind {
+	case gate.FieldConfirm:
+		if f.Confirm {
+			return "yes"
+		}
+		return "no"
+	case gate.FieldSelect:
+		if f.Choice < 0 || f.Choice >= len(f.Options) {
+			return ""
+		}
+		if label := f.Options[f.Choice].Label; label != "" {
+			return label
+		}
+		return f.Options[f.Choice].Value
+	default:
+		return f.Text
+	}
+}
+
+// encode returns the field's answer as the JSON value gate.ParseFormAnswers
+// expects, and whether the field has an answer to submit at all. An unanswered
+// optional field returns false so it is omitted from the response rather than
+// submitted as an empty string — the schema distinguishes "not answered" from
+// "answered empty", and only the former is legal for an optional field.
+func (f formField) encode() (json.RawMessage, bool) {
+	switch f.Kind {
+	case gate.FieldConfirm:
+		// A confirm always has an answer: false is a real answer, not a blank.
+		raw, err := json.Marshal(f.Confirm)
+		if err != nil {
+			return nil, false
+		}
+		return raw, true
+	case gate.FieldSelect:
+		if f.Choice < 0 || f.Choice >= len(f.Options) {
+			return nil, false
+		}
+		raw, err := json.Marshal(f.Options[f.Choice].Value)
+		if err != nil {
+			return nil, false
+		}
+		return raw, true
+	default:
+		if f.Text == "" {
+			return nil, false
+		}
+		raw, err := json.Marshal(f.Text)
+		if err != nil {
+			return nil, false
+		}
+		return raw, true
+	}
+}
+
+// satisfied reports whether a required field has an answer. It mirrors
+// gate.ParseFormAnswers' required rule exactly: a text or select field must carry
+// a non-empty value, while a confirm is always answered (false is an answer). It
+// is what stops the user submitting a response the session would reject.
+func (f formField) satisfied() bool {
+	if !f.Required {
+		return true
+	}
+	_, ok := f.encode()
+	return ok || f.Kind == gate.FieldConfirm
+}
 
 // prompt is the interaction layer's view-model for one pending request, keyed by
 // the gate's ToolExecutionID. It carries everything the renderer needs and the selection
@@ -45,6 +142,226 @@ type prompt struct {
 	Choices     []string             // promptUserInput: selectable choices (nil → free-text)
 	selected    int                  // promptUserInput: cursor over Choices
 	freeText    bool                 // promptUserInput: true when there are no Choices
+
+	// promptForm fields. GateID is carried directly because a form gate is folded
+	// from GateOpened, which names the gate outright — unlike a permission or
+	// AskUser prompt, whose gate id the adapter must look up by ToolExecutionID.
+	GateID   gate.ID
+	Title    string      // promptForm: the form's heading
+	Body     string      // promptForm: the explanatory body
+	Fields   []formField // promptForm: the editable rows
+	Controls []string    // promptForm: the actions the gate actually offers
+	focus    int         // promptForm: cursor over Fields
+	// unsupported marks a form whose schema the TUI cannot honestly render (see
+	// promptFromForm). It is rendered as a notice offering only decline, never as a
+	// partial editor that would submit an answer the user did not give.
+	unsupported bool
+	// invalid is set when a submit was attempted with a required field unanswered.
+	// It drives the validation notice; it is cleared by any subsequent edit.
+	invalid bool
+}
+
+// offersAction reports whether the gate's Prompt.Controls declare action.
+//
+// It is the fail-closed half of the response contract: the session's RespondGate
+// refuses any action a gate never offered (validateGateAction), so a key bound to
+// an action outside Controls must be a no-op here rather than a request the
+// session will reject. An integration that offers no decline cannot be declined
+// by a keypress it never advertised.
+func (p *prompt) offersAction(action string) bool {
+	for _, c := range p.Controls {
+		if c == action {
+			return true
+		}
+	}
+	return false
+}
+
+// promptFromForm builds a form prompt view-model from a GateOpened envelope.
+//
+// It renders from the PUBLIC envelope only: Gate.Prompt is the presentation
+// projection an opener derives from its private FormPayload, and the payload
+// itself never leaves the session. The schema here therefore drives the editor,
+// while the session still validates the submitted answer against the payload's
+// authoritative copy — so a divergent projection costs a rejected response, never
+// an unvalidated one.
+//
+// A schema the TUI cannot faithfully edit yields an unsupported prompt rather
+// than a partial one. gate.FieldMultiSelect is the case that matters: a form
+// answer is one value per field and multi-select cannot be represented, so
+// gate.ValidateFormSchema rejects it in a payload — but Gate.Prompt is not run
+// through that validation, so a projection can still carry one. Rendering it as a
+// single-select would silently submit one selection where the user believed they
+// had chosen several. An unknown field kind fails closed the same way.
+func promptFromForm(g gate.Gate) prompt {
+	p := prompt{
+		ToolExecutionID: g.Subject.ToolExecutionID,
+		GateID:          g.ID,
+		Kind:            promptForm,
+		Title:           g.Prompt.Title,
+		Body:            g.Prompt.Body,
+	}
+	for _, c := range g.Prompt.Controls {
+		p.Controls = append(p.Controls, c.Action)
+	}
+	if len(g.Prompt.Schema.Fields) == 0 {
+		p.unsupported = true
+		return p
+	}
+	for _, f := range g.Prompt.Schema.Fields {
+		field, ok := formFieldFromSchema(f)
+		if !ok {
+			p.unsupported = true
+			p.Fields = nil
+			return p
+		}
+		p.Fields = append(p.Fields, field)
+	}
+	return p
+}
+
+// formFieldFromSchema converts one schema field into an editable row, applying the
+// schema's default. It fails closed on any kind the editor cannot represent.
+func formFieldFromSchema(f gate.Field) (formField, bool) {
+	field := formField{
+		Name:     f.Name,
+		Label:    f.Label,
+		Kind:     f.Kind,
+		Required: f.Required,
+		Options:  f.Options,
+	}
+	switch f.Kind {
+	case gate.FieldText:
+		_ = json.Unmarshal(f.Default, &field.Text) // absent/!string default → empty field
+	case gate.FieldConfirm:
+		_ = json.Unmarshal(f.Default, &field.Confirm) // absent/!bool default → false
+	case gate.FieldSelect:
+		if len(f.Options) == 0 {
+			return formField{}, false // a select with nothing to select is unanswerable
+		}
+		var def string
+		if json.Unmarshal(f.Default, &def) == nil {
+			for i, o := range f.Options {
+				if o.Value == def {
+					field.Choice = i
+					break
+				}
+			}
+		}
+	default:
+		// gate.FieldMultiSelect and anything unknown. See promptFromForm.
+		return formField{}, false
+	}
+	return field, true
+}
+
+// formValues encodes the answered fields as the response Values map. It is only
+// meaningful for an accept.
+func (p *prompt) formValues() map[string]json.RawMessage {
+	values := make(map[string]json.RawMessage, len(p.Fields))
+	for _, f := range p.Fields {
+		if raw, ok := f.encode(); ok {
+			values[f.Name] = raw
+		}
+	}
+	return values
+}
+
+// formComplete reports whether every required field is answered.
+func (p *prompt) formComplete() bool {
+	for _, f := range p.Fields {
+		if !f.satisfied() {
+			return false
+		}
+	}
+	return true
+}
+
+// moveFocus shifts the field cursor by delta, clamped to the field list.
+func (p *prompt) moveFocus(delta int) {
+	n := len(p.Fields)
+	if n == 0 {
+		p.focus = 0
+		return
+	}
+	next := p.focus + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > n-1 {
+		next = n - 1
+	}
+	p.focus = next
+}
+
+// typeRune applies a printable keypress to the focused field: a rune extends a
+// text field, and space toggles a confirm.
+//
+// Space is safe to overload because it can only ever reach a FOCUSED field, and a
+// confirm field has no text to type a space into. A text field keeps the space.
+//
+// A rune is accepted only when it is printable and carries no modifier, so a
+// control chord (ctrl+c, alt+f) can never be typed into an answer as a literal.
+// Values are bounded at maxFormFieldRunes: the field is a human-facing prompt, not
+// a data channel, and the session refuses an over-long answer anyway
+// (gate.ParseFormAnswers) — clamping here refuses it before the user loses work.
+func (p *prompt) typeRune(msg tea.KeyPressMsg) {
+	if p.focus < 0 || p.focus >= len(p.Fields) {
+		return
+	}
+	f := &p.Fields[p.focus]
+	if msg.Mod != 0 {
+		return
+	}
+	if f.Kind == gate.FieldConfirm {
+		if msg.Code == tea.KeySpace {
+			f.Confirm = !f.Confirm
+		}
+		return
+	}
+	if f.Kind != gate.FieldText {
+		return
+	}
+	r := msg.Code
+	if !unicode.IsPrint(r) {
+		return
+	}
+	if utf8.RuneCountInString(f.Text) >= maxFormFieldRunes {
+		return
+	}
+	f.Text += string(r)
+}
+
+// backspaceText removes the last rune of the focused text field.
+func (p *prompt) backspaceText() {
+	if p.focus < 0 || p.focus >= len(p.Fields) {
+		return
+	}
+	f := &p.Fields[p.focus]
+	if f.Kind != gate.FieldText || f.Text == "" {
+		return
+	}
+	runes := []rune(f.Text)
+	f.Text = string(runes[:len(runes)-1])
+}
+
+// maxFormFieldRunes bounds one typed field value. It is well under the session's
+// own 4096-BYTE cap (gate.ParseFormAnswers) so a multi-byte answer at this rune
+// count still fits, and it is far more than a prompt field should ever need.
+const maxFormFieldRunes = 512
+
+// cycleChoice advances the focused select field's option by delta, wrapping. It is
+// a no-op on any other field kind.
+func (p *prompt) cycleChoice(delta int) {
+	if p.focus < 0 || p.focus >= len(p.Fields) {
+		return
+	}
+	f := &p.Fields[p.focus]
+	if f.Kind != gate.FieldSelect || len(f.Options) == 0 {
+		return
+	}
+	n := len(f.Options)
+	f.Choice = ((f.Choice+delta)%n + n) % n
 }
 
 // promptFromPermission builds a permission prompt view-model from a sealed
@@ -171,6 +488,77 @@ func renderFreeTextBox(p prompt, width, pending int) string {
 	body := strings.Join(wrapToWidth(p.Question, textW), "\n")
 	footer := styles.CardHintStyle.Render(freeTextLegend)
 	return cardFrame(cardSections(title, body, footer), width, pending)
+}
+
+// formLegend is the muted key legend shown at the foot of a form card. ↑/↓ moves
+// between fields, ←/→ cycles a select, space toggles a confirm, enter submits and
+// esc declines.
+const formLegend = "↑/↓ field · ←/→ select · space toggle · enter submit · esc decline"
+
+// formUnsupportedLegend is the legend of an unrenderable form: declining is the
+// only honest action left.
+const formUnsupportedLegend = "esc decline"
+
+// formUnsupportedNotice is the body shown for a form whose schema the TUI cannot
+// faithfully edit (see promptFromForm).
+const formUnsupportedNotice = "This request uses a field type this terminal cannot show. Decline it and answer where the integration can render it."
+
+// formRequiredMark trails the label of a required field.
+const formRequiredMark = " *"
+
+// renderFormBox renders a form gate as a card: the form's title, its body, one row
+// per field with the focused row highlighted, and a footer legend listing only the
+// actions the gate actually offers. An unsupported schema renders the notice
+// instead of an editor. Pure: view-model only.
+func renderFormBox(p prompt, width, pending int) string {
+	textW := cardTextWidth(width)
+	title := styles.CardTitleStyle.Render(formTitle(p))
+	if p.unsupported {
+		body := strings.Join(wrapToWidth(formUnsupportedNotice, textW), "\n")
+		footer := styles.CardHintStyle.Render(formUnsupportedLegend)
+		return cardFrame(cardSections(title, body, footer), width, pending)
+	}
+
+	sections := make([]string, 0, 4)
+	if p.Body != "" {
+		sections = append(sections, strings.Join(wrapToWidth(p.Body, textW), "\n"))
+	}
+	rows := make([]string, 0, len(p.Fields))
+	for i, f := range p.Fields {
+		rows = append(rows, formRow(f, i == p.focus, textW))
+	}
+	sections = append(sections, strings.Join(rows, "\n"))
+	if p.invalid {
+		sections = append(sections, styles.CardHintStyle.Render("fill in the required fields marked *"))
+	}
+	sections = append(sections, styles.CardHintStyle.Render(formLegend))
+	return cardFrame(cardSections(append([]string{title}, sections...)...), width, pending)
+}
+
+// formTitle is the card heading: the form's own title, or a neutral fallback when
+// the projection carried none.
+func formTitle(p prompt) string {
+	if p.Title != "" {
+		return p.Title
+	}
+	return "Request"
+}
+
+// formRow renders one field as "<label>: <value>", the focused row carrying the ▸
+// cursor and a filled highlight bar. A required field's label is marked with *.
+func formRow(f formField, focused bool, width int) string {
+	label := f.Label
+	if label == "" {
+		label = f.Name
+	}
+	if f.Required {
+		label += formRequiredMark
+	}
+	row := label + ": " + f.display()
+	if focused {
+		return styles.CardSelectedStyle.Width(width).Render("▸ " + truncate(row, width-choicePrefixWidth))
+	}
+	return "  " + truncate(row, width-choicePrefixWidth)
 }
 
 // choiceLegend is the muted key legend shown at the foot of a choice card. It keeps

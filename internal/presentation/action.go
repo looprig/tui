@@ -1,7 +1,10 @@
 package presentation
 
 import (
+	"encoding/json"
+
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
 )
 
@@ -28,6 +31,11 @@ const (
 	uiAnswer
 	// uiInterrupt requests a turn interrupt. (Produced in Task 8.)
 	uiInterrupt
+	// uiFormRespond answers a form gate (GateID) with FormAction and, for an
+	// accept, Values. Unlike the permission/AskUser actions it names the GATE
+	// directly rather than a tool execution, because a form gate is folded from
+	// GateOpened, which names it outright.
+	uiFormRespond
 )
 
 // uiAction is the single typed result the interactionModel hands back from an
@@ -46,4 +54,13 @@ type uiAction struct {
 	ToolExecutionID uuid.UUID          // uiApprove / uiDeny / uiAnswer target gate
 	Scope           tool.ApprovalScope // uiApprove persistence breadth
 	Slash           string             // uiRunSlash command name (e.g. "/help")
+
+	// GateID is the uiFormRespond target gate.
+	GateID gate.ID
+	// FormAction is the uiFormRespond action: one of the gate.FormAction* values.
+	FormAction string
+	// Values carries the uiFormRespond accept's answers, keyed by schema field
+	// name and already encoded as the JSON types gate.ParseFormAnswers expects
+	// (string for text/select, bool for confirm). It is nil for any other action.
+	Values map[string]json.RawMessage
 }
