@@ -33,6 +33,7 @@ var (
 	_ Event = WorkspaceRestored{}
 	_ Event = ActiveLoopChanged{}
 	_ Event = SecurityLimitChanged{}
+	_ Event = IntegrationStatus{}
 
 	// Loop-scoped events.
 	_ Event = LoopIdle{}
@@ -40,6 +41,7 @@ var (
 	_ Event = DelegateRequestAccepted{}
 	_ Event = LoopInferenceChanged{}
 	_ Event = LoopModeChanged{}
+	_ Event = LoopExternalToolsetChanged{}
 	_ Event = ForeignSessionBound{}
 	_ Event = CompactionStarted{}
 	_ Event = CompactionCommitted{}

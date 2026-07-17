@@ -56,6 +56,7 @@ type Screen struct {
 	runtimeCatalog    RuntimeCatalog
 	runtimeController RuntimeController
 	runtime           runtimeProjection
+	integrations      integrationProjection
 	runtimeTray       *components.ValueComplete
 	runtimeTrayKind   runtimeTrayKind
 	runtimeTrayLoopID uuid.UUID
@@ -227,6 +228,7 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 		runtimeCatalog:    runtimeCatalog,
 		runtimeController: runtimeController,
 		runtime:           newRuntimeProjection(),
+		integrations:      newIntegrationProjection(),
 		sessionBrowser:    options.sessionBrowser,
 		viewport:          viewportModel{atTail: true},
 		collapse:          newCollapseState(),
@@ -625,6 +627,7 @@ func (m *Screen) commitStartup() {
 func (m *Screen) handleEvent(ev event.Event) tea.Cmd {
 	ev = stampEphemeralClock(ev, m.now)
 	m.runtime = m.runtime.ApplyEvent(ev)
+	m.integrations = m.integrations.ApplyEvent(ev)
 	rearm, _ := m.sessionCore.handleEvent(ev)
 	// Commit the "turn ran for Ns" line BEFORE trackTurnClock clears the start time it reads.
 	m.commitTurnRanNotice(ev)
@@ -821,6 +824,7 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 				}
 			}
 			m.runtime = m.runtime.ApplyEvent(ev)
+			m.integrations = m.integrations.ApplyEvent(ev)
 			_, _ = m.sessionCore.handleEvent(ev) // reader was re-armed when the delivery was buffered
 			m.commitTurnRanNotice(ev)
 			m.trackTurnClock(ev)
@@ -979,6 +983,11 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	m.runtimeCatalog, _ = m.agent.(RuntimeCatalog)
 	m.runtimeController, _ = m.agent.(RuntimeController)
 	m.runtime = newRuntimeProjection()
+	// The integrations belong to the session being replaced: its bindings are torn
+	// down with it, so the replacement's own statuses are the only ones that can be
+	// true. Carrying the old readings over would render a closed session's servers
+	// as live until something contradicted them.
+	m.integrations = newIntegrationProjection()
 	m.resuming = false
 	m.collapse = newCollapseState()
 	m.viewport = viewportModel{atTail: true}
@@ -2026,6 +2035,13 @@ func (m Screen) statusLine() string {
 	}
 	if metadata := m.focusedRuntimeStatus(); metadata != "" {
 		line += styles.StatusStyle.Render("  " + metadata)
+	}
+	// Integrations trail the loop's own metadata: they are session-wide, not a
+	// property of the focused loop, so they read last. The segment is empty
+	// whenever every integration is Ready, which is why this costs nothing at
+	// rest and needs no row of its own (see integrationProjection.statusSegment).
+	if integrations := m.integrations.statusSegment(); integrations != "" {
+		line += styles.StatusStyle.Render("  ") + integrations
 	}
 	return line
 }
