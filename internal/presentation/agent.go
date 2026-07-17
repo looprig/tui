@@ -84,15 +84,19 @@ type Agent interface {
 	// the right loop. It is the TUI-facing name for the session's ProvideUserInput;
 	// the wrapper delegates to it.
 	ProvideAnswer(ctx context.Context, loopID, callID uuid.UUID, answer string) error
-	// RespondForm answers a structured form gate (gate.KindForm) identified by
-	// gateID. Unlike the three above it names the GATE directly: a form gate is
-	// observed through GateOpened, which carries the gate id, so there is nothing to
-	// look up. action is one of the gate.FormAction* values; values carries an
-	// accept's answers keyed by schema field name, already encoded as the JSON types
-	// the schema calls for, and is nil for any other action. The session validates
+	// RespondGate answers a HOST-RAISED gate identified by gateID — a form gate
+	// (gate.KindForm) or an open-url gate (gate.KindOpenURL). Unlike the three
+	// above it names the GATE directly: such a gate is observed through GateOpened,
+	// which carries the gate id, so there is nothing to look up. It is one method
+	// for both kinds because the act is identical — an advertised action sent to a
+	// gate id — and only an open-url gate's empty values distinguish them.
+	// action is one of the gate.FormAction* values; values carries a form accept's
+	// answers keyed by schema field name, already encoded as the JSON types the
+	// schema calls for, and is nil for any other action (and always nil for an
+	// open-url gate, which has no fields). The session validates
 	// them against the gate's authoritative schema and rejects an action the gate
 	// never offered, so this is a request, not a command.
-	RespondForm(ctx context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error
+	RespondGate(ctx context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error
 }
 
 // AllLoopsEventFilter is the TUI's declared interest for a session subscription: BOTH

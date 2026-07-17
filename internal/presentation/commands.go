@@ -170,15 +170,16 @@ func provideAnswerCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID
 	}
 }
 
-// respondFormCmd issues a bounded RespondForm for a pending form gate and reports
-// the result, so Update never blocks on the session validating the answer. gateID
-// names the gate directly (GateOpened carried it); action is a gate.FormAction*
-// value and values an accept's answers.
-func respondFormCmd(ctx context.Context, agent Agent, gateID gate.ID, action string, values map[string]json.RawMessage) tea.Cmd {
+// respondGateCmd issues a bounded RespondGate for a pending host-raised gate (form
+// or open-url) and reports the result, so Update never blocks on the session
+// validating the answer. gateID names the gate directly (GateOpened carried it);
+// action is a gate.FormAction* value and values a form accept's answers (nil for
+// an open-url gate).
+func respondGateCmd(ctx context.Context, agent Agent, gateID gate.ID, action string, values map[string]json.RawMessage) tea.Cmd {
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx, promptDispatchTimeout)
 		defer cancel()
-		return promptResultMsg{err: agent.RespondForm(c, gateID, action, values)}
+		return promptResultMsg{err: agent.RespondGate(c, gateID, action, values)}
 	}
 }
 

@@ -31,11 +31,16 @@ const (
 	uiAnswer
 	// uiInterrupt requests a turn interrupt. (Produced in Task 8.)
 	uiInterrupt
-	// uiFormRespond answers a form gate (GateID) with FormAction and, for an
-	// accept, Values. Unlike the permission/AskUser actions it names the GATE
-	// directly rather than a tool execution, because a form gate is folded from
+	// uiGateRespond answers a HOST-RAISED gate (GateID) with GateAction and, for a
+	// form accept, Values. Unlike the permission/AskUser actions it names the GATE
+	// directly rather than a tool execution, because such a gate is folded from
 	// GateOpened, which names it outright.
-	uiFormRespond
+	//
+	// It serves both host-raised kinds — form and open-url — because the response
+	// is the same act in both: an action the gate advertised, sent to a gate id.
+	// Only the Values differ (an open-url gate has none to send), which is what a
+	// tagged union's zero fields are for.
+	uiGateRespond
 )
 
 // uiAction is the single typed result the interactionModel hands back from an
@@ -55,12 +60,15 @@ type uiAction struct {
 	Scope           tool.ApprovalScope // uiApprove persistence breadth
 	Slash           string             // uiRunSlash command name (e.g. "/help")
 
-	// GateID is the uiFormRespond target gate.
+	// GateID is the uiGateRespond target gate.
 	GateID gate.ID
-	// FormAction is the uiFormRespond action: one of the gate.FormAction* values.
-	FormAction string
-	// Values carries the uiFormRespond accept's answers, keyed by schema field
-	// name and already encoded as the JSON types gate.ParseFormAnswers expects
-	// (string for text/select, bool for confirm). It is nil for any other action.
+	// GateAction is the uiGateRespond action: one of the gate.FormAction* values.
+	// The gate must have advertised it in Prompt.Controls — the session refuses
+	// any action a gate did not offer.
+	GateAction string
+	// Values carries a form accept's answers, keyed by schema field name and
+	// already encoded as the JSON types gate.ParseFormAnswers expects (string for
+	// text/select, bool for confirm). It is nil for any other action, and always
+	// nil for an open-url gate, which has no fields to answer.
 	Values map[string]json.RawMessage
 }

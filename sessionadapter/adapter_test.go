@@ -707,8 +707,8 @@ func TestRespondFormPassesThroughWithoutIndexLookup(t *testing.T) {
 		"username": json.RawMessage(`"ada"`),
 		"consent":  json.RawMessage(`true`),
 	}
-	if err := a.RespondForm(context.Background(), gateID, gate.FormActionAccept, values); err != nil {
-		t.Fatalf("RespondForm error = %v", err)
+	if err := a.RespondGate(context.Background(), gateID, gate.FormActionAccept, values); err != nil {
+		t.Fatalf("RespondGate error = %v", err)
 	}
 	got := fc.responses()
 	if len(got) != 1 {
@@ -735,8 +735,8 @@ func TestRespondFormDeclineCarriesNoValues(t *testing.T) {
 	a, fc, _, _ := newFakeAgent(t)
 
 	gateID := mustUUID(t)
-	if err := a.RespondForm(context.Background(), gateID, gate.FormActionDecline, nil); err != nil {
-		t.Fatalf("RespondForm error = %v", err)
+	if err := a.RespondGate(context.Background(), gateID, gate.FormActionDecline, nil); err != nil {
+		t.Fatalf("RespondGate error = %v", err)
 	}
 	got := fc.responses()
 	if len(got) != 1 || got[0].Action != gate.FormActionDecline {

@@ -37,6 +37,10 @@ const (
 	// modeFormPrompt shows a structured form gate (gate.KindForm): a field editor
 	// the user fills in and submits.
 	modeFormPrompt
+	// modeOpenURLPrompt shows an open-url gate (gate.KindOpenURL): the origin being
+	// authorized, and the completion decision. It has no editor — there is nothing
+	// to fill in, only to confirm.
+	modeOpenURLPrompt
 )
 
 // interactionModel owns the bottom interaction surface: the compose editor, the
@@ -121,13 +125,17 @@ func (m interactionModel) ApplyEvent(ev event.Event) interactionModel {
 	case event.UserInputRequested:
 		m.enqueueForLoop(promptFromUserInput(ev.ToolExecutionID, ev.Question, ev.Choices), ev.EventHeader().LoopID)
 	case event.GateOpened:
-		// ONLY form gates are folded from GateOpened. A permission or AskUser gate
-		// also opens one, but those already enqueue from their own per-kind request
-		// event above — folding them here too would double-queue the same prompt.
-		// A form gate has no such event: it is raised by an integration host, and
-		// this envelope is the only thing the TUI ever sees of it.
-		if ev.Gate.Kind == gate.KindForm {
+		// ONLY host-raised gates are folded from GateOpened. A permission or AskUser
+		// gate also opens one, but those already enqueue from their own per-kind
+		// request event above — folding them here too would double-queue the same
+		// prompt. A form or open-url gate has no such event: it is raised by an
+		// integration host, and this envelope is the only thing the TUI ever sees of
+		// it.
+		switch ev.Gate.Kind {
+		case gate.KindForm:
 			m.enqueueForLoop(promptFromForm(ev.Gate), ev.EventHeader().LoopID)
+		case gate.KindOpenURL:
+			m.enqueueForLoop(promptFromOpenURL(ev.Gate), ev.EventHeader().LoopID)
 		}
 	case event.GateResolved:
 		// A gate answered elsewhere (a policy timeout, another client) must not
@@ -303,6 +311,8 @@ func (m *interactionModel) syncModeToHead() {
 		m.mode = modePermissionPrompt
 	case p.Kind == promptForm:
 		m.mode = modeFormPrompt
+	case p.Kind == promptOpenURL:
+		m.mode = modeOpenURLPrompt
 	case p.freeText:
 		m.mode = modeAnswerPrompt
 		// The input box IS the answer field, so it must start empty: the compose
@@ -359,9 +369,52 @@ func (m interactionModel) Update(msg tea.KeyPressMsg) (interactionModel, uiActio
 	case modeFormPrompt:
 		model, action := m.formKey(msg)
 		return model, action, nil
+	case modeOpenURLPrompt:
+		model, action := m.openURLKey(msg)
+		return model, action, nil
 	default:
 		return m.composeKey(msg)
 	}
+}
+
+// openURLKey routes a key in modeOpenURLPrompt (head is a promptOpenURL).
+//
+// Two keys, and each is guarded by the gate's own Controls: enter reports
+// completion (gate.FormActionAccept) and esc declines. The session refuses any
+// action a gate never advertised, so a key the gate does not offer must be a
+// no-op here rather than a request that comes back rejected — an opener that
+// wants no explicit completion (RequiresCompletion false, so no accept control)
+// simply cannot have one pressed. Every other key re-renders.
+//
+// An unsupported gate (its envelope did not validate) can only be declined:
+// accepting would be the user vouching for an origin the TUI could not vouch for.
+//
+// There is deliberately no "open" key. The TUI has no URL to open — the host owns
+// the browser and already opened it.
+func (m interactionModel) openURLKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+	head := *m.ActivePrompt()
+	if msg.Code == tea.KeyEsc {
+		if !head.offersAction(gate.FormActionDecline) {
+			return m, noop
+		}
+		return m.pop(), uiAction{
+			Kind: uiGateRespond, LoopID: head.LoopID, GateID: head.GateID,
+			GateAction: gate.FormActionDecline,
+		}
+	}
+	if head.unsupported {
+		return m, noop
+	}
+	if isEnter(msg) {
+		if !head.offersAction(gate.FormActionAccept) {
+			return m, noop
+		}
+		return m.pop(), uiAction{
+			Kind: uiGateRespond, LoopID: head.LoopID, GateID: head.GateID,
+			GateAction: gate.FormActionAccept,
+		}
+	}
+	return m, noop
 }
 
 // formKey routes a key in modeFormPrompt (head is a promptForm).
@@ -382,8 +435,8 @@ func (m interactionModel) formKey(msg tea.KeyPressMsg) (interactionModel, uiActi
 			return m, noop
 		}
 		return m.pop(), uiAction{
-			Kind: uiFormRespond, LoopID: head.LoopID, GateID: head.GateID,
-			FormAction: gate.FormActionDecline,
+			Kind: uiGateRespond, LoopID: head.LoopID, GateID: head.GateID,
+			GateAction: gate.FormActionDecline,
 		}
 	}
 	if head.unsupported {
@@ -407,8 +460,8 @@ func (m interactionModel) submitForm(head prompt) (interactionModel, uiAction) {
 		return m, noop
 	}
 	return m.pop(), uiAction{
-		Kind: uiFormRespond, LoopID: head.LoopID, GateID: head.GateID,
-		FormAction: gate.FormActionAccept, Values: head.formValues(),
+		Kind: uiGateRespond, LoopID: head.LoopID, GateID: head.GateID,
+		GateAction: gate.FormActionAccept, Values: head.formValues(),
 	}
 }
 

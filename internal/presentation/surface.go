@@ -249,6 +249,10 @@ func bottomBox(in surfaceInputs) string {
 		if p != nil {
 			return renderFormBox(*p, in.Width, m.PendingCount())
 		}
+	case modeOpenURLPrompt:
+		if p != nil {
+			return renderOpenURLBox(*p, in.Width, m.PendingCount())
+		}
 	case modeAnswerPrompt:
 		return answerSection(in)
 	}
@@ -274,7 +278,7 @@ func answerSection(in surfaceInputs) string {
 func bottomContentHeight(in surfaceInputs) int {
 	m := in.Interaction
 	switch m.mode {
-	case modePermissionPrompt, modeChoicePrompt, modeAnswerPrompt, modeFormPrompt:
+	case modePermissionPrompt, modeChoicePrompt, modeAnswerPrompt, modeFormPrompt, modeOpenURLPrompt:
 		if p := m.ActivePrompt(); p != nil {
 			return promptContentHeight(in)
 		}

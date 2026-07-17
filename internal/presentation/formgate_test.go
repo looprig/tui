@@ -174,8 +174,8 @@ func TestFormGateRejectsMultiSelect(t *testing.T) {
 			}
 			// Decline remains available: it is the only honest action left.
 			_, action = m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
-			if action.Kind != uiFormRespond || action.FormAction != gate.FormActionDecline {
-				t.Errorf("esc = %v/%q, want a decline", action.Kind, action.FormAction)
+			if action.Kind != uiGateRespond || action.GateAction != gate.FormActionDecline {
+				t.Errorf("esc = %v/%q, want a decline", action.Kind, action.GateAction)
 			}
 		})
 	}
@@ -204,11 +204,11 @@ func TestFormGateAcceptEncodesSchemaTypes(t *testing.T) {
 	}
 
 	m, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if action.Kind != uiFormRespond {
-		t.Fatalf("enter produced %v, want uiFormRespond", action.Kind)
+	if action.Kind != uiGateRespond {
+		t.Fatalf("enter produced %v, want uiGateRespond", action.Kind)
 	}
-	if action.FormAction != gate.FormActionAccept {
-		t.Errorf("action = %q, want accept", action.FormAction)
+	if action.GateAction != gate.FormActionAccept {
+		t.Errorf("action = %q, want accept", action.GateAction)
 	}
 	if action.GateID != formGateID {
 		t.Errorf("gate id = %v, want %v", action.GateID, formGateID)
@@ -256,7 +256,7 @@ func TestFormGateRequiresRequiredFields(t *testing.T) {
 		t.Errorf("validation notice survived an edit:\n%s", got)
 	}
 	_, action, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if action.Kind != uiFormRespond {
+	if action.Kind != uiGateRespond {
 		t.Errorf("a completed form did not submit: %v", action.Kind)
 	}
 }
@@ -273,7 +273,7 @@ func TestFormGateHonorsOfferedControls(t *testing.T) {
 		key      tea.KeyPressMsg
 		wantKind uiActionKind
 	}{
-		{name: "decline offered", controls: []string{gate.FormActionAccept, gate.FormActionDecline}, key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiFormRespond},
+		{name: "decline offered", controls: []string{gate.FormActionAccept, gate.FormActionDecline}, key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiGateRespond},
 		{name: "decline not offered", controls: []string{gate.FormActionAccept}, key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiNoop},
 		{name: "accept not offered", controls: []string{gate.FormActionDecline}, key: tea.KeyPressMsg{Code: tea.KeyEnter}, wantKind: uiNoop},
 		{name: "no controls at all", controls: nil, key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiNoop},
@@ -429,8 +429,8 @@ func TestFormFieldEncodeOmitsUnansweredOptional(t *testing.T) {
 	schema := gate.PromptSchema{Fields: []gate.Field{{Name: "note", Kind: gate.FieldText}}}
 	m := formModel(schema, gate.FormActionAccept)
 	_, action := m.submitForm(*m.ActivePrompt())
-	if action.Kind != uiFormRespond {
-		t.Fatalf("action = %v, want uiFormRespond", action.Kind)
+	if action.Kind != uiGateRespond {
+		t.Fatalf("action = %v, want uiGateRespond", action.Kind)
 	}
 	if _, ok := action.Values["note"]; ok {
 		t.Errorf("an unanswered optional field was submitted: %s", action.Values["note"])

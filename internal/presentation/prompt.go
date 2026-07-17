@@ -32,6 +32,18 @@ const (
 	// built from a GateOpened envelope rather than a per-kind loop event, because a
 	// form gate is raised by an integration host and has no loop-side request event.
 	promptForm
+	// promptOpenURL is an open-url gate (gate.KindOpenURL): the host has sent the
+	// user out-of-band to authorize something at an origin, and this prompt names
+	// that origin and takes the user's completion decision. Like promptForm it is
+	// folded from a GateOpened envelope.
+	//
+	// It carries NO url, and that absence is the design. The action target is the
+	// ephemeral credential — it carries the OAuth `state`, the PKCE challenge,
+	// sometimes a token — and it lives only on the gate's private payload, which
+	// never leaves the session. The host opened it (it holds the BrowserOpener);
+	// the TUI's job is to say WHO is being authorized and to take the answer. With
+	// no url field here, no url can reach the scrollback or a log.
+	promptOpenURL
 )
 
 // formField is one editable row of a form prompt: the schema's description of the
@@ -147,14 +159,23 @@ type prompt struct {
 	// from GateOpened, which names the gate outright — unlike a permission or
 	// AskUser prompt, whose gate id the adapter must look up by ToolExecutionID.
 	GateID   gate.ID
-	Title    string      // promptForm: the form's heading
-	Body     string      // promptForm: the explanatory body
+	Title    string      // promptForm/promptOpenURL: the heading
+	Body     string      // promptForm/promptOpenURL: the explanatory body
 	Fields   []formField // promptForm: the editable rows
-	Controls []string    // promptForm: the actions the gate actually offers
+	Controls []string    // promptForm/promptOpenURL: the actions the gate actually offers
 	focus    int         // promptForm: cursor over Fields
-	// unsupported marks a form whose schema the TUI cannot honestly render (see
-	// promptFromForm). It is rendered as a notice offering only decline, never as a
-	// partial editor that would submit an answer the user did not give.
+	// Origin is the promptOpenURL gate's VALIDATED bare origin (gate.Prompt.Origin,
+	// e.g. "https://github.com"). It is the whole security content of the prompt:
+	// it is what the user's trust decision is made on, and it is trustworthy here
+	// precisely because gate.ValidateGate holds the envelope to the same bare-origin
+	// rule as the durable payload — scheme and host, never a path or query. It is
+	// therefore rendered AS an origin rather than as prose an integration supplied.
+	Origin string
+	// unsupported marks a prompt the TUI cannot honestly render: a form whose schema
+	// it cannot edit (see promptFromForm), or an open-url gate whose envelope does
+	// not validate (see promptFromOpenURL). It is rendered as a notice offering only
+	// decline, never as a partial editor that would submit an answer the user did
+	// not give, nor as an origin the user could not trust.
 	unsupported bool
 	// invalid is set when a submit was attempted with a required field unanswered.
 	// It drives the validation notice; it is cleared by any subsequent edit.
@@ -216,6 +237,42 @@ func promptFromForm(g gate.Gate) prompt {
 			return p
 		}
 		p.Fields = append(p.Fields, field)
+	}
+	return p
+}
+
+// promptFromOpenURL builds an open-url prompt view-model from a GateOpened
+// envelope.
+//
+// Like promptFromForm it reads the PUBLIC envelope only — but here that is not
+// merely sufficient, it is the point. The private OpenURLPayload holds the action
+// URL, and the TUI is never given it: the host opened the browser, and the only
+// question left for a human is whether the origin now asking for authorization is
+// one they trust. So this copies Prompt.Origin and nothing that could carry a
+// target.
+//
+// The envelope is re-validated here rather than trusted. gate.ValidateGate is the
+// same check the session applies at open time, and it is what makes Origin an
+// origin: without it a malformed or absent origin would render as a trust
+// decision the user cannot actually make, which is precisely what displaying a
+// bare origin exists to prevent. A gate that fails it is marked unsupported and
+// offers only decline — fail closed, never a prompt that vouches for something it
+// could not check.
+func promptFromOpenURL(g gate.Gate) prompt {
+	p := prompt{
+		ToolExecutionID: g.Subject.ToolExecutionID,
+		GateID:          g.ID,
+		Kind:            promptOpenURL,
+		Title:           g.Prompt.Title,
+		Body:            g.Prompt.Body,
+		Origin:          g.Prompt.Origin,
+	}
+	for _, c := range g.Prompt.Controls {
+		p.Controls = append(p.Controls, c.Action)
+	}
+	if err := gate.ValidateGate(g); err != nil {
+		p.unsupported = true
+		p.Origin = ""
 	}
 	return p
 }
@@ -559,6 +616,92 @@ func formRow(f formField, focused bool, width int) string {
 		return styles.CardSelectedStyle.Width(width).Render("▸ " + truncate(row, width-choicePrefixWidth))
 	}
 	return "  " + truncate(row, width-choicePrefixWidth)
+}
+
+// openURLTitleFallback is the card heading when the projection carried no title.
+const openURLTitleFallback = "Authorize"
+
+// openURLOriginLabel prefixes the origin row. The row is the security content of
+// the card, so the origin is labelled for what it is rather than left to read as
+// prose.
+const openURLOriginLabel = "origin: "
+
+// openURLTrustNotice is the standing caution under the origin. It is the TUI's
+// own words, not the integration's: the body prose comes from whoever opened the
+// gate, so the line telling the user what they are actually deciding must not.
+const openURLTrustNotice = "Continue only if you trust this origin with the access it asked for."
+
+// openURLUnsupportedNotice is the body of an open-url gate whose envelope did not
+// validate (see promptFromOpenURL). It names no origin, because the reason it is
+// here is that the origin could not be trusted to be one.
+const openURLUnsupportedNotice = "This request did not name a valid origin, so it cannot be shown safely. Decline it."
+
+// openURLNoActionsLegend is the legend of a gate that offers no action at all.
+// The session refuses any action a gate did not advertise, so there is genuinely
+// nothing to press — say so rather than print keys that would be swallowed.
+const openURLNoActionsLegend = "no actions offered · waiting"
+
+// openURLCompleteHint / openURLDeclineHint are the legend fragments, rendered only
+// when the gate's Controls actually offer the action. The completion key is what
+// RequiresCompletion looks like from the envelope: an opener that wants an
+// explicit "I finished" offers accept, and an opener that does not, does not.
+const (
+	openURLCompleteHint = "[enter] I've completed it"
+	openURLDeclineHint  = "[esc] decline"
+)
+
+// renderOpenURLBox renders an open-url gate as a card: the heading, the opener's
+// body prose, the validated origin on its own labelled row, the standing trust
+// caution, and a footer offering ONLY the actions the gate advertises.
+//
+// There is no URL on this card because there is no URL in the view-model to put
+// on it — the action target never leaves the session (see promptOpenURL). The
+// user is shown who is being authorized and asked to confirm completion; opening
+// the browser was the host's job. Pure: view-model only.
+func renderOpenURLBox(p prompt, width, pending int) string {
+	textW := cardTextWidth(width)
+	title := styles.CardTitleStyle.Render(openURLTitle(p))
+	if p.unsupported {
+		body := strings.Join(wrapToWidth(openURLUnsupportedNotice, textW), "\n")
+		footer := styles.CardHintStyle.Render(formUnsupportedLegend)
+		return cardFrame(cardSections(title, body, footer), width, pending)
+	}
+
+	sections := make([]string, 0, 5)
+	if p.Body != "" {
+		sections = append(sections, strings.Join(wrapToWidth(p.Body, textW), "\n"))
+	}
+	origin := styles.CardHintStyle.Render(openURLOriginLabel) +
+		styles.CardKeyStyle.Render(truncate(p.Origin, textW-len(openURLOriginLabel)))
+	sections = append(sections, origin)
+	sections = append(sections, strings.Join(wrapToWidth(openURLTrustNotice, textW), "\n"))
+	sections = append(sections, openURLLegend(p))
+	return cardFrame(cardSections(append([]string{title}, sections...)...), width, pending)
+}
+
+// openURLTitle is the card heading: the gate's own title, or a neutral fallback.
+func openURLTitle(p prompt) string {
+	if p.Title != "" {
+		return p.Title
+	}
+	return openURLTitleFallback
+}
+
+// openURLLegend renders the footer hints for exactly the actions the gate offers,
+// mirroring the key router (interaction.go openURLKey) one-for-one so a rendered
+// key is always a key that does something.
+func openURLLegend(p prompt) string {
+	hints := make([]string, 0, 2)
+	if p.offersAction(gate.FormActionAccept) {
+		hints = append(hints, styleKeyHint(openURLCompleteHint))
+	}
+	if p.offersAction(gate.FormActionDecline) {
+		hints = append(hints, styleKeyHint(openURLDeclineHint))
+	}
+	if len(hints) == 0 {
+		return styles.CardHintStyle.Render(openURLNoActionsLegend)
+	}
+	return strings.Join(hints, "  ")
 }
 
 // choiceLegend is the muted key legend shown at the foot of a choice card. It keeps

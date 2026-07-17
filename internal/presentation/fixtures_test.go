@@ -115,12 +115,12 @@ type fakeAgent struct {
 	lastScope     tool.ApprovalScope
 	lastAnswer    string
 
-	// form-gate recorder: the same capture-and-report shape for RespondForm.
-	formErr        error
-	formCalled     bool
+	// form-gate recorder: the same capture-and-report shape for RespondGate.
+	gateErr        error
+	gateCalled     bool
 	lastGateID     gate.ID
-	lastFormAction string
-	lastFormValues map[string]json.RawMessage
+	lastGateAction string
+	lastGateValues map[string]json.RawMessage
 
 	// replay-backlog recorder: backlog is returned verbatim (a restored session's
 	// historical Enduring events for repaint; nil for a NEW session), replayErr is the
@@ -238,12 +238,12 @@ func (f *fakeAgent) ProvideAnswer(_ context.Context, loopID, callID uuid.UUID, a
 	return f.answerErr
 }
 
-func (f *fakeAgent) RespondForm(_ context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error {
-	f.formCalled = true
+func (f *fakeAgent) RespondGate(_ context.Context, gateID gate.ID, action string, values map[string]json.RawMessage) error {
+	f.gateCalled = true
 	f.lastGateID = gateID
-	f.lastFormAction = action
-	f.lastFormValues = values
-	return f.formErr
+	f.lastGateAction = action
+	f.lastGateValues = values
+	return f.gateErr
 }
 
 func (f *fakeAgent) ReplayBacklog(_ context.Context) ([]event.Event, error) {

@@ -51,7 +51,7 @@ func (a *fakeAgent) Deny(context.Context, uuid.UUID, uuid.UUID) error { return n
 func (a *fakeAgent) ProvideAnswer(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
 }
-func (a *fakeAgent) RespondForm(context.Context, gate.ID, string, map[string]json.RawMessage) error {
+func (a *fakeAgent) RespondGate(context.Context, gate.ID, string, map[string]json.RawMessage) error {
 	return nil
 }
 func (a *fakeAgent) Close(context.Context) error {
