@@ -51,6 +51,18 @@ func (e *UnknownEventTypeError) Error() string {
 	return fmt.Sprintf("event: unknown event type %q", e.Type)
 }
 
+// UnsupportedSchemaError reports a durable record whose schema version is
+// newer than this binary supports. It is the dispatch hook a future migration
+// layer catches; today it is a hard, typed restore failure.
+type UnsupportedSchemaError struct {
+	Kind    string // "event"
+	Version uint32
+}
+
+func (e *UnsupportedSchemaError) Error() string {
+	return fmt.Sprintf("event: unsupported %s schema version %d (max %d)", e.Kind, e.Version, schemaVersion)
+}
+
 // EventEncodeError wraps a failure to marshal an event's payload (a json.Marshal
 // failure, or a delegated content/tool codec failure on the marshal path).
 type EventEncodeError struct {
@@ -118,9 +130,19 @@ func MarshalEvent(ev Event) ([]byte, error) {
 	if ev.Class() == Ephemeral {
 		return nil, &EphemeralNotPersistableError{Type: name}
 	}
-	// Body validation is required at the durable write boundary. Identity is
-	// stamped by the publishing hub, but malformed lifecycle/runtime and committed
-	// step bodies must never be encoded into a journal record.
+	// Both identity AND body validation are required at the durable write boundary.
+	// Validating only the body on write was the write/read asymmetry that let a
+	// zero-coordinate gate marshal clean and poison a future restore: the decode path
+	// validates full identity, so an event that violates its identity profile must be
+	// REFUSED here — at open time — rather than silently persisted to break replay.
+	// Every event reaching this boundary already has its coordinates stamped (the hub
+	// stamps lifecycle/loop/turn/step events; the gate open path in
+	// sessionruntime/gates.go stamps GatePrepared/GateOpened/GateResolved before
+	// append), so this rejects only genuinely malformed identity, never a legitimate
+	// pre-stamp marshal.
+	if err := validateEventIdentity(ev); err != nil {
+		return nil, err
+	}
 	if err := validateEventBody(ev); err != nil {
 		return nil, err
 	}
@@ -155,6 +177,7 @@ func encodePayload(ev Event) ([]byte, error) {
 	case GateResolved:
 		return marshalGateResolved(e)
 	case SessionStarted, SessionActive, SessionIdle, SessionStopped,
+		ConfigurationAdopted,
 		RestoreStarted, RestoreDone, WorkspaceCheckpointed, WorkspaceRestored,
 		ActiveLoopChanged, SecurityLimitChanged,
 		HustleStarted, HustleCompleted, HustleFailed,
@@ -340,10 +363,19 @@ func UnmarshalEvent(data []byte) (Event, error) {
 		return nil, &EventDecodeError{Cause: err}
 	}
 	var probe struct {
-		Type string `json:"type"`
+		Type string  `json:"type"`
+		V    *uint32 `json:"v"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, &EventDecodeError{Type: "", Cause: err}
+	}
+	// The "v" envelope key is the durable schema version. Absent means version 1
+	// (old records predate the field guarantee); a value newer than this binary
+	// supports fails closed with a typed error the future migration layer catches.
+	// A present-but-malformed "v" (non-number) already surfaced as EventDecodeError
+	// from the probe unmarshal above.
+	if probe.V != nil && *probe.V > schemaVersion {
+		return nil, &UnsupportedSchemaError{Kind: "event", Version: *probe.V}
 	}
 	ev, err := decodePayload(probe.Type, data)
 	if err != nil {
@@ -550,6 +582,8 @@ func decodePayload(tag string, data []byte) (Event, error) {
 		return decodePlain[SessionIdle](tag, data)
 	case "SessionStopped":
 		return decodePlain[SessionStopped](tag, data)
+	case "ConfigurationAdopted":
+		return decodePlain[ConfigurationAdopted](tag, data)
 	case "RestoreStarted":
 		return decodePlain[RestoreStarted](tag, data)
 	case "RestoreDone":
@@ -774,6 +808,7 @@ func decodeRestoreErrored(data []byte) (Event, error) {
 type gateResolvedWire struct {
 	Header
 	GateID        gate.ID             `json:"gate_id,omitzero"`
+	Resolver      gate.ResolverKind   `json:"resolver,omitempty"`
 	Reason        gate.CloseReason    `json:"reason,omitempty"`
 	Action        string              `json:"action,omitempty"`
 	ApprovalScope tool.ApprovalScope  `json:"scope,omitzero"`
@@ -793,6 +828,7 @@ func marshalGateResolved(e GateResolved) ([]byte, error) {
 	out, err := json.Marshal(gateResolvedWire{
 		Header:        e.Header,
 		GateID:        e.GateID,
+		Resolver:      e.Resolver,
 		Reason:        e.Reason,
 		Action:        e.Action,
 		ApprovalScope: e.ApprovalScope,
@@ -813,6 +849,7 @@ func decodeGateResolved(data []byte) (Event, error) {
 	ev := GateResolved{
 		Header:        w.Header,
 		GateID:        w.GateID,
+		Resolver:      w.Resolver,
 		Reason:        w.Reason,
 		Action:        w.Action,
 		ApprovalScope: w.ApprovalScope,

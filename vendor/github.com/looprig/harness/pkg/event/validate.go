@@ -3,6 +3,7 @@ package event
 import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/hustle"
 	"github.com/looprig/harness/pkg/identity"
 	model "github.com/looprig/inference/model"
@@ -65,13 +66,19 @@ const (
 	FieldPostContext      FieldName = "PostContext"
 	FieldCommittedEventID FieldName = "CommittedEventID"
 	FieldSource           FieldName = "Source"
+	FieldActor            FieldName = "Actor"
 	FieldGeneration       FieldName = "Generation"
 	FieldTools            FieldName = "Tools"
 	// FieldIntegrationName names IntegrationStatus.Name. It is not spelled
 	// "FieldName": that identifier is this file's FieldName TYPE.
-	FieldIntegrationName FieldName = "Name"
-	FieldState           FieldName = "State"
-	FieldDetail          FieldName = "Detail"
+	FieldIntegrationName    FieldName = "Name"
+	FieldState              FieldName = "State"
+	FieldDetail             FieldName = "Detail"
+	FieldEpoch              FieldName = "Epoch"
+	FieldAdoptedFingerprint FieldName = "AdoptedFingerprint"
+	FieldManifest           FieldName = "Manifest"
+	FieldDrift              FieldName = "Drift"
+	FieldMessage            FieldName = "Message"
 	// FieldType names the whole event (not one coordinate) on the fail-secure
 	// unknown-type path, paired with RuleUnknownType.
 	FieldType FieldName = "Type"
@@ -226,6 +233,77 @@ func validateEventBody(ev Event) error {
 		if err := e.Usage.Validate(); err != nil {
 			return &InvalidEventError{Event: "TurnDone", Field: FieldUsage, Rule: RuleInvalid}
 		}
+	case ConfigurationAdopted:
+		return validateConfigurationAdopted(e)
+	}
+	return nil
+}
+
+// Bounds for ConfigurationAdopted's durable, partly user-authored payload: a
+// hostile or buggy decision must not be able to append an unbounded record to
+// the journal, and a legacy (SchemaVersion 0) manifest projection is never
+// persisted.
+const (
+	// The manifest is decoded from untrusted journal input, so its collections
+	// are capped defense-in-depth. The caps are generous: they never trip a
+	// legitimate configuration, only an abusive one.
+	maxConfigManifestTools     = 4096
+	maxConfigManifestAppFields = 1024
+	// maxConfigDriftChanges must never reject a drift summary a VALID manifest
+	// comparison can legitimately produce, or a large-but-legitimate change would
+	// brick every restore. A schema-1↔schema-1 assessment can emit one change per
+	// tool (up to maxConfigManifestTools) plus one per app field (up to
+	// maxConfigManifestAppFields) plus the ~dozen scalar-field categories; the +64
+	// covers those scalars with slack. It still bounds a decoded hostile event.
+	maxConfigDriftChanges = maxConfigManifestTools + maxConfigManifestAppFields + 64
+	// MaxConfigMessageLen and MaxConfigActorLen bound the durable, partly
+	// user-authored audit fields. They are exported so the restore constructor can
+	// TRUNCATE a decider's over-long Message/Actor before building the adoption (a
+	// long audit note must never brick a restore); the validator here still rejects
+	// an over-long field on a hand-crafted, decoded journal record.
+	MaxConfigMessageLen = 4096
+	MaxConfigActorLen   = 1024
+)
+
+// validateConfigurationAdopted enforces the config-epoch invariants: epoch 1
+// belongs to SessionStarted so an adoption is always >= 2, the adopted
+// fingerprint is required, the source is one of the four closed DecisionSource
+// values, the drift summary, message, and actor are length-capped, and a legacy
+// (SchemaVersion 0) manifest projection is refused.
+func validateConfigurationAdopted(e ConfigurationAdopted) error {
+	const name EventName = "ConfigurationAdopted"
+	if e.Epoch < 2 {
+		return &InvalidEventError{Event: name, Field: FieldEpoch, Rule: RuleInvalid}
+	}
+	if e.AdoptedFingerprint == "" {
+		return &InvalidEventError{Event: name, Field: FieldAdoptedFingerprint, Rule: RuleRequired}
+	}
+	if !e.Source.Valid() {
+		return &InvalidEventError{Event: name, Field: FieldSource, Rule: RuleInvalid}
+	}
+	if len(e.Drift) > maxConfigDriftChanges {
+		return &InvalidEventError{Event: name, Field: FieldDrift, Rule: RuleInvalid}
+	}
+	if len(e.Message) > MaxConfigMessageLen {
+		return &InvalidEventError{Event: name, Field: FieldMessage, Rule: RuleInvalid}
+	}
+	if len(e.Actor) > MaxConfigActorLen {
+		return &InvalidEventError{Event: name, Field: FieldActor, Rule: RuleInvalid}
+	}
+	if e.Manifest.SchemaVersion == 0 {
+		return &InvalidEventError{Event: name, Field: FieldManifest, Rule: RuleInvalid}
+	}
+	// A persisted manifest's recorded fingerprint must match the manifest itself,
+	// so a durable baseline can never carry a fingerprint that disagrees with the
+	// configuration it describes.
+	if e.Manifest.Fingerprint() != e.AdoptedFingerprint {
+		return &InvalidEventError{Event: name, Field: FieldAdoptedFingerprint, Rule: RuleInvalid}
+	}
+	if len(e.Manifest.Tools) > maxConfigManifestTools {
+		return &InvalidEventError{Event: name, Field: FieldManifest, Rule: RuleInvalid}
+	}
+	if len(e.Manifest.AppFields) > maxConfigManifestAppFields {
+		return &InvalidEventError{Event: name, Field: FieldManifest, Rule: RuleInvalid}
 	}
 	return nil
 }
@@ -505,7 +583,7 @@ func toolExecutionID(ev Event) uuid.UUID {
 // half-registered — there is exactly one place to add it. An unknown type renders
 // as "Event" with ok==false (ValidateEvent rejects it fail-secure).
 func classify(ev Event) (name string, profile idProfile, ok bool) {
-	switch ev.(type) {
+	switch e := ev.(type) {
 	case SessionStarted:
 		return "SessionStarted", sessionProfile(), true
 	case SessionActive:
@@ -521,6 +599,10 @@ func classify(ev Event) (name string, profile idProfile, ok bool) {
 		return "RestoreDone", sessionProfile(), true
 	case RestoreErrored:
 		return "RestoreErrored", sessionProfile(), true
+	case ConfigurationAdopted:
+		// Session-scoped, same shape as SessionStarted: only SessionID set. The
+		// SessionID rides in the Header; the event carries no standalone field.
+		return "ConfigurationAdopted", sessionProfile(), true
 	case WorkspaceCheckpointed:
 		// Session-scoped: a session-global workspace snapshot appended at quiescence
 		// (same shape as RestoreDone/SessionIdle) — only SessionID set. Ref is an
@@ -609,11 +691,14 @@ func classify(ev Event) (name string, profile idProfile, ok bool) {
 	case ToolCallCompleted:
 		return "ToolCallCompleted", toolProfile(), true
 	case GatePrepared:
-		return "GatePrepared", stepProfile(), true
+		// Gate identity varies by how the gate was raised, so the profile is selected
+		// from the embedded gate's resolver rather than fixed per type. GatePrepared and
+		// GateOpened carry the full gate.Gate; GateResolved carries its own Resolver tag.
+		return "GatePrepared", gateIdentityProfile(e.Gate.Resolver), true
 	case GateOpened:
-		return "GateOpened", stepProfile(), true
+		return "GateOpened", gateIdentityProfile(e.Gate.Resolver), true
 	case GateResolved:
-		return "GateResolved", stepProfile(), true
+		return "GateResolved", gateIdentityProfile(e.Resolver), true
 	default:
 		return "Event", idProfile{}, false
 	}
@@ -643,6 +728,39 @@ func inputCancelledProfile() idProfile {
 // stepProfile: step events (TokenDelta/StepDone) — SessionID+LoopID+TurnID+StepID set.
 func stepProfile() idProfile {
 	return idProfile{requireSession: true, requireLoop: true, requireTurn: true, requireStep: true}
+}
+
+// gateIdentityProfile selects a gate event's identity contract from the resolver
+// that owns it. The three gate events are loopScoped (Scope()==ScopeLoop) but the
+// coordinates a gate legitimately carries depend on HOW it was raised, so a single
+// per-type profile is wrong:
+//
+//   - Host-owned gates (gate.ResolverSession — a form/open-url elicitation raised by
+//     an integration through GateHost.OpenHostGate) belong to no turn or step, and
+//     a startup elicitation belongs to no loop either. Their only guaranteed
+//     coordinate is the SessionID; LoopID/TurnID/StepID are OPTIONAL (a
+//     loop-attributed elicitation carries a LoopID, startup carries none).
+//   - Loop-owned gates (gate.ResolverLoop — permission/ask-user) keep the FULL step
+//     profile: a permission gate that parks a tool call without a step is malformed
+//     and must fail, exactly as before.
+//
+// An empty/unknown resolver fails SECURE to the strict loop-owned profile — the same
+// contract every gate record enforced before host-owned gates were distinguished, so
+// a record written before the discriminator existed is held to the stricter rule.
+func gateIdentityProfile(resolver gate.ResolverKind) idProfile {
+	if resolver == gate.ResolverSession {
+		return hostGateProfile()
+	}
+	return stepProfile()
+}
+
+// hostGateProfile: host-owned gates require only a SessionID. LoopID/TurnID/StepID
+// are unconstrained (neither required nor forbidden), so a loop-attributed
+// elicitation may carry a LoopID and a startup one need not. The universal
+// StepID⇒TurnID rule in checkProfile still applies. It mirrors the way
+// inputCancelledProfile makes an inner coordinate optional rather than forbidden.
+func hostGateProfile() idProfile {
+	return idProfile{requireSession: true}
 }
 
 // toolProfile: the five tool-interaction events — full quartet set plus a required
