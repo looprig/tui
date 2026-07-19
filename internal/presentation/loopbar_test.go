@@ -9,11 +9,15 @@ import (
 	"github.com/looprig/core/uuid"
 )
 
-// barSegOf builds the expected ANSI-free segment text for a mark/name/id, mirroring
-// loopBar.segBody ("<mark> <name> (<id4>)") so the render assertions stay pinned to the
-// component's own layout.
+// barSegOf builds the expected ANSI-free fallback segment text for a mark/name/id when
+// no current mode is available, so the render assertions stay pinned to the component's
+// own layout.
 func barSegOf(mark, name string, id uuid.UUID) string {
-	return mark + barMarkSep + name + barIDOpen + shortLoopID(id) + barIDClose
+	return mark + barMarkSep + name + " (#" + shortLoopID(id) + ")"
+}
+
+func barSegWithMode(mark, name, mode string, id uuid.UUID) string {
+	return mark + barMarkSep + name + " (" + mode + " - #" + shortLoopID(id) + ")"
 }
 
 // TestLoopBarRender covers the bar's one-line render: the leading focused ● / unfocused ○

@@ -4108,30 +4108,48 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 	}
 }
 
-// TestModernComposerDefaultsToTwoLines pins the modern composer's 2-line default: the
-// composer built by the MODERN path (NewModern → modernizeComposer → SetMinLines(2))
-// reports a minimum visible height of modernComposerMinLines when empty, and the modern
-// bottom box is at least that tall, while Screen's plain composer (newInteractionModel,
-// unmodernized) stays at 1. It fails if the modern 2-line default regresses.
-func TestModernComposerDefaultsToTwoLines(t *testing.T) {
+// TestModernComposerDefaultsToThreeRows pins the compact empty composer: one text row plus
+// one padding row above and below. The plain composer remains one unpadded text row.
+func TestModernComposerDefaultsToThreeRows(t *testing.T) {
 	t.Parallel()
 
+	const (
+		wantTextRows = 1
+		wantBoxRows  = 3
+	)
 	agent := &fakeAgent{activeLoopID: callID(1)}
 	m := newScreenSized(t, agent, 80, 24)
 
-	if got := m.interaction.input.Height(); got != composerMinLines {
-		t.Errorf("modern composer empty height = %d, want %d", got, composerMinLines)
+	if got := m.interaction.input.Height(); got != wantTextRows {
+		t.Errorf("modern composer empty text height = %d, want %d", got, wantTextRows)
 	}
-	// The rendered bottom box reflects the 2-line default too.
-	if got := lipgloss.Height(m.bottomBoxView()); got < composerMinLines {
-		t.Errorf("modern bottom-box height = %d, want >= %d", got, composerMinLines)
+	if got := lipgloss.Height(m.bottomBoxView()); got != wantBoxRows {
+		t.Errorf("modern bottom-box height = %d, want %d (one text row plus top/bottom padding)", got, wantBoxRows)
 	}
-	// Screen's plain (unmodernized) composer, sized the same way, stays at the historical
-	// single line.
+	// Screen's plain (unmodernized) composer stays at one row without modern padding.
 	plain := newInteractionModel()
 	plain.input.Resize(80)
-	if got := plain.input.Height(); got != 1 {
-		t.Errorf("plain composer empty height = %d, want 1 (Screen unchanged)", got)
+	if got := plain.input.Height(); got != wantTextRows {
+		t.Errorf("plain composer empty height = %d, want %d", got, wantTextRows)
+	}
+}
+
+func TestModernComposerDoesNotRenderFocusedLoopMode(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	agent := &fakeAgent{activeLoopID: primary}
+	m := newScreenSized(t, agent, 80, 24)
+	m = feed(t, m, event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{LoopID: primary},
+			AgentName:   "operator",
+		},
+		InitialMode: "plan",
+	})
+
+	if got := stripANSI(m.bottomBoxView()); strings.Contains(got, "mode:") || strings.Contains(got, "plan") {
+		t.Errorf("bottomBoxView() = %q, want no standalone loop mode under the composer", got)
 	}
 }
 
@@ -4252,7 +4270,7 @@ func TestModernBarActiveFilter(t *testing.T) {
 
 // TestModernBarMarkerAndFormat pins the modern bar's rendered form through m.bar(): the FOCUSED
 // loop carries the filled ● mark and every other loop the hollow ○, each formatted as
-// "<mark> <name> (<id4>)" (agent name then the short loop id in parentheses). Focus flips the
+// "<mark> <name> (<mode> - #<id4>)". Every loop uses its own current mode. Focus flips the
 // marks.
 func TestModernBarMarkerAndFormat(t *testing.T) {
 	t.Parallel()
@@ -4261,23 +4279,47 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 	sub := callID(2)
 	agent := &fakeAgent{activeLoopID: primary}
 	m := newScreenSized(t, agent, 80, 24)
-	m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
-	m = feed(t, m, loopStarted(sub, "operator"))
+	m = feed(t, m, event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{LoopID: primary},
+			AgentName:   "operator-primary",
+		},
+		InitialMode: "quick",
+	})
+	m = feed(t, m, event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{LoopID: sub},
+			AgentName:   "operator",
+		},
+		InitialMode: "plan",
+	})
 
-	// Primary focused: the unfocused subagent shows "○ operator (<id4>)"; a filled ● appears.
+	// Primary focused: both loops show their own mode and the subagent is unfocused.
 	plain := stripANSI(m.bar().Render(m.width))
-	if want := barSegOf(barUnfocusedMark, "operator", sub); !strings.Contains(plain, want) {
-		t.Errorf("bar = %q, want it to contain %q (unfocused ○ name (id) format)", plain, want)
-	}
-	if !strings.Contains(plain, barFocusedMark) {
-		t.Errorf("bar = %q, want it to contain the focused ● mark", plain)
+	for _, want := range []string{
+		barSegWithMode(barFocusedMark, "operator-primary", "quick", primary),
+		barSegWithMode(barUnfocusedMark, "operator", "plan", sub),
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("bar = %q, want it to contain %q", plain, want)
+		}
 	}
 
 	// Focusing the subagent flips the marks: sub becomes ●.
 	m.focusLoop(sub)
 	plain = stripANSI(m.bar().Render(m.width))
-	if want := barSegOf(barFocusedMark, "operator", sub); !strings.Contains(plain, want) {
+	if want := barSegWithMode(barFocusedMark, "operator", "plan", sub); !strings.Contains(plain, want) {
 		t.Errorf("bar = %q, want the focused subagent to carry the ● mark (%q)", plain, want)
+	}
+
+	// A mode-change event updates that loop's footer metadata without affecting the others.
+	m = feed(t, m, event.LoopModeChanged{Header: hdr(sub), PreviousMode: "plan", Mode: "quick"})
+	plain = stripANSI(m.bar().Render(m.width))
+	if want := barSegWithMode(barFocusedMark, "operator", "quick", sub); !strings.Contains(plain, want) {
+		t.Errorf("bar after LoopModeChanged = %q, want current mode in %q", plain, want)
+	}
+	if stale := barSegWithMode(barFocusedMark, "operator", "plan", sub); strings.Contains(plain, stale) {
+		t.Errorf("bar after LoopModeChanged = %q, must not retain stale mode %q", plain, stale)
 	}
 }
 

@@ -47,6 +47,9 @@ func (f loopFooter) layout(width int) ([]string, []footerHit) {
 		lines[0], widths[0] = header, lipgloss.Width(header)
 	}
 	kept := f.bar.keptByPriority()
+	if f.header != "" && len(f.bar.entries) > 0 {
+		lines, widths = append(lines, ""), append(widths, 0)
+	}
 	hits := make([]footerHit, 0, len(kept))
 	for _, entry := range kept {
 		entryWidth := lipgloss.Width(f.bar.segPlain(entry))

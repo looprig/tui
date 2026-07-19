@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/harness/pkg/loop"
 	"github.com/looprig/tui/styles"
 )
 
@@ -19,6 +20,7 @@ import (
 type loopBarEntry struct {
 	id         uuid.UUID
 	name       string
+	mode       loop.ModeName
 	live, gate bool
 }
 
@@ -41,17 +43,19 @@ type loopBar struct {
 }
 
 // Bar glyphs (design §Active-loops bar): a leading mark per segment — a FILLED ● for the
-// focused loop, a hollow ○ for every other loop — plus a trailing gate mark. The short id is
-// shown parenthesised after the agent name ("<mark> <name> (<id4>)").
+// focused loop, a hollow ○ for every other loop — plus a trailing gate mark. The current
+// mode and short id are shown after the agent name ("<mark> <name> (<mode> - #<id4>)").
 const (
-	barFocusedMark   = "●"  // the focused loop (filled circle)
-	barUnfocusedMark = "○"  // a non-focused loop (hollow circle)
-	barGateMark      = "!"  // this loop has a pending gate awaiting the user
-	barMarkSep       = " "  // between the leading mark and the loop name
-	barIDOpen        = " (" // opens the parenthesised short id, e.g. " (a1b2)"
-	barIDClose       = ")"  // closes the parenthesised short id
-	barSep           = "  " // between adjacent segments (and before the overflow marker)
-	barIDLen         = 4    // leading hex chars of the loop id shown as its short form
+	barFocusedMark   = "●"    // the focused loop (filled circle)
+	barUnfocusedMark = "○"    // a non-focused loop (hollow circle)
+	barGateMark      = "!"    // this loop has a pending gate awaiting the user
+	barMarkSep       = " "    // between the leading mark and the loop name
+	barMetaOpen      = " ("   // opens the parenthesised mode/id metadata
+	barModeIDSep     = " - #" // separates a current mode from the prefixed short id
+	barIDPrefix      = "#"    // identifies the compact loop id
+	barMetaClose     = ")"    // closes the parenthesised mode/id metadata
+	barSep           = "  "   // between adjacent segments (and before the overflow marker)
+	barIDLen         = 4      // leading hex chars of the loop id shown as its short form
 )
 
 // barSeg is one rendered segment's provenance: the loop id it maps to and the half-open
@@ -64,8 +68,9 @@ type barSeg struct {
 	end   int
 }
 
-// Render draws the bar as a single line: each visible loop's "<mark> <name> (<id4>)" (plus a
-// trailing "!" when gated), joined by a small gap, followed by a "… +N" overflow marker when
+// Render draws the bar as a single line: each visible loop's
+// "<mark> <name> (<mode> - #<id4>)" (plus a trailing "!" when gated), joined by a small gap,
+// followed by a "… +N" overflow marker when
 // the visible cap hides loops. The visible set is bounded by max (not width), so a wide frame
 // and a narrow one draw the same segments in the same columns — which is exactly why HitTest
 // can resolve a click without a width. A non-positive width (a degenerate frame) draws
@@ -239,13 +244,17 @@ func (b loopBar) render(kept []loopBarEntry) ([]barSeg, string) {
 	return segs, sb.String()
 }
 
-// segBody is a loop segment's ANSI-free "<mark> <name> (<id4>)" — the shared layout both
+// segBody is a loop segment's ANSI-free "<mark> <name> (<mode> - #<id4>)" — the shared layout both
 // segPlain (which HitTest measures spans on) and segStyled (which Render draws) build from, so
 // a drawn column and a hit-tested column can never disagree. The leading mark encodes focus
-// (leadMark: filled ● when focused, hollow ○ otherwise); the short id is parenthesised after
-// the agent name.
+// (leadMark: filled ● when focused, hollow ○ otherwise); the current mode and short id are
+// parenthesised after the agent name. Older events without a mode fall back to "(#<id4>)".
 func (b loopBar) segBody(e loopBarEntry) string {
-	return b.leadMark(e) + barMarkSep + e.name + barIDOpen + shortLoopID(e.id) + barIDClose
+	meta := barIDPrefix + shortLoopID(e.id)
+	if e.mode != "" {
+		meta = string(e.mode) + barModeIDSep + shortLoopID(e.id)
+	}
+	return b.leadMark(e) + barMarkSep + e.name + barMetaOpen + meta + barMetaClose
 }
 
 // segPlain is a loop segment's ANSI-free text — segBody plus a trailing "!" when gated — the

@@ -51,10 +51,12 @@ type LoopRuntimeOptions struct {
 	Efforts []EffortOption
 }
 
-// AccessOptions contains the session-scoped available access choices and the
-// display-only workspace root. Current access is projected from enduring events.
+// AccessOptions contains the session-scoped available access choices, the current
+// selection, and the display-only workspace root. Current seeds presentation before an
+// enduring access-change event exists; later events remain authoritative.
 type AccessOptions struct {
 	Root    string
+	Current AccessID
 	Choices []AccessOption
 }
 

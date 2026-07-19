@@ -34,3 +34,25 @@ func TestLoopFooterWrapsAtSegmentsAndHitTestsRenderedRows(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopFooterStartsAgentsBelowApplicationHeader(t *testing.T) {
+	t.Parallel()
+
+	footer := loopFooter{
+		header: "CodeRig · Writable · /workspace",
+		bar: loopBar{entries: []loopBarEntry{
+			{id: callID(1), name: "operator", live: true},
+		}, focused: callID(1)},
+	}
+
+	lines := strings.Split(stripANSI(footer.View(120)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("footer lines = %q, want application header plus a dedicated agent row", lines)
+	}
+	if lines[0] != footer.header {
+		t.Errorf("footer first line = %q, want application header %q", lines[0], footer.header)
+	}
+	if !strings.Contains(lines[1], "operator") {
+		t.Errorf("footer second line = %q, want agent entry", lines[1])
+	}
+}

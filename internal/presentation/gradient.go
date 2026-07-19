@@ -20,9 +20,9 @@ var (
 	hoverGlowBase = rgb{0x73, 0x73, 0x73} // quiet gray: the light is off
 )
 
-// hoverGlowFinalFrame is the settled frame of the one-shot hover light: three direct
-// transitions from quiet gray to brand blue, with no bright overshoot.
-const hoverGlowFinalFrame uint = 3
+// hoverGlowFinalFrame is the settled frame of the one-shot hover light: one direct
+// transition from quiet gray to brand blue, with no intermediate shade or overshoot.
+const hoverGlowFinalFrame uint = 1
 
 // traySelectionColors are the selected completion row's background ignition frames. The
 // endpoint is a muted blue-gray related to the pastel brand blue, but dark enough to keep
@@ -112,9 +112,9 @@ func gradientLabel(s string, phase uint) string {
 	return b.String()
 }
 
-// hoverGlowColor returns the one-shot hover color for frame: three even transitions from
-// quiet gray directly to pastel blue. Frames beyond the animation clamp to the settled
-// color, so a stationary hover is static.
+// hoverGlowColor returns the one-shot hover color for frame: quiet gray at rest and pastel
+// blue after the first tick. Frames beyond the animation clamp to the settled color, so a
+// stationary hover is static.
 func hoverGlowColor(frame uint) color.Color {
 	if frame >= hoverGlowFinalFrame {
 		return lipgloss.Color(gradBlue.hex())
@@ -124,8 +124,8 @@ func hoverGlowColor(frame uint) color.Color {
 }
 
 func traySelectionColor(frame uint) color.Color {
-	if frame >= hoverGlowFinalFrame {
-		frame = hoverGlowFinalFrame
+	if frame >= trayGlowFinalFrame {
+		frame = trayGlowFinalFrame
 	}
 	return lipgloss.Color(traySelectionColors[frame].hex())
 }

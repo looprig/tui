@@ -2,10 +2,61 @@ package presentation
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/looprig/core/uuid"
 )
+
+func TestAccessOptionsCarriesCurrentSelection(t *testing.T) {
+	t.Parallel()
+
+	options := AccessOptions{Current: AccessID("2")}
+	if options.Current != AccessID("2") {
+		t.Fatalf("AccessOptions.Current = %q, want typed current selection", options.Current)
+	}
+}
+
+func TestAccessMetadataSeedsAdvertisedCurrentSelection(t *testing.T) {
+	t.Parallel()
+
+	base := &fakeAgent{activeLoopID: callID(1)}
+	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "CodeRig"})
+	m.width = 80
+	model, _ := m.Update(accessMetadataMsg{options: AccessOptions{
+		Root:    "/workspace",
+		Current: "2",
+		Choices: []AccessOption{
+			{ID: "0", Label: "Untrusted"},
+			{ID: "2", Label: "Writable"},
+		},
+	}})
+	m = model.(Screen)
+
+	footer := stripANSI(m.footerView())
+	if !strings.Contains(footer, "CodeRig · Writable · /workspace") {
+		t.Errorf("footer = %q, want advertised current access in startup header", footer)
+	}
+}
+
+func TestAccessMetadataRejectsUnadvertisedCurrentSelection(t *testing.T) {
+	t.Parallel()
+
+	base := &fakeAgent{activeLoopID: callID(1)}
+	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "CodeRig"})
+	m.width = 80
+	model, _ := m.Update(accessMetadataMsg{options: AccessOptions{
+		Root:    "/workspace",
+		Current: "3",
+		Choices: []AccessOption{{ID: "2", Label: "Writable"}},
+	}})
+	m = model.(Screen)
+
+	footer := stripANSI(m.footerView())
+	if strings.Contains(footer, "Writable") || strings.Contains(footer, "Access 3") {
+		t.Errorf("footer = %q, must not trust an unadvertised current access selection", footer)
+	}
+}
 
 type runtimeCatalogFake struct{ *fakeAgent }
 

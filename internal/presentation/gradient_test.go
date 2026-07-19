@@ -75,8 +75,8 @@ func TestGradientLabel(t *testing.T) {
 	}
 }
 
-// TestHoverGlowColor pins the approved three-step link ignition: quiet gray moves through
-// two muted blues and settles at the palette's pastel blue, with later frames clamped there.
+// TestHoverGlowColor pins the two-color link ignition: quiet gray switches directly to the
+// palette's pastel blue, with later frames clamped there and no intermediate blue shades.
 func TestHoverGlowColor(t *testing.T) {
 	t.Parallel()
 
@@ -85,8 +85,8 @@ func TestHoverGlowColor(t *testing.T) {
 		want  string
 	}{
 		{frame: 0, want: "#737373"},
-		{frame: 1, want: "#8393A2"},
-		{frame: 2, want: "#92B2D0"},
+		{frame: 1, want: "#A2D2FF"},
+		{frame: 2, want: "#A2D2FF"},
 		{frame: 3, want: "#A2D2FF"},
 		{frame: 99, want: "#A2D2FF"},
 	}

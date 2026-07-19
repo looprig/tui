@@ -62,6 +62,7 @@ type Screen struct {
 	runtimeTrayLoopID uuid.UUID
 	runtimeRoot       string
 	accessLabels      map[string]string
+	catalogAccess     AccessID
 	sessionBrowser    SessionBrowser
 	sessionTray       *components.SessionComplete
 	pendingResume     SessionID
@@ -178,8 +179,8 @@ func animCmd() tea.Cmd {
 	return tea.Tick(blinkInterval, func(t time.Time) tea.Msg { return animMsg(t) })
 }
 
-// hoverGlowInterval is the dedicated cadence of the one-shot hover light. Three 70ms
-// transitions produce a roughly 210ms ignition without changing the slower status shimmer.
+// hoverGlowInterval is the dedicated cadence of the one-shot hover light. One 70ms
+// transition switches directly to the settled link color without changing the slower status shimmer.
 const hoverGlowInterval = 70 * time.Millisecond
 
 type hoverGlowMsg struct{ epoch uint64 }
@@ -188,7 +189,9 @@ func hoverGlowCmd(epoch uint64) tea.Cmd {
 	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return hoverGlowMsg{epoch: epoch} })
 }
 
-const trayGlowFinalFrame = hoverGlowFinalFrame
+// trayGlowFinalFrame retains the completion tray's longer four-color background ignition;
+// link hover uses its independent two-color transition.
+const trayGlowFinalFrame uint = 3
 
 type trayGlowMsg struct{ epoch uint64 }
 
@@ -255,10 +258,9 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 	return m
 }
 
-// composerMinLines is the modern composer's default visible height — two rows
-// instead of the scrollback composer's one, so the input reads as a roomier panel while
-// still auto-growing to maxInputLines.
-const composerMinLines = 2
+// composerMinLines is the modern composer's default visible text height. One text row plus
+// the vertical padding keeps the empty panel compact while still auto-growing to maxInputLines.
+const composerMinLines = 1
 
 // composerPadV is the modern composer's inner vertical padding: 1 gray pad row above and below
 // the text, so the composer reads as a padded card matching the user-message card (padUserCard).
@@ -266,7 +268,7 @@ const composerMinLines = 2
 // it. Scrollback's composer keeps 0 (it never calls SetVerticalPadding), staying bare.
 const composerPadV = 1
 
-// styleComposer applies the MODERN composer treatment to in's input box — the 2-line
+// styleComposer applies the MODERN composer treatment to in's input box — the 1-line
 // default height, the gray panel fill (styles.PanelBg), and one inner vertical pad row above
 // and below the text (composerPadV, matching the user card) — and returns the updated model.
 // It runs at every site that
@@ -405,8 +407,12 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			m.runtimeRoot = msg.options.Root
 			m.accessLabels = make(map[string]string, len(msg.options.Choices))
+			m.catalogAccess = ""
 			for _, option := range msg.options.Choices {
 				m.accessLabels[string(option.ID)] = option.Label
+				if option.ID == msg.options.Current {
+					m.catalogAccess = option.ID
+				}
 			}
 		}
 		return m, nil
@@ -1891,6 +1897,11 @@ func (m Screen) bar() loopBar {
 	gated := m.interaction.pendingGateLoops()
 	active := m.effectiveActiveLoopID()
 	entries := activeBarEntries(infos, gated, m.focusedLoopID, active)
+	for i := range entries {
+		if state, ok := m.runtime.loop(entries[i].id); ok {
+			entries[i].mode = state.mode
+		}
+	}
 	return loopBar{
 		entries: entries,
 		focused: m.focusedLoopID,
@@ -1918,27 +1929,7 @@ func activeBarEntries(infos []loopInfo, gated map[uuid.UUID]bool, focused, activ
 // bottomBoxView renders the bottom box for the current interaction mode (the reused composer,
 // or a prompt control when a prompt is active) via the shared surface primitive.
 func (m Screen) bottomBoxView() string {
-	view := bottomBox(m.surfaceInputs())
-	if m.interaction.mode != modeCompose {
-		return view
-	}
-	state, ok := m.runtime.loop(m.focusedLoopID)
-	if !ok || state.mode == "" {
-		return view
-	}
-	lines := strings.Split(view, "\n")
-	if len(lines) == 0 || m.width <= 0 {
-		return view
-	}
-	label := "mode: " + string(state.mode)
-	rail := styles.AccentBarStyle.Render(styles.AccentBar)
-	available := max(0, m.width-lipgloss.Width(rail)-1)
-	if lipgloss.Width(label) > available {
-		label = truncate(label, available)
-	}
-	padding := max(0, available-lipgloss.Width(label))
-	lines[len(lines)-1] = rail + " " + strings.Repeat(" ", padding) + styles.StatusStyle.Render(label)
-	return strings.Join(lines, "\n")
+	return bottomBox(m.surfaceInputs())
 }
 
 // completionTrayView renders at most maxRows of the active compose-mode completion list at
@@ -2172,8 +2163,12 @@ func (m Screen) footer() loopFooter {
 	if name := strings.TrimSpace(m.banner.Name); name != "" {
 		parts = append(parts, name)
 	}
+	accessID := string(m.catalogAccess)
 	if m.runtime.hasAccess {
-		id := strconv.FormatUint(uint64(m.runtime.access), 10)
+		accessID = strconv.FormatUint(uint64(m.runtime.access), 10)
+	}
+	if accessID != "" {
+		id := accessID
 		label := m.accessLabels[id]
 		if label == "" {
 			label = "Access " + id
