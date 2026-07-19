@@ -2,7 +2,6 @@ package restore
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/looprig/harness/pkg/event"
 )
@@ -48,9 +47,4 @@ func formatChanges(cs []event.DriftChange) []string {
 		lines = append(lines, formatChange(c))
 	}
 	return lines
-}
-
-// joinChanges renders changes as a newline-joined block for direct display.
-func joinChanges(cs []event.DriftChange) string {
-	return strings.Join(formatChanges(cs), "\n")
 }

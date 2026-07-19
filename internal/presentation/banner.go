@@ -1,11 +1,16 @@
 package presentation
 
-import "strings"
+import (
+	"strings"
 
-// AgentBanner is the agent metadata shown as the startup info notice — its Name and
-// Description, threaded in at construction from the application composition root so the
-// Agent interface need not expose them. The zero value renders a name-less banner;
-// bannerText degrades gracefully when either field is empty.
+	"github.com/looprig/core/uuid"
+)
+
+// AgentBanner is the static agent metadata shown as the startup info notice. Name and
+// Description are threaded in at construction from the application composition root;
+// the session identity comes from the current Agent when the notice is committed. The
+// zero value renders a name-less banner; bannerText degrades gracefully when either
+// static field is empty.
 //
 // It lives in its own file (not the shell) because it is shared state on the embedded
 // sessionCore that BOTH the composition root and the presentation shell read — see
@@ -13,32 +18,24 @@ import "strings"
 type AgentBanner struct {
 	Name        string
 	Description string
-
-	// Greeting is the OPTIONAL, UI-only startup greeting (§5a): a deterministic, already-
-	// built capability description (composed by the composition root from the agent
-	// registry — never the model). When non-empty it is committed as a SECOND opening
-	// transcript notice, after the banner, by the systemReady handler. It is purely a
-	// rendered opening entry — NOT a turn, NOT a command, never in the model's context —
-	// so the active loop's history stays empty until the first real user message. Empty
-	// (the default-off case) → no greeting entry, behavior identical to today.
-	Greeting string
 }
 
-// bannerText renders the startup banner line from the agent metadata: "<Name> —
-// <Description>" when both are present, just the Name when the description is empty,
-// just the Description when the name is empty, and a neutral fallback when both are
-// empty (the notice still marks the session start). It degrades rather than emitting
-// a dangling separator.
-func (b AgentBanner) bannerText() string {
+// bannerText renders the startup notice from static agent metadata and the current
+// session identity. Its first line is "<Name> — <Description>" when both are present,
+// just the available field when one is empty, or a neutral fallback when both are
+// empty. The second line always identifies the session with its full UUID.
+func (b AgentBanner) bannerText(sessionID uuid.UUID) string {
 	name, desc := strings.TrimSpace(b.Name), strings.TrimSpace(b.Description)
+	var firstLine string
 	switch {
 	case name != "" && desc != "":
-		return name + " — " + desc
+		firstLine = name + " — " + desc
 	case name != "":
-		return name
+		firstLine = name
 	case desc != "":
-		return desc
+		firstLine = desc
 	default:
-		return "session ready"
+		firstLine = "session ready"
 	}
+	return firstLine + "\nSession: #" + sessionID.String()
 }

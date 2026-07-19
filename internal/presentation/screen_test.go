@@ -2445,8 +2445,8 @@ func TestModernAskUserDispatches(t *testing.T) {
 func TestModernClearReopensAndResubscribes(t *testing.T) {
 	t.Parallel()
 
-	old := &fakeAgent{activeLoopID: callID(1)}
-	fresh := &fakeAgent{activeLoopID: callID(2)}
+	old := &fakeAgent{sessionID: callID(0xA1), activeLoopID: callID(1)}
+	fresh := &fakeAgent{sessionID: callID(0xA2), activeLoopID: callID(2)}
 	m := newScreenSized(t, old, 80, 24)
 	m.banner = AgentBanner{Name: "CodeRig"}
 	m.openAgent = fakeOpen(fresh)
@@ -2475,8 +2475,11 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.ActiveLoopID())
 	}
 	committed := m.transcript.testCommitted()
-	if len(committed) != 1 || !strings.Contains(committedText(committed[0]), "CodeRig") {
-		t.Errorf("committed after clear = %+v, want exactly the fresh-session CodeRig banner", committed)
+	if len(committed) != 1 || !strings.Contains(committedText(committed[0]), "CodeRig") || !strings.Contains(committedText(committed[0]), "Session: #"+fresh.SessionID().String()) {
+		t.Errorf("committed after clear = %+v, want exactly the fresh-session CodeRig banner with session %s", committed, fresh.SessionID())
+	}
+	if strings.Contains(committedText(committed[0]), old.SessionID().String()) {
+		t.Errorf("committed after clear contains replaced session %s: %+v", old.SessionID(), committed)
 	}
 	if got := plainAll(m.viewport.lines); !strings.Contains(got, "CodeRig") {
 		t.Errorf("viewport after clear = %q, want fresh-session banner (replacement must not look blank)", got)

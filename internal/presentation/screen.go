@@ -598,22 +598,18 @@ func isCompactionTerminal(ev event.Event) bool {
 	}
 }
 
-// commitStartup commits the opening entries once per session: the startup banner (always)
-// and the OPTIONAL greeting (only when banner.Greeting is non-blank). Both go through the
-// plain info-notice path — they are rendered opening entries, NOT turns or commands (no
-// Submit, no loop, never in the model's context). Unlike Screen's held-tail dance, the
-// viewport simply renders these committed entries directly, so there is no startup surface
-// to manage.
+// commitStartup commits the opening banner once per session. It reads the identity from
+// the current agent at commit time, so a /clear replacement cannot display the prior
+// session's ID. The banner is a rendered opening entry, NOT a turn or command (no Submit,
+// no loop, never in model context). The viewport renders it directly, so there is no
+// separate startup surface to manage.
 func (m *Screen) commitStartup() {
 	if m.startupCommitted {
 		return
 	}
 	m.startupPending = false
 	m.startupCommitted = true
-	m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, m.banner.bannerText())
-	if greeting := strings.TrimSpace(m.banner.Greeting); greeting != "" {
-		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, greeting)
-	}
+	m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, m.banner.bannerText(m.agent.SessionID()))
 }
 
 // handleEvent delegates one subscription event to the shared core (which routes it
@@ -1666,7 +1662,7 @@ func (m *Screen) rerender() {
 // Non-tool entries take the unchanged per-entry path.
 //
 // MODERN-ONLY SPACING: one blank breathing-space row follows every committed entry (see
-// blankSeparator) — the opening banner/greeting included, so the first real message is not
+// blankSeparator) — the opening banner included, so the first real message is not
 // glued to the header — EXCEPT within a tool-call group (see intraTurnSeparator): an assistant
 // message and the (possibly parallel) tool calls it led are joined by a faint "│" rail connector
 // (railSeparator) instead of a blank, so the group reads as one continuous action rather than a

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,9 +25,12 @@ import (
 // agent so Run can build the TUI model and bound a teardown Close. Every method is a
 // benign no-op; Close records that teardown ran.
 type fakeAgent struct {
-	loopID uuid.UUID
-	closed *bool
+	sessionID uuid.UUID
+	loopID    uuid.UUID
+	closed    *bool
 }
+
+func (a *fakeAgent) SessionID() uuid.UUID { return a.sessionID }
 
 func (a *fakeAgent) Submit(context.Context, []content.Block) (uuid.UUID, error) {
 	return uuid.UUID{}, nil
@@ -190,6 +194,13 @@ func TestBannerAgentBanner(t *testing.T) {
 				t.Errorf("agentBanner() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBannerHasNoGreetingField(t *testing.T) {
+	t.Parallel()
+	if _, ok := reflect.TypeOf(Banner{}).FieldByName("Greeting"); ok {
+		t.Fatal("runtime.Banner still exposes removed Greeting field")
 	}
 }
 

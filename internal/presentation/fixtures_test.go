@@ -39,6 +39,10 @@ var _ Agent = (*fakeAgent)(nil)
 // configured reader/error/bool so shell behavior can be exercised without a real
 // session.
 type fakeAgent struct {
+	// sessionID is the durable session identity rendered in the startup banner.
+	// A zero value falls back to fixedFakeSessionID for tests unrelated to identity.
+	sessionID uuid.UUID
+
 	// submit recorder: a configured id/error is returned, and the last call's
 	// blocks are captured so a test can assert the wrapper forwarded them. When
 	// submitID is zero it defaults to a fixed deterministic id so callers always get
@@ -133,6 +137,14 @@ type fakeAgent struct {
 // fixedFakeSubmitID is the deterministic InputID a fakeAgent returns when no
 // submitID is configured, so a test always gets a non-zero correlation id.
 var fixedFakeSubmitID = uuid.UUID{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00}
+var fixedFakeSessionID = uuid.UUID{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x47, 0x28, 0x89, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30}
+
+func (f *fakeAgent) SessionID() uuid.UUID {
+	if f.sessionID.IsZero() {
+		return fixedFakeSessionID
+	}
+	return f.sessionID
+}
 
 func (f *fakeAgent) Submit(_ context.Context, blocks []content.Block) (uuid.UUID, error) {
 	f.submitCalled = true

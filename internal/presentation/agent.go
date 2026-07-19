@@ -22,6 +22,10 @@ type EventStream = event.Subscription
 // Agent is the narrow surface the TUI drives. *coding.Coding satisfies it
 // structurally; the TUI never imports any agent package.
 type Agent interface {
+	// SessionID returns the durable, non-zero identity of the current session.
+	// The startup banner reads it directly so a restored or /clear-replaced agent
+	// always displays its own session rather than stale composition metadata.
+	SessionID() uuid.UUID
 	// Submit sends input fire-and-forget as a queueable UserInput; the returned
 	// InputID correlates the Reply events (Cause.CommandID) that report the outcome.
 	// It targets the session's ACTIVE loop — the currently selected default input
