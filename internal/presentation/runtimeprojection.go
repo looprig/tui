@@ -43,10 +43,10 @@ func (p runtimeProjection) loop(id uuid.UUID) (loopRuntimeState, bool) {
 }
 
 func (p runtimeProjection) ApplyEvent(ev event.Event) runtimeProjection {
-	if _, ok := ev.(event.ActiveLoopChanged); ok {
-		return p
-	}
-
+	// ActiveLoopChanged is a session-scoped selection event, not a runtime/topology change:
+	// it carries no per-loop runtime this projection folds. It is intentionally ignored — the
+	// switch below has no case for it, so it leaves the projection unchanged with no explicit
+	// early return.
 	loopID := ev.EventHeader().LoopID
 	if loopID.IsZero() {
 		return p

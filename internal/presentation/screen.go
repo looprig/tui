@@ -61,9 +61,12 @@ type Screen struct {
 	runtimeTrayKind   runtimeTrayKind
 	runtimeTrayLoopID uuid.UUID
 	// presentation is the synchronous, consumer-supplied session metadata (workspace,
-	// fixed access profile, permission diagnostics). It is captured once at construction
-	// and persists across a /clear handoff; the footer displays it and commitStartup
-	// commits its diagnostics before any gate can arrive.
+	// fixed access profile, permission diagnostics). It is captured at construction; the
+	// footer displays it and commitStartup commits its diagnostics before any gate can
+	// arrive. On a reopen it is refreshed from the replacement Agent (SessionPresenter) so a
+	// cross-session browser resume shows the RESUMED session's context — see
+	// handleReopenResult. A /clear reopen (same session family) retains it when the Agent
+	// supplies none; a browser resume clears it, so a stale context is never displayed.
 	presentation   SessionPresentation
 	sessionBrowser SessionBrowser
 	sessionTray    *components.SessionComplete
@@ -981,6 +984,20 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	// true. Carrying the old readings over would render a closed session's servers
 	// as live until something contradicted them.
 	m.integrations = newIntegrationProjection()
+	// Refresh the security-context presentation (fixed profile, workspace, pre-gate
+	// diagnostics) for the replacement session. A cross-session browser resume can land on
+	// a DIFFERENT workspace root and DIFFERENT fixed access profile, so the footer and the
+	// diagnostics commitStartup re-commits below MUST reflect the RESUMED session, never the
+	// prior one. The replacement Agent is the authority: if it implements SessionPresenter it
+	// supplies its own presentation (the CodeRig Phase 5 contract). If it does not, fail safe
+	// per path — clear on a cross-session resume (show nothing, never a different session's
+	// context) but retain on a /clear reopen, which is the same session family (same
+	// workspace + fixed profile) and whose construction-time value is still correct.
+	if presenter, ok := m.agent.(SessionPresenter); ok {
+		m.presentation = presenter.SessionPresentation()
+	} else if m.resuming {
+		m.presentation = SessionPresentation{}
+	}
 	m.resuming = false
 	m.collapse = newCollapseState()
 	m.viewport = viewportModel{atTail: true}

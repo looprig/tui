@@ -30,6 +30,7 @@ type (
 	EffortOption        = presentation.EffortOption
 	LoopRuntimeOptions  = presentation.LoopRuntimeOptions
 	SessionPresentation = presentation.SessionPresentation
+	SessionPresenter    = presentation.SessionPresenter
 	SessionID           = presentation.SessionID
 	SessionSummary      = presentation.SessionSummary
 	SessionBrowser      = presentation.SessionBrowser

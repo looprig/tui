@@ -4,9 +4,12 @@ import "strings"
 
 // SessionPresentation is the synchronous, consumer-supplied session metadata the TUI
 // displays. The TUI never queries it asynchronously and never infers it from events:
-// the composition root (CodeRig) fills it at screen construction and re-supplies it on
-// a session handoff, because the workspace, the fixed access profile, and the
-// permission diagnostics are known before the session runs a single turn.
+// the composition root (CodeRig) fills it at screen construction (WithSessionPresentation)
+// and, on a reopen, the TUI refreshes it from the replacement Agent via SessionPresenter,
+// because the workspace, the fixed access profile, and the permission diagnostics are known
+// before the session runs a single turn. A cross-session browser resume therefore displays
+// the RESUMED session's context, not the prior one (see SessionPresenter and
+// handleReopenResult).
 //
 //   - WorkspaceRoot is the session's workspace path, shown in the footer metadata.
 //   - ProfileName is the FIXED access profile's display name. It is shown as session
@@ -45,6 +48,28 @@ func (p SessionPresentation) diagnostics() []string {
 		}
 	}
 	return out
+}
+
+// SessionPresenter is the OPTIONAL capability a reopened or resumed Agent implements to
+// supply its OWN SessionPresentation, so the reopen path can refresh the footer + pre-gate
+// permission diagnostics to the REPLACEMENT session's security context instead of retaining
+// the prior session's. It mirrors the RuntimeCatalog/RuntimeController optional-interface
+// pattern: the Screen detects it on the swapped Agent by type assertion.
+//
+// CONTRACT (CodeRig Phase 5 fills this): the composition root's agent implements
+// SessionPresentation() returning the session's fixed access profile name, workspace root,
+// and any manual out-of-catalog permission diagnostics — the same values it would pass to
+// WithSessionPresentation at construction, but read from the RESUMED session. A cross-session
+// browser resume may land on a session with a DIFFERENT workspace root and DIFFERENT fixed
+// profile, so this is the authority for the resumed session's displayed security context.
+//
+// An Agent that does NOT implement it degrades safely: a cross-session browser resume CLEARS
+// the presentation (empty ⇒ show nothing, never a different session's context), while a
+// /clear reopen (same session family, same workspace + fixed profile) retains the
+// construction-time value, which is still correct. Showing nothing is acceptable; showing a
+// different session's security context is not.
+type SessionPresenter interface {
+	SessionPresentation() SessionPresentation
 }
 
 // WithSessionPresentation supplies the synchronous session metadata (workspace, fixed
