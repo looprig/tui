@@ -7,12 +7,11 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/loop"
-	"github.com/looprig/harness/pkg/security"
 	contextcount "github.com/looprig/inference/contextcount"
 	model "github.com/looprig/inference/model"
 )
 
-func TestRuntimeProjectionFoldsAuthoritativeLoopAndAccessEvents(t *testing.T) {
+func TestRuntimeProjectionFoldsAuthoritativeLoopEvents(t *testing.T) {
 	t.Parallel()
 
 	loopID := callID(1)
@@ -70,7 +69,6 @@ func TestRuntimeProjectionFoldsAuthoritativeLoopAndAccessEvents(t *testing.T) {
 		Header:      event.Header{Coordinates: identity.Coordinates{LoopID: loopID}},
 		Measurement: measurement,
 	})
-	projection = projection.ApplyEvent(event.SecurityLimitChanged{Level: security.Level(3)})
 	projection = projection.ApplyEvent(event.LoopIdle{Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}})
 
 	state, _ = projection.loop(loopID)
@@ -82,9 +80,6 @@ func TestRuntimeProjectionFoldsAuthoritativeLoopAndAccessEvents(t *testing.T) {
 	}
 	if state.live {
 		t.Fatal("LoopIdle left loop live")
-	}
-	if !projection.hasAccess || projection.access != security.Level(3) {
-		t.Fatalf("access = (%v, %v), want (3, true)", projection.access, projection.hasAccess)
 	}
 
 	projection = projection.ApplyEvent(event.LoopInferenceChanged{

@@ -7,7 +7,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // TestFoldDisplay covers the exported displayed-projection fold: it folds a primary
@@ -48,7 +47,7 @@ func TestFoldDisplay(t *testing.T) {
 			name: "pending permission gate counts as a pending prompt",
 			events: []event.Event{
 				event.TurnStarted{Header: hdr, Message: user("q")},
-				event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}},
+				event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: bashPermission("ls")},
 			},
 			wantCommittedLen: 1, // the user row; the gate surfaces on the (uncommitted) tool card, not a record
 			wantPending:      1,

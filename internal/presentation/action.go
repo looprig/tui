@@ -5,7 +5,6 @@ import (
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/gate"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // uiActionKind tags a uiAction. It is a closed enum: the interactionModel
@@ -23,9 +22,11 @@ const (
 	uiSubmit
 	// uiRunSlash carries a known slash command name in Slash for Screen to dispatch.
 	uiRunSlash
-	// uiApprove resolves a permission gate (ToolExecutionID) at Scope. (Produced in Task 8.)
+	// uiApprove resolves a permission gate (ToolExecutionID) with the chosen approval
+	// action (Approval) — gate.ApprovalApprove (once, persists nothing) or
+	// gate.ApprovalApproveAlwaysWorkspace (persists the displayed candidate rules).
 	uiApprove
-	// uiDeny resolves a permission gate (ToolExecutionID) fail-secure. (Produced in Task 8.)
+	// uiDeny resolves a permission gate (ToolExecutionID) fail-secure (gate.ApprovalDeny).
 	uiDeny
 	// uiAnswer supplies the AskUser reply Text for the gate ToolExecutionID. (Task 8.)
 	uiAnswer
@@ -56,9 +57,9 @@ type uiAction struct {
 	// on the pending prompt from its request event's Header.LoopID), not
 	// unconditionally to the active loop. Zero for non-gate actions.
 	LoopID          uuid.UUID
-	ToolExecutionID uuid.UUID          // uiApprove / uiDeny / uiAnswer target gate
-	Scope           tool.ApprovalScope // uiApprove persistence breadth
-	Slash           string             // uiRunSlash command name (e.g. "/help")
+	ToolExecutionID uuid.UUID           // uiApprove / uiDeny / uiAnswer target gate
+	Approval        gate.ApprovalAction // uiApprove decision (Approve / Approve always for this workspace)
+	Slash           string              // uiRunSlash command name (e.g. "/help")
 
 	// GateID is the uiGateRespond target gate.
 	GateID gate.ID

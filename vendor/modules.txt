@@ -222,7 +222,6 @@ github.com/looprig/harness/pkg/hustle
 github.com/looprig/harness/pkg/identity
 github.com/looprig/harness/pkg/journal
 github.com/looprig/harness/pkg/loop
-github.com/looprig/harness/pkg/security
 github.com/looprig/harness/pkg/session
 github.com/looprig/harness/pkg/sessionstore
 github.com/looprig/harness/pkg/tool

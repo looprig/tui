@@ -13,7 +13,6 @@ import (
 type ModeID string
 type ModelID string
 type EffortID string
-type AccessID string
 
 type ModeOption struct {
 	ID          ModeID
@@ -36,42 +35,29 @@ type EffortOption struct {
 	Aliases     []string
 }
 
-type AccessOption struct {
-	ID          AccessID
-	Label       string
-	Description string
-	Aliases     []string
-}
-
 // LoopRuntimeOptions contains available choices only. Current mode, model, and
 // effort are authoritative event projections and deliberately do not live here.
+//
+// Access is deliberately absent: the access profile is FIXED for the session and
+// supplied synchronously as SessionPresentation, never a mutable runtime control.
 type LoopRuntimeOptions struct {
 	Modes   []ModeOption
 	Models  []ModelOption
 	Efforts []EffortOption
 }
 
-// AccessOptions contains the session-scoped available access choices, the current
-// selection, and the display-only workspace root. Current seeds presentation before an
-// enduring access-change event exists; later events remain authoritative.
-type AccessOptions struct {
-	Root    string
-	Current AccessID
-	Choices []AccessOption
-}
-
 // RuntimeCatalog is the optional read-only runtime-choice capability of an Agent.
 type RuntimeCatalog interface {
 	LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error)
-	AccessOptions(context.Context) (AccessOptions, error)
 }
 
 // RuntimeController is the optional typed runtime-mutation capability of an Agent.
+// It mutates only per-loop inference controls; the access profile is fixed and has
+// no setter.
 type RuntimeController interface {
 	SetMode(context.Context, uuid.UUID, ModeID) error
 	SetModel(context.Context, uuid.UUID, ModelID) error
 	SetEffort(context.Context, uuid.UUID, EffortID) error
-	SetAccess(context.Context, AccessID) error
 }
 
 type runtimeTrayKind uint8
@@ -81,14 +67,12 @@ const (
 	runtimeTrayMode
 	runtimeTrayModel
 	runtimeTrayEffort
-	runtimeTrayAccess
 )
 
 type runtimeChoicesMsg struct {
 	kind   runtimeTrayKind
 	loopID uuid.UUID
 	items  []components.ValueItem
-	root   string
 	err    error
 }
 
@@ -97,35 +81,13 @@ type runtimeMutationMsg struct {
 	err  error
 }
 
-type accessMetadataMsg struct {
-	options AccessOptions
-	err     error
-}
-
 const runtimeControlTimeout = 5 * time.Second
-
-func queryAccessMetadata(ctx context.Context, catalog RuntimeCatalog) tea.Cmd {
-	return func() tea.Msg {
-		c, cancel := context.WithTimeout(ctx, runtimeControlTimeout)
-		defer cancel()
-		options, err := catalog.AccessOptions(c)
-		return accessMetadataMsg{options: options, err: err}
-	}
-}
 
 func queryRuntimeChoices(ctx context.Context, catalog RuntimeCatalog, kind runtimeTrayKind, loopID uuid.UUID) tea.Cmd {
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx, runtimeControlTimeout)
 		defer cancel()
 		msg := runtimeChoicesMsg{kind: kind, loopID: loopID}
-		if kind == runtimeTrayAccess {
-			options, err := catalog.AccessOptions(c)
-			msg.err, msg.root = err, options.Root
-			for _, option := range options.Choices {
-				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases})
-			}
-			return msg
-		}
 		options, err := catalog.LoopRuntimeOptions(c, loopID)
 		msg.err = err
 		switch kind {
@@ -158,8 +120,6 @@ func mutateRuntime(ctx context.Context, controller RuntimeController, kind runti
 			err = controller.SetModel(c, loopID, ModelID(id))
 		case runtimeTrayEffort:
 			err = controller.SetEffort(c, loopID, EffortID(id))
-		case runtimeTrayAccess:
-			err = controller.SetAccess(c, AccessID(id))
 		default:
 			err = fmt.Errorf("unknown runtime control")
 		}

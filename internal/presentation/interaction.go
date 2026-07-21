@@ -8,7 +8,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/components"
 	inputpkg "github.com/looprig/tui/internal/input"
 )
@@ -494,10 +493,13 @@ func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, 
 	return m, noop
 }
 
-// permissionKey routes a key in modePermissionPrompt (head is a promptPermission).
-// y/s/w approve at once/session/workspace but ONLY when the head offers that
-// scope (else a no-op); n or esc deny (fail-secure); any other key re-renders.
-// An approve/deny resolves the head, so it pops optimistically.
+// permissionKey routes a key in modePermissionPrompt (head is the ONE combined
+// tool-preparation approval prompt). It offers exactly the three gate.ApprovalControls
+// actions: y approves (gate.ApprovalApprove), a approves-always-for-this-workspace
+// (gate.ApprovalApproveAlwaysWorkspace, persisting the displayed candidates), and n or
+// esc deny fail-secure (gate.ApprovalDeny). There is no session scope, user-global
+// scope, or per-capability sub-prompt. An approve/deny resolves the head, so it pops
+// optimistically; any other key re-renders.
 func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
 	head := *m.ActivePrompt()
 	if msg.Code == tea.KeyEsc {
@@ -505,24 +507,13 @@ func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, 
 	}
 	switch msg.Code {
 	case 'y':
-		return m.approveAt(head, tool.ScopeOnce)
-	case 's':
-		return m.approveAt(head, tool.ScopeSession)
-	case 'w':
-		return m.approveAt(head, tool.ScopeWorkspace)
+		return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Approval: gate.ApprovalApprove}
+	case 'a':
+		return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Approval: gate.ApprovalApproveAlwaysWorkspace}
 	case 'n':
 		return m.pop(), uiAction{Kind: uiDeny, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID}
 	}
 	return m, noop
-}
-
-// approveAt approves head at scope when the head offers it (pop + uiApprove),
-// otherwise it is a no-op (the key names a scope the request never granted).
-func (m interactionModel) approveAt(head prompt, scope tool.ApprovalScope) (interactionModel, uiAction) {
-	if !head.offersScope(scope) {
-		return m, noop
-	}
-	return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Scope: scope}
 }
 
 // choiceKey routes a key in modeChoicePrompt (head is a promptUserInput with

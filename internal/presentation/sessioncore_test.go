@@ -11,8 +11,8 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // newTestCore builds a sessionCore over agent (with a fresh /clear thunk yielding the
@@ -49,7 +49,7 @@ func TestSessionCoreHandleEventRoutesToBothReducers(t *testing.T) {
 		{
 			name:            "permission request enqueues prompt and remembers the gate",
 			withSub:         true,
-			ev:              event.PermissionRequested{ToolExecutionID: callID(1), Request: tool.BashRequest{Command: "ls"}},
+			ev:              event.PermissionRequested{ToolExecutionID: callID(1), Request: bashPermission("ls")},
 			wantPending:     1,
 			wantRearm:       true,
 			wantGatePending: true,
@@ -322,7 +322,7 @@ func TestSessionCoreMapAction(t *testing.T) {
 		// Remember the gate first so ResolveGate has a pending decision to flip.
 		p := c.transcript.ensureProjection(callID(9))
 		p.live.gateDecisions = map[uuid.UUID]gateDecision{callID(7): gatePending}
-		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: callID(9), ToolExecutionID: callID(7), Scope: tool.ScopeOnce})
+		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: callID(9), ToolExecutionID: callID(7), Approval: gate.ApprovalApprove})
 		if present {
 			t.Error("present = true, want false (a gate reply commits no scrollback entry)")
 		}
@@ -333,9 +333,9 @@ func TestSessionCoreMapAction(t *testing.T) {
 			t.Fatal("approve cmd = nil, want approveCmd")
 		}
 		cmd()
-		if !agent.approveCalled || agent.lastLoopID != callID(9) || agent.lastCallID != callID(7) || agent.lastScope != tool.ScopeOnce {
-			t.Errorf("Approve dispatch = (called %v, loop %v, id %v, scope %v), want (true, %v, %v, ScopeOnce)",
-				agent.approveCalled, agent.lastLoopID, agent.lastCallID, agent.lastScope, callID(9), callID(7))
+		if !agent.approveCalled || agent.lastLoopID != callID(9) || agent.lastCallID != callID(7) || agent.lastApproval != gate.ApprovalApprove {
+			t.Errorf("Approve dispatch = (called %v, loop %v, id %v, action %v), want (true, %v, %v, Approve)",
+				agent.approveCalled, agent.lastLoopID, agent.lastCallID, agent.lastApproval, callID(9), callID(7))
 		}
 	})
 
@@ -377,7 +377,7 @@ func TestSessionCoreMapAction(t *testing.T) {
 			Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopB}}, ToolExecutionID: sharedCall,
 		})
 
-		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: loopB, ToolExecutionID: sharedCall, Scope: tool.ScopeOnce})
+		cmd, present := c.mapAction(uiAction{Kind: uiApprove, LoopID: loopB, ToolExecutionID: sharedCall, Approval: gate.ApprovalApprove})
 		if present {
 			t.Fatal("present = true, want false")
 		}
@@ -872,6 +872,6 @@ func drainStream(t *testing.T, c *sessionCore, s *fakeSubscription) {
 // can assert /clear clears it. It routes a PermissionRequested through the core exactly
 // as the live path would.
 func feedPrompt(c sessionCore) sessionCore {
-	c.interaction = c.interaction.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(5), Request: tool.BashRequest{Command: "x"}})
+	c.interaction = c.interaction.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(5), Request: bashPermission("x")})
 	return c
 }

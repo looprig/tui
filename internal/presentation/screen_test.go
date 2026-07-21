@@ -16,8 +16,8 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/components"
 	"github.com/looprig/tui/styles"
 )
@@ -2040,7 +2040,7 @@ func TestModernRestoreReplaysBufferedPromptsAndPreservesDraft(t *testing.T) {
 	m.interaction.input.SetValue("half-written draft")
 	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
 
-	m = feed(t, m, event.PermissionRequested{Header: hdr(loopID), ToolExecutionID: permissionID, Request: tool.BashRequest{Command: "ls"}})
+	m = feed(t, m, event.PermissionRequested{Header: hdr(loopID), ToolExecutionID: permissionID, Request: bashPermission("ls")})
 	m = feed(t, m, event.UserInputRequested{Header: hdr(loopID), ToolExecutionID: questionID, Question: "Continue?"})
 	m = feedRestored(t, m, msg)
 
@@ -2137,7 +2137,7 @@ func TestModernBarGateMarker(t *testing.T) {
 	}
 	focusBefore := m.focusedLoopID
 
-	m = feed(t, m, event.PermissionRequested{Header: hdr(subA), ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}})
+	m = feed(t, m, event.PermissionRequested{Header: hdr(subA), ToolExecutionID: callID(7), Request: bashPermission("ls")})
 
 	if m.focusedLoopID != focusBefore {
 		t.Errorf("prompt-open stole focus: %v -> %v (must not steal)", focusBefore, m.focusedLoopID)
@@ -2249,7 +2249,7 @@ func TestModernSubmitRoutesToFocusedLoop(t *testing.T) {
 				m = feed(t, m, event.PermissionRequested{
 					Header:          hdr(primary),
 					ToolExecutionID: gateCall,
-					Request:         tool.BashRequest{Command: "ls"},
+					Request:         bashPermission("ls"),
 				})
 				return updateScreen(t, m, runeKey('y'))
 			},
@@ -2297,14 +2297,14 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		key         tea.KeyPressMsg
-		wantApprove bool
-		wantDeny    bool
-		wantScope   tool.ApprovalScope
+		name         string
+		key          tea.KeyPressMsg
+		wantApprove  bool
+		wantDeny     bool
+		wantApproval gate.ApprovalAction
 	}{
-		{name: "y approves once", key: runeKey('y'), wantApprove: true, wantScope: tool.ScopeOnce},
-		{name: "s approves session", key: runeKey('s'), wantApprove: true, wantScope: tool.ScopeSession},
+		{name: "y approves", key: runeKey('y'), wantApprove: true, wantApproval: gate.ApprovalApprove},
+		{name: "a approves always for this workspace", key: runeKey('a'), wantApprove: true, wantApproval: gate.ApprovalApproveAlwaysWorkspace},
 		{name: "n denies", key: runeKey('n'), wantDeny: true},
 		{name: "esc denies", key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantDeny: true},
 	}
@@ -2322,7 +2322,7 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 			m = feed(t, m, event.PermissionRequested{
 				Header:          hdr(gateLoop),
 				ToolExecutionID: callID(7),
-				Request:         tool.BashRequest{Command: "ls"},
+				Request:         bashPermission("ls"),
 			})
 
 			// The bottom box renders the permission control, and the gated loop is marked.
@@ -2349,8 +2349,8 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 				if !agent.approveCalled {
 					t.Error("Approve not called")
 				}
-				if agent.lastScope != tt.wantScope {
-					t.Errorf("Approve scope = %v, want %v", agent.lastScope, tt.wantScope)
+				if agent.lastApproval != tt.wantApproval {
+					t.Errorf("Approve action = %v, want %v", agent.lastApproval, tt.wantApproval)
 				}
 			}
 			if tt.wantDeny && !agent.denyCalled {

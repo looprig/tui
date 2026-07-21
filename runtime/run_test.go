@@ -17,7 +17,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui"
 )
 
@@ -48,7 +47,7 @@ func (a *fakeAgent) ReplayBacklog(context.Context) ([]event.Event, error) {
 	return nil, nil
 }
 func (a *fakeAgent) Subscribe(event.EventFilter) (tui.EventStream, error) { return nil, nil }
-func (a *fakeAgent) Approve(context.Context, uuid.UUID, uuid.UUID, tool.ApprovalScope) error {
+func (a *fakeAgent) Approve(context.Context, uuid.UUID, uuid.UUID, gate.ApprovalAction) error {
 	return nil
 }
 func (a *fakeAgent) Deny(context.Context, uuid.UUID, uuid.UUID) error { return nil }

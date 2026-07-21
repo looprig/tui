@@ -14,7 +14,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // blinkInterval is the cadence of the live-surface animation tick: the streaming
@@ -139,12 +138,13 @@ type promptResultMsg struct{ err error }
 // approveCmd issues a bounded Approve for a pending permission gate and reports the
 // result, so Update never blocks on the session resolving the gate. loopID is the
 // gate-opening loop (so the reply is dispatched there); callID identifies the gate;
-// scope is the chosen persistence breadth.
-func approveCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID, scope tool.ApprovalScope) tea.Cmd {
+// action is the chosen approve decision (gate.ApprovalApprove or
+// gate.ApprovalApproveAlwaysWorkspace).
+func approveCmd(ctx context.Context, agent Agent, loopID, callID uuid.UUID, action gate.ApprovalAction) tea.Cmd {
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx, promptDispatchTimeout)
 		defer cancel()
-		return promptResultMsg{err: agent.Approve(c, loopID, callID, scope)}
+		return promptResultMsg{err: agent.Approve(c, loopID, callID, action)}
 	}
 }
 

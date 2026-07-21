@@ -8,7 +8,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // EventStream is the narrow consumer-facing handle the TUI reads whole-session
@@ -73,12 +72,15 @@ type Agent interface {
 	// the live 256-cap hub buffer. ctx bounds the read.
 	ReplayBacklog(ctx context.Context) ([]event.Event, error)
 
-	// Approve resolves a pending tool-call permission gate, granting it at the
-	// chosen persistence scope. loopID is the loop that opened the gate (the
+	// Approve resolves a pending tool-call permission gate with one of the two
+	// approve actions — gate.ApprovalApprove (once, persists nothing) or
+	// gate.ApprovalApproveAlwaysWorkspace (atomically persists the displayed reusable
+	// rule candidates before execution). loopID is the loop that opened the gate (the
 	// PermissionRequested event's Header.LoopID) so the reply is dispatched to the
 	// right loop in a multi-loop session; callID identifies the gate. The agent
-	// wrapper delegates to its session.
-	Approve(ctx context.Context, loopID, callID uuid.UUID, scope tool.ApprovalScope) error
+	// wrapper delegates to its session; the action string is exactly one the gate's
+	// controls advertised, which the session validates.
+	Approve(ctx context.Context, loopID, callID uuid.UUID, action gate.ApprovalAction) error
 	// Deny resolves a pending tool-call permission gate by failing it closed
 	// (fail-secure); nothing is persisted. loopID names the gate-opening loop so the
 	// reply reaches the right loop. The wrapper delegates to its session.

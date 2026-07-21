@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/gate"
 )
 
 // styledCursor matches the ▸ selection cursor immediately preceded by an SGR escape —
@@ -48,80 +48,82 @@ func assertPanelFramed(t *testing.T, got string) {
 	}
 }
 
-// TestRenderPermissionBox covers the permission card: a blue-panel box with a
-// bold "Approve <ToolName>?" title, the request description as its body, and a footer
-// row of key hints that shows ONLY the scope keys the request offers — [y] once iff
-// ScopeOnce, [s] session iff ScopeSession, [w] workspace iff ScopeWorkspace — plus
-// [n] deny ALWAYS. (+N more pending) appears when the queue is deeper than one. The
-// scope-hint plain text is preserved so key-routing tests that read the control still
-// match — only the framing changed.
-func TestRenderPermissionBox(t *testing.T) {
+// TestRenderPermissionBoxCombinedMultiCapability is the headline render test: ONE
+// blue-panel prompt shows EVERY unmet requirement and EVERY exact persisted candidate,
+// and offers EXACTLY the three gate.ApprovalControls actions (Approve / Approve always
+// for this workspace / Deny) — no session scope, no user-global scope, no per-capability
+// sub-prompt. The three footer labels are asserted against the gate.ApprovalAction
+// values so the control set can never drift.
+func TestRenderPermissionBoxCombinedMultiCapability(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		req         tool.PermissionRequest
-		pending     int
-		wantContain []string
-		wantAbsent  []string
-	}{
-		{
-			name:        "bash offers all scopes plus deny",
-			req:         tool.BashRequest{Command: "go build"},
-			pending:     1,
-			wantContain: []string{"Approve Bash?", "go build", "[y] once", "[s] session", "[w] workspace", "[n] deny"},
-			wantAbsent:  []string{"more pending"},
-		},
-		{
-			name:        "fetch shows method and url",
-			req:         tool.FetchRequest{Method: "GET", URL: "https://google.com"},
-			pending:     1,
-			wantContain: []string{"Approve Fetch?", "GET https://google.com", "[y] once", "[s] session", "[w] workspace", "[n] deny"},
-			wantAbsent:  []string{"more pending"},
-		},
-		{
-			name:        "unknown offers only once and deny",
-			req:         tool.UnknownRequest{Tool: "Mystery", Summary: "does a thing"},
-			pending:     1,
-			wantContain: []string{"Approve Mystery?", "does a thing", "[y] once", "[n] deny"},
-			wantAbsent:  []string{"[s] session", "[w] workspace"},
-		},
-		{
-			name:        "more pending hint when queue deeper than one",
-			req:         tool.BashRequest{Command: "rm -rf /"},
-			pending:     3,
-			wantContain: []string{"Approve Bash?", "(+2 more pending)"},
-			wantAbsent:  []string{},
-		},
-		{
-			name:        "single pending shows no hint",
-			req:         tool.FileWriteRequest{Path: "/tmp/x"},
-			pending:     1,
-			wantContain: []string{"Approve WriteFile?", "[y] once"},
-			wantAbsent:  []string{"more pending"},
-		},
+	// Three unmet requirements, each with its exact persisted rule candidates — all in
+	// ONE prompt.
+	req := toolRequest("Bash", "run the release pipeline",
+		requirement("execute /bin/release", "always allow /bin/release"),
+		requirement("write /etc/hosts", "always allow writes under /etc"),
+		requirement("connect api.example.com:443", "always allow api.example.com:443"),
+	)
+	p := promptFromPermission(callID(1), req)
+	rendered := renderPermissionBox(p, 100, 1)
+	got := stripANSI(rendered)
+
+	assertPanelFramed(t, rendered)
+
+	// Header + summary + every requirement + every candidate, all in the single prompt.
+	wantContain := []string{
+		"Approve Bash?", "run the release pipeline",
+		"execute /bin/release", "always allow /bin/release",
+		"write /etc/hosts", "always allow writes under /etc",
+		"connect api.example.com:443", "always allow api.example.com:443",
+	}
+	for _, sub := range wantContain {
+		if !strings.Contains(got, sub) {
+			t.Errorf("combined prompt missing %q in:\n%s", sub, got)
+		}
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	// EXACTLY the three approval actions, by their exact gate.ApprovalAction strings.
+	for _, action := range []gate.ApprovalAction{gate.ApprovalApprove, gate.ApprovalApproveAlwaysWorkspace, gate.ApprovalDeny} {
+		if !strings.Contains(got, string(action)) {
+			t.Errorf("footer missing exact approval action %q in:\n%s", action, got)
+		}
+	}
+	// No legacy scope affordances survive.
+	for _, gone := range []string{"once", "session", "workspace level", "[s] ", "[w] "} {
+		if strings.Contains(got, gone) {
+			t.Errorf("combined prompt still shows removed scope affordance %q in:\n%s", gone, got)
+		}
+	}
+	// The keys the router binds.
+	for _, key := range []string{"[y]", "[a]", "[n]"} {
+		if !strings.Contains(got, key) {
+			t.Errorf("footer missing key %q in:\n%s", key, got)
+		}
+	}
+}
 
-			p := promptFromPermission(callID(1), tt.req)
-			rendered := renderPermissionBox(p, 80, tt.pending)
-			got := stripANSI(rendered)
+// TestRenderPermissionBoxPendingAndPure covers the (+N more pending) note and a pure
+// tool with no requirements (header + three actions only).
+func TestRenderPermissionBoxPendingAndPure(t *testing.T) {
+	t.Parallel()
 
-			assertPanelFramed(t, rendered)
-			for _, sub := range tt.wantContain {
-				if !strings.Contains(got, sub) {
-					t.Errorf("renderPermissionBox missing %q in:\n%s", sub, got)
-				}
-			}
-			for _, sub := range tt.wantAbsent {
-				if sub != "" && strings.Contains(got, sub) {
-					t.Errorf("renderPermissionBox unexpectedly contains %q in:\n%s", sub, got)
-				}
-			}
-		})
+	deep := renderPermissionBox(promptFromPermission(callID(1), bashPermission("rm -rf /")), 80, 3)
+	if got := stripANSI(deep); !strings.Contains(got, "Approve Bash?") || !strings.Contains(got, "(+2 more pending)") {
+		t.Errorf("deep-queue prompt = %q, want header + (+2 more pending)", got)
+	}
+
+	pure := renderPermissionBox(promptFromPermission(callID(2), toolRequest("Mystery", "does a thing")), 80, 1)
+	got := stripANSI(pure)
+	assertPanelFramed(t, pure)
+	if !strings.Contains(got, "Approve Mystery?") || !strings.Contains(got, "does a thing") {
+		t.Errorf("pure-tool prompt = %q, want header + summary", got)
+	}
+	if strings.Contains(got, "more pending") {
+		t.Errorf("single-pending prompt unexpectedly shows a pending note in:\n%s", got)
+	}
+	if !strings.Contains(got, string(gate.ApprovalApprove)) || !strings.Contains(got, string(gate.ApprovalDeny)) {
+		t.Errorf("pure-tool prompt missing the approval actions in:\n%s", got)
 	}
 }
 

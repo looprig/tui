@@ -11,7 +11,7 @@ import (
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
-	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/harness/pkg/gate"
 )
 
 // TestSubNext covers the continuous reader: each staged event is delivered as an
@@ -510,9 +510,9 @@ func TestCloseAgent(t *testing.T) {
 // printAction type were exclusive to that shell's native-scrollback flush and were
 // archived alongside it (see ../archive/cli-oldscreen).
 
-// TestApproveCmd covers the bounded approve dispatch: every allowed scope is
-// forwarded verbatim with the call ID, and a configured error surfaces on the
-// result msg (non-fatal). errScope is a sentinel for the error path.
+// TestApproveCmd covers the bounded approve dispatch: each approve action (the two
+// gate.ApprovalControls approve variants) is forwarded verbatim with the call ID, and a
+// configured error surfaces on the result msg (non-fatal).
 func TestApproveCmd(t *testing.T) {
 	t.Parallel()
 
@@ -522,14 +522,13 @@ func TestApproveCmd(t *testing.T) {
 		name       string
 		loopID     uuid.UUID
 		callID     uuid.UUID
-		scope      tool.ApprovalScope
+		action     gate.ApprovalAction
 		approveErr error
 		wantErr    bool
 	}{
-		{name: "once succeeds", loopID: callID(10), callID: callID(1), scope: tool.ScopeOnce},
-		{name: "session succeeds", loopID: callID(20), callID: callID(2), scope: tool.ScopeSession},
-		{name: "workspace succeeds", loopID: callID(30), callID: callID(3), scope: tool.ScopeWorkspace},
-		{name: "error surfaced", loopID: callID(40), callID: callID(4), scope: tool.ScopeOnce, approveErr: errApprove, wantErr: true},
+		{name: "approve succeeds", loopID: callID(10), callID: callID(1), action: gate.ApprovalApprove},
+		{name: "approve always for this workspace succeeds", loopID: callID(20), callID: callID(2), action: gate.ApprovalApproveAlwaysWorkspace},
+		{name: "error surfaced", loopID: callID(40), callID: callID(4), action: gate.ApprovalApprove, approveErr: errApprove, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -537,7 +536,7 @@ func TestApproveCmd(t *testing.T) {
 			t.Parallel()
 
 			agent := &fakeAgent{approveErr: tt.approveErr}
-			msg := approveCmd(context.Background(), agent, tt.loopID, tt.callID, tt.scope)()
+			msg := approveCmd(context.Background(), agent, tt.loopID, tt.callID, tt.action)()
 
 			res, ok := msg.(promptResultMsg)
 			if !ok {
@@ -555,8 +554,8 @@ func TestApproveCmd(t *testing.T) {
 			if agent.lastCallID != tt.callID {
 				t.Errorf("recorded callID = %v, want %v", agent.lastCallID, tt.callID)
 			}
-			if agent.lastScope != tt.scope {
-				t.Errorf("recorded scope = %v, want %v", agent.lastScope, tt.scope)
+			if agent.lastApproval != tt.action {
+				t.Errorf("recorded action = %q, want %q", agent.lastApproval, tt.action)
 			}
 		})
 	}
@@ -670,7 +669,7 @@ func TestPromptDispatchBounded(t *testing.T) {
 	// Each goroutine gets its own agent: this test asserts only that the cmds
 	// return promptly, and a shared fake's recorder fields would race.
 	done := make(chan tea.Msg, 3)
-	go func() { done <- approveCmd(ctx, &fakeAgent{}, callID(10), callID(1), tool.ScopeOnce)() }()
+	go func() { done <- approveCmd(ctx, &fakeAgent{}, callID(10), callID(1), gate.ApprovalApprove)() }()
 	go func() { done <- denyCmd(ctx, &fakeAgent{}, callID(20), callID(2))() }()
 	go func() { done <- provideAnswerCmd(ctx, &fakeAgent{}, callID(30), callID(3), "a")() }()
 

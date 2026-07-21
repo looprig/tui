@@ -1174,7 +1174,7 @@ func TestTranscriptGatePrompts(t *testing.T) {
 				textChunk("I'll run a command."),
 				event.PermissionRequested{
 					ToolExecutionID: callID(1),
-					Request:         tool.BashRequest{Command: "rm -rf build"},
+					Request:         bashPermission("rm -rf build"),
 				},
 			},
 			want: func(t *testing.T, m transcriptModel) {
@@ -1728,7 +1728,7 @@ func TestTranscriptRecordSubmitValueCopy(t *testing.T) {
 func TestGateDecisionFlow(t *testing.T) {
 	tests := []struct {
 		name       string
-		request    tool.PermissionRequest
+		request    tool.Request
 		toolName   string
 		summary    string
 		decision   gateDecision
@@ -1737,7 +1737,7 @@ func TestGateDecisionFlow(t *testing.T) {
 	}{
 		{
 			name:       "approved bash",
-			request:    tool.BashRequest{Command: "date"},
+			request:    bashPermission("date"),
 			toolName:   "Bash",
 			summary:    "redacted command",
 			decision:   gateApproved,
@@ -1746,7 +1746,7 @@ func TestGateDecisionFlow(t *testing.T) {
 		},
 		{
 			name:       "denied fetch",
-			request:    tool.FetchRequest{Method: "GET", URL: "https://google.com/search?q=looprig"},
+			request:    toolRequest("Fetch", "GET https://google.com/search?q=looprig", requirement("fetch https://google.com")),
 			toolName:   "Fetch",
 			summary:    "GET google.com",
 			decision:   gateDenied,
@@ -2914,7 +2914,7 @@ func TestUniformProjectionsIsolateLiveToolsAndGates(t *testing.T) {
 	m = m.ApplyEvent(loopTextChunk(delegate, "delegate text"))
 	m = m.ApplyEvent(loopToolStarted(initial, initialCall, "Read", "initial read"))
 	m = m.ApplyEvent(loopToolStarted(delegate, delegateCall, "Bash", "delegate command"))
-	m = m.ApplyEvent(event.PermissionRequested{Header: hdr(delegate), ToolExecutionID: delegateCall, Request: tool.BashRequest{Command: "pwd"}})
+	m = m.ApplyEvent(event.PermissionRequested{Header: hdr(delegate), ToolExecutionID: delegateCall, Request: bashPermission("pwd")})
 	m = m.ResolveGate(delegate, delegateCall, gateApproved)
 
 	_, initialLive := m.projectionFor(initial)

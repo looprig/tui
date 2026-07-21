@@ -11,7 +11,6 @@ import (
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // foldBacklog folds backlog through the SAME pure reducers the background fold uses,
@@ -156,7 +155,7 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 			Message: &content.UserMessage{Message: content.Message{Role: content.RoleUser, Blocks: []content.Block{&content.TextBlock{Text: "folded follow-up"}}}},
 		},
 		event.StepDone{Header: hdr, Messages: content.AgenticMessages{aiMessage("", "second answer")}},
-		event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: tool.BashRequest{Command: "ls"}},
+		event.PermissionRequested{Header: hdr, ToolExecutionID: callID(7), Request: bashPermission("ls")},
 	}
 
 	agent := &fakeAgent{activeLoopID: primary, backlog: backlog}

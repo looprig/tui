@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/components"
@@ -154,7 +155,7 @@ func TestInteractionEnqueuePermission(t *testing.T) {
 	id := callID(1)
 	m = m.ApplyEvent(event.PermissionRequested{
 		ToolExecutionID: id,
-		Request:         tool.BashRequest{Command: "go build"},
+		Request:         bashPermission("go build"),
 	})
 
 	if m.PendingCount() != 1 {
@@ -170,12 +171,11 @@ func TestInteractionEnqueuePermission(t *testing.T) {
 	if p.ToolExecutionID != id {
 		t.Errorf("active ToolExecutionID = %v, want %v", p.ToolExecutionID, id)
 	}
-	if p.Kind != promptPermission || p.ToolName != "Bash" || p.Description != "go build" {
+	if p.Kind != promptPermission || p.ToolName != "Bash" || p.Summary != "go build" {
 		t.Errorf("active prompt = %+v, want Bash/go build permission", *p)
 	}
-	want := tool.BashRequest{}.AllowedScopes()
-	if !scopesEqual(p.Scopes, want) {
-		t.Errorf("Scopes = %v, want %v", p.Scopes, want)
+	if len(p.Requirements) != 1 || p.Requirements[0].Description != "run go build" {
+		t.Errorf("Requirements = %+v, want the one Bash requirement", p.Requirements)
 	}
 }
 
@@ -267,7 +267,7 @@ func TestInteractionEnqueueFIFOAndAppendOnce(t *testing.T) {
 	}
 
 	// A duplicate permission ToolExecutionID is likewise ignored.
-	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: second, Request: tool.BashRequest{Command: "rm"}})
+	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: second, Request: bashPermission("rm")})
 	if m.PendingCount() != 2 {
 		t.Errorf("PendingCount after dup permission = %d, want 2", m.PendingCount())
 	}
@@ -291,12 +291,12 @@ func TestInteractionEnqueueSameCallIDDistinctLoops(t *testing.T) {
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
 		ToolExecutionID: call,
-		Request:         tool.BashRequest{Command: "a"},
+		Request:         bashPermission("a"),
 	})
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopB}},
 		ToolExecutionID: call,
-		Request:         tool.BashRequest{Command: "b"},
+		Request:         bashPermission("b"),
 	})
 	if m.PendingCount() != 2 {
 		t.Fatalf("PendingCount = %d, want 2 (same call id, distinct loops → distinct gates)", m.PendingCount())
@@ -306,7 +306,7 @@ func TestInteractionEnqueueSameCallIDDistinctLoops(t *testing.T) {
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
 		ToolExecutionID: call,
-		Request:         tool.BashRequest{Command: "a"},
+		Request:         bashPermission("a"),
 	})
 	if m.PendingCount() != 2 {
 		t.Errorf("PendingCount after re-delivery = %d, want 2 (same loop+call deduped)", m.PendingCount())
@@ -339,7 +339,7 @@ func TestInteractionClearOnTerminal(t *testing.T) {
 
 			m = m.ApplyEvent(event.PermissionRequested{
 				ToolExecutionID: callID(1),
-				Request:         tool.BashRequest{Command: "go test"},
+				Request:         bashPermission("go test"),
 			})
 			if m.mode != modePermissionPrompt || m.PendingCount() != 1 {
 				t.Fatalf("pre-terminal state wrong: mode %d pending %d", m.mode, m.PendingCount())
@@ -429,7 +429,7 @@ func TestInteractionClearPromptsForLoop(t *testing.T) {
 			m = m.ApplyEvent(event.PermissionRequested{
 				Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
 				ToolExecutionID: callID(1),
-				Request:         tool.BashRequest{Command: "go test"},
+				Request:         bashPermission("go test"),
 			})
 			m = m.ApplyEvent(event.UserInputRequested{
 				Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopB}},
@@ -489,12 +489,12 @@ func TestInteractionClearPromptsForLoopDrainsAndRestores(t *testing.T) {
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
 		ToolExecutionID: callID(1),
-		Request:         tool.BashRequest{Command: "go test"},
+		Request:         bashPermission("go test"),
 	})
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: loopA}},
 		ToolExecutionID: callID(2),
-		Request:         tool.BashRequest{Command: "go build"},
+		Request:         bashPermission("go build"),
 	})
 	if m.PendingCount() != 2 {
 		t.Fatalf("setup PendingCount = %d, want 2", m.PendingCount())
@@ -522,7 +522,7 @@ func TestInteractionNonComposeUpdateIsNoop(t *testing.T) {
 	m := newInteractionModel()
 	m = m.ApplyEvent(event.PermissionRequested{
 		ToolExecutionID: callID(1),
-		Request:         tool.BashRequest{Command: "go build"},
+		Request:         bashPermission("go build"),
 	})
 
 	m, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -544,7 +544,7 @@ func runeKey(r rune) tea.KeyPressMsg {
 
 // permissionModel returns an interaction model already in permission mode for one
 // gate (callID 1) built from req.
-func permissionModel(req tool.PermissionRequest) interactionModel {
+func permissionModel(req tool.Request) interactionModel {
 	m := newInteractionModel()
 	return m.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(1), Request: req})
 }
@@ -556,39 +556,37 @@ func choiceModel(choices []string) interactionModel {
 	return m.ApplyEvent(event.UserInputRequested{ToolExecutionID: callID(2), Question: "pick", Choices: choices})
 }
 
-// TestInteractionPermissionRouting covers modePermissionPrompt key routing: the
-// scope keys (y/s/w) are gated by scope membership — offered → approve+pop, not
-// offered → noop; n and esc both deny+pop; any other key is a no-op re-render.
+// TestInteractionPermissionRouting covers modePermissionPrompt key routing for the ONE
+// combined prompt: exactly three actions — y approves (gate.ApprovalApprove), a
+// approves-always-for-this-workspace (gate.ApprovalApproveAlwaysWorkspace), n and esc
+// deny (gate.ApprovalDeny). Approve carries the exact gate.ApprovalAction; any other key
+// is a no-op re-render. The removed scope keys s/w are now plain no-ops.
 func TestInteractionPermissionRouting(t *testing.T) {
 	t.Parallel()
 
-	bash := tool.BashRequest{Command: "go build"}           // once/session/workspace
-	unknown := tool.UnknownRequest{Tool: "T", Summary: "s"} // once only
+	req := bashPermission("go build")
 
 	tests := []struct {
-		name      string
-		req       tool.PermissionRequest
-		key       tea.KeyPressMsg
-		wantKind  uiActionKind
-		wantScope tool.ApprovalScope
-		wantPop   bool // true → head resolved (pending drops to 0)
+		name         string
+		key          tea.KeyPressMsg
+		wantKind     uiActionKind
+		wantApproval gate.ApprovalAction
+		wantPop      bool // true → head resolved (pending drops to 0)
 	}{
-		{name: "y approves once (offered)", req: bash, key: runeKey('y'), wantKind: uiApprove, wantScope: tool.ScopeOnce, wantPop: true},
-		{name: "s approves session (offered)", req: bash, key: runeKey('s'), wantKind: uiApprove, wantScope: tool.ScopeSession, wantPop: true},
-		{name: "w approves workspace (offered)", req: bash, key: runeKey('w'), wantKind: uiApprove, wantScope: tool.ScopeWorkspace, wantPop: true},
-		{name: "y approves once for unknown", req: unknown, key: runeKey('y'), wantKind: uiApprove, wantScope: tool.ScopeOnce, wantPop: true},
-		{name: "s not offered is a no-op", req: unknown, key: runeKey('s'), wantKind: uiNoop, wantPop: false},
-		{name: "w not offered is a no-op", req: unknown, key: runeKey('w'), wantKind: uiNoop, wantPop: false},
-		{name: "n denies", req: bash, key: runeKey('n'), wantKind: uiDeny, wantPop: true},
-		{name: "esc denies", req: bash, key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiDeny, wantPop: true},
-		{name: "other key is a no-op", req: bash, key: runeKey('z'), wantKind: uiNoop, wantPop: false},
+		{name: "y approves", key: runeKey('y'), wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "a approves always for this workspace", key: runeKey('a'), wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
+		{name: "n denies", key: runeKey('n'), wantKind: uiDeny, wantPop: true},
+		{name: "esc denies", key: tea.KeyPressMsg{Code: tea.KeyEsc}, wantKind: uiDeny, wantPop: true},
+		{name: "removed s scope key is a no-op", key: runeKey('s'), wantKind: uiNoop, wantPop: false},
+		{name: "removed w scope key is a no-op", key: runeKey('w'), wantKind: uiNoop, wantPop: false},
+		{name: "other key is a no-op", key: runeKey('z'), wantKind: uiNoop, wantPop: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			m := permissionModel(tt.req)
+			m := permissionModel(req)
 			m, action, _ := m.Update(tt.key)
 
 			if action.Kind != tt.wantKind {
@@ -598,8 +596,8 @@ func TestInteractionPermissionRouting(t *testing.T) {
 				if action.ToolExecutionID != callID(1) {
 					t.Errorf("approve ToolExecutionID = %v, want %v", action.ToolExecutionID, callID(1))
 				}
-				if action.Scope != tt.wantScope {
-					t.Errorf("approve Scope = %d, want %d", action.Scope, tt.wantScope)
+				if action.Approval != tt.wantApproval {
+					t.Errorf("approve Approval = %q, want %q", action.Approval, tt.wantApproval)
 				}
 			}
 			if tt.wantKind == uiDeny && action.ToolExecutionID != callID(1) {
@@ -1049,8 +1047,8 @@ func TestInteractionPopRevealsNextThenCompose(t *testing.T) {
 	m.input.SetValue("saved")
 	first := callID(1)
 	second := callID(2)
-	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: first, Request: tool.BashRequest{Command: "a"}})
-	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: second, Request: tool.UnknownRequest{Tool: "T", Summary: "s"}})
+	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: first, Request: bashPermission("a")})
+	m = m.ApplyEvent(event.PermissionRequested{ToolExecutionID: second, Request: toolRequest("T", "s")})
 
 	m = m.pop()
 	if m.PendingCount() != 1 {
@@ -1089,7 +1087,7 @@ func TestInteractionChildGateRoutable(t *testing.T) {
 	m = m.ApplyEvent(event.PermissionRequested{
 		Header:          event.Header{Coordinates: identity.Coordinates{LoopID: child}},
 		ToolExecutionID: callID(0x77),
-		Request:         tool.BashRequest{Command: "rm -rf build"},
+		Request:         bashPermission("rm -rf build"),
 	})
 
 	if m.PendingCount() != 1 {

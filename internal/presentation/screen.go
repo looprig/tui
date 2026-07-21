@@ -60,13 +60,15 @@ type Screen struct {
 	runtimeTray       *components.ValueComplete
 	runtimeTrayKind   runtimeTrayKind
 	runtimeTrayLoopID uuid.UUID
-	runtimeRoot       string
-	accessLabels      map[string]string
-	catalogAccess     AccessID
-	sessionBrowser    SessionBrowser
-	sessionTray       *components.SessionComplete
-	pendingResume     SessionID
-	resuming          bool
+	// presentation is the synchronous, consumer-supplied session metadata (workspace,
+	// fixed access profile, permission diagnostics). It is captured once at construction
+	// and persists across a /clear handoff; the footer displays it and commitStartup
+	// commits its diagnostics before any gate can arrive.
+	presentation   SessionPresentation
+	sessionBrowser SessionBrowser
+	sessionTray    *components.SessionComplete
+	pendingResume  SessionID
+	resuming       bool
 
 	viewport viewportModel // the scrollable/selectable content window
 	collapse collapseState // the retroactive thinking-fold state (ctrl+t + header-click)
@@ -232,6 +234,7 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 		runtimeController: runtimeController,
 		runtime:           newRuntimeProjection(),
 		integrations:      newIntegrationProjection(),
+		presentation:      options.presentation,
 		sessionBrowser:    options.sessionBrowser,
 		viewport:          viewportModel{atTail: true},
 		collapse:          newCollapseState(),
@@ -246,7 +249,6 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 			components.SlashCmd{Name: "/mode", Desc: "change the focused loop mode"},
 			components.SlashCmd{Name: "/model", Desc: "change the focused loop model"},
 			components.SlashCmd{Name: "/effort", Desc: "change reasoning effort"},
-			components.SlashCmd{Name: "/access", Desc: "change the session access level"},
 		)
 	}
 	if options.sessionBrowser != nil {
@@ -299,9 +301,6 @@ func (m Screen) Init() tea.Cmd {
 		// re-armed by handleAnim, stopped only on quit). It shimmers the gradient only for
 		// ACTIVE states; while idle it just recomposes the static faint status line.
 		animCmd(),
-	}
-	if m.runtimeCatalog != nil {
-		cmds = append(cmds, queryAccessMetadata(m.appCtx, m.runtimeCatalog))
 	}
 	return tea.Batch(cmds...)
 }
@@ -403,19 +402,6 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runtimeMutationMsg:
 		cmd := m.handleRuntimeMutation(msg)
 		return m, cmd
-	case accessMetadataMsg:
-		if msg.err == nil {
-			m.runtimeRoot = msg.options.Root
-			m.accessLabels = make(map[string]string, len(msg.options.Choices))
-			m.catalogAccess = ""
-			for _, option := range msg.options.Choices {
-				m.accessLabels[string(option.ID)] = option.Label
-				if option.ID == msg.options.Current {
-					m.catalogAccess = option.ID
-				}
-			}
-		}
-		return m, nil
 	case sessionsListedMsg:
 		cmd := m.handleSessionsListed(msg)
 		return m, cmd
@@ -488,9 +474,6 @@ func (m *Screen) handleRuntimeChoices(msg runtimeChoicesMsg) tea.Cmd {
 	m.runtimeTray = tray
 	m.runtimeTrayKind = msg.kind
 	m.runtimeTrayLoopID = msg.loopID
-	if msg.root != "" {
-		m.runtimeRoot = msg.root
-	}
 	m.resize()
 	return m.startTrayGlow()
 }
@@ -610,6 +593,14 @@ func (m *Screen) commitStartup() {
 	m.startupPending = false
 	m.startupCommitted = true
 	m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, m.banner.bannerText(m.agent.SessionID()))
+	// Permission diagnostics for manual, out-of-catalog allow families are surfaced in
+	// the startup metadata area — committed HERE, at the opening banner, so they are
+	// visible BEFORE the first permission gate can ever arrive (interactive consumers
+	// must show them before the first prompt). They are display-ready strings from the
+	// consumer; the TUI renders them as faint warning notices and infers nothing.
+	for _, diagnostic := range m.presentation.diagnostics() {
+		m.transcript = m.transcript.CommitGlobalNotice(noticeWarn, diagnostic)
+	}
 }
 
 // handleEvent delegates one subscription event to the shared core (which routes it
@@ -1006,11 +997,7 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 		return closeAgentForQuit(m.closing)
 	}
 	m.restoring = true
-	cmds := []tea.Cmd{cmd, restoreBacklogCmd(m.appCtx, m.agent)}
-	if m.runtimeCatalog != nil {
-		cmds = append(cmds, queryAccessMetadata(m.appCtx, m.runtimeCatalog))
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(cmd, restoreBacklogCmd(m.appCtx, m.agent))
 }
 
 func (m *Screen) rejectStaleReopenResult(msg reopenResultMsg) tea.Cmd {
@@ -1270,8 +1257,6 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			kind = runtimeTrayModel
 		case "/effort":
 			kind = runtimeTrayEffort
-		case "/access":
-			kind = runtimeTrayAccess
 		}
 		if kind != runtimeTrayNone && m.runtimeCatalog != nil && m.runtimeController != nil {
 			cmd = queryRuntimeChoices(m.appCtx, m.runtimeCatalog, kind, m.focusedLoopID)
@@ -2146,7 +2131,7 @@ func (m Screen) composeBody(lay screenLayout) string {
 	}
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
 	rows = append(rows, "")                                        // inert gap: box → bar
-	rows = append(rows, m.footerView())                            // rig + access + local loop focus
+	rows = append(rows, m.footerView())                            // rig + profile + workspace + local loop focus
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
 }
 
@@ -2154,26 +2139,16 @@ func (m Screen) footerView() string {
 	return m.footer().View(m.width)
 }
 
+// footer builds the bottom footer header: the agent name, then the FIXED session
+// metadata — the access profile name and the workspace root — supplied synchronously
+// as SessionPresentation. The profile is displayed as metadata here, never as a
+// mutable control (there is no way to change it from the TUI).
 func (m Screen) footer() loopFooter {
 	parts := make([]string, 0, 3)
 	if name := strings.TrimSpace(m.banner.Name); name != "" {
 		parts = append(parts, name)
 	}
-	accessID := string(m.catalogAccess)
-	if m.runtime.hasAccess {
-		accessID = strconv.FormatUint(uint64(m.runtime.access), 10)
-	}
-	if accessID != "" {
-		id := accessID
-		label := m.accessLabels[id]
-		if label == "" {
-			label = "Access " + id
-		}
-		parts = append(parts, label)
-	}
-	if m.runtimeRoot != "" {
-		parts = append(parts, m.runtimeRoot)
-	}
+	parts = append(parts, m.presentation.footerParts()...)
 	header := ""
 	if len(parts) > 0 {
 		header = strings.Join(parts, " · ")

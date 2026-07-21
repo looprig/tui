@@ -17,9 +17,7 @@ import (
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/journal"
 	"github.com/looprig/harness/pkg/loop"
-	"github.com/looprig/harness/pkg/security"
 	"github.com/looprig/harness/pkg/sessionstore"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/harness/pkg/workspacestore"
 	model "github.com/looprig/inference/model"
 	"github.com/looprig/tui"
@@ -182,8 +180,7 @@ func (f *fakeController) SetActiveLoop(_ context.Context, id uuid.UUID) error {
 	}
 	return errNoReplay
 }
-func (f *fakeController) LoopController(uuid.UUID) (loop.Controller, bool)       { return nil, false }
-func (f *fakeController) SetSecurityLimit(context.Context, security.Level) error { return nil }
+func (f *fakeController) LoopController(uuid.UUID) (loop.Controller, bool) { return nil, false }
 func (f *fakeController) CheckpointWorkspace(context.Context) (workspacestore.Ref, error) {
 	return "", nil
 }
@@ -433,10 +430,10 @@ func TestGateIndexResolvesPerLoopAndCall(t *testing.T) {
 	a.foldGate(gateOpened(loop1, call, gate1))
 	a.foldGate(gateOpened(loop2, call, gate2))
 
-	if err := a.Approve(context.Background(), loop1, call, tool.ScopeOnce); err != nil {
+	if err := a.Approve(context.Background(), loop1, call, gate.ApprovalApprove); err != nil {
 		t.Fatalf("Approve(loop1) error = %v", err)
 	}
-	if err := a.Approve(context.Background(), loop2, call, tool.ScopeOnce); err != nil {
+	if err := a.Approve(context.Background(), loop2, call, gate.ApprovalApproveAlwaysWorkspace); err != nil {
 		t.Fatalf("Approve(loop2) error = %v", err)
 	}
 	got := fc.responses()
@@ -446,19 +443,30 @@ func TestGateIndexResolvesPerLoopAndCall(t *testing.T) {
 	if got[0].GateID != gate1 || got[1].GateID != gate2 {
 		t.Errorf("gate ids resolved = %v,%v, want %v,%v (same call in two loops keys two gates)", got[0].GateID, got[1].GateID, gate1, gate2)
 	}
-	if got[0].Action != "approve" {
-		t.Errorf("Action = %q, want approve", got[0].Action)
+	// The exact gate.ApprovalAction strings reach the wire, in the clear and with no
+	// values (the combined prompt carries no scope payload).
+	if got[0].Action != string(gate.ApprovalApprove) || len(got[0].Values) != 0 {
+		t.Errorf("response[0] = {Action:%q Values:%v}, want %q with no values", got[0].Action, got[0].Values, gate.ApprovalApprove)
+	}
+	if got[1].Action != string(gate.ApprovalApproveAlwaysWorkspace) {
+		t.Errorf("response[1] Action = %q, want %q", got[1].Action, gate.ApprovalApproveAlwaysWorkspace)
 	}
 
-	// An unknown (loop, call) fails secure.
+	// An unknown (loop, call) fails secure — and Deny sends the exact deny action.
 	var notOpen *GateNotOpenError
 	if err := a.Deny(context.Background(), mustUUID(t), call); !errors.As(err, &notOpen) {
 		t.Errorf("Deny(unknown loop) error = %v, want *GateNotOpenError", err)
 	}
+	if err := a.Deny(context.Background(), loop2, call); err != nil {
+		t.Fatalf("Deny(loop2) error = %v", err)
+	}
+	if denies := fc.responses(); denies[len(denies)-1].Action != string(gate.ApprovalDeny) {
+		t.Errorf("Deny Action = %q, want %q", denies[len(denies)-1].Action, gate.ApprovalDeny)
+	}
 
 	// A GateResolved removes the entry: a later Approve fails secure.
 	a.foldGate(event.GateResolved{GateID: gate1})
-	if err := a.Approve(context.Background(), loop1, call, tool.ScopeOnce); !errors.As(err, &notOpen) {
+	if err := a.Approve(context.Background(), loop1, call, gate.ApprovalApprove); !errors.As(err, &notOpen) {
 		t.Errorf("Approve after GateResolved error = %v, want *GateNotOpenError", err)
 	}
 }
@@ -490,7 +498,7 @@ func TestSubscribeFoldsGatesBeforeForwarding(t *testing.T) {
 	}
 
 	// The index was updated before the event surfaced: Approve resolves the folded gate.
-	if err := a.Approve(context.Background(), loop1, call, tool.ScopeOnce); err != nil {
+	if err := a.Approve(context.Background(), loop1, call, gate.ApprovalApprove); err != nil {
 		t.Fatalf("Approve after fold error = %v", err)
 	}
 	if got := fc.responses(); len(got) != 1 || got[0].GateID != gateID {

@@ -948,9 +948,9 @@ func (m *transcriptModel) permissionRequested(ev event.PermissionRequested) {
 	g := cloneGates(m.fold.live.gateDecisions)
 	g[ev.ToolExecutionID] = gatePending
 	m.fold.live.gateDecisions = g
-	if ev.Request != nil {
+	if summary := permissionRequestSummary(ev.Request); summary != "" {
 		d := cloneGateDescriptions(m.fold.live.gateDescriptions)
-		d[ev.ToolExecutionID] = ev.Request.Description()
+		d[ev.ToolExecutionID] = summary
 		m.fold.live.gateDescriptions = d
 	}
 }

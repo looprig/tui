@@ -9,7 +9,6 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/harness/pkg/event"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/styles"
 )
 
@@ -121,7 +120,7 @@ func TestSurfaceViewPermissionPrompt(t *testing.T) {
 	t.Parallel()
 
 	im := newInteractionModel()
-	im = im.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(1), Request: tool.BashRequest{Command: "go test"}})
+	im = im.ApplyEvent(event.PermissionRequested{ToolExecutionID: callID(1), Request: bashPermission("go test")})
 	in := surfaceInputs{
 		Interaction: im,
 		LiveTail:    "",
@@ -133,7 +132,7 @@ func TestSurfaceViewPermissionPrompt(t *testing.T) {
 
 	got := stripANSI(surfaceView(in))
 
-	for _, sub := range []string{"Approve Bash?", "[y] once", "[n] deny", "awaiting approval"} {
+	for _, sub := range []string{"Approve Bash?", "[y] Approve", "[n] Deny", "awaiting approval"} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("surfaceView (permission) missing %q in:\n%s", sub, got)
 		}

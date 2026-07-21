@@ -8,53 +8,67 @@ import (
 	"github.com/looprig/core/uuid"
 )
 
-func TestAccessOptionsCarriesCurrentSelection(t *testing.T) {
-	t.Parallel()
-
-	options := AccessOptions{Current: AccessID("2")}
-	if options.Current != AccessID("2") {
-		t.Fatalf("AccessOptions.Current = %q, want typed current selection", options.Current)
-	}
-}
-
-func TestAccessMetadataSeedsAdvertisedCurrentSelection(t *testing.T) {
+// TestSessionPresentationFooterShowsFixedProfileAndWorkspace covers the synchronous,
+// consumer-supplied session metadata in the footer: the agent name, then the FIXED
+// access profile name, then the workspace root. The profile is metadata, NOT a mutable
+// control.
+func TestSessionPresentationFooterShowsFixedProfileAndWorkspace(t *testing.T) {
 	t.Parallel()
 
 	base := &fakeAgent{activeLoopID: callID(1)}
-	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "CodeRig"})
+	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil },
+		AgentBanner{Name: "CodeRig"},
+		WithSessionPresentation(SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/workspace"}))
 	m.width = 80
-	model, _ := m.Update(accessMetadataMsg{options: AccessOptions{
-		Root:    "/workspace",
-		Current: "2",
-		Choices: []AccessOption{
-			{ID: "0", Label: "Untrusted"},
-			{ID: "2", Label: "Writable"},
-		},
-	}})
-	m = model.(Screen)
 
 	footer := stripANSI(m.footerView())
 	if !strings.Contains(footer, "CodeRig · Writable · /workspace") {
-		t.Errorf("footer = %q, want advertised current access in startup header", footer)
+		t.Errorf("footer = %q, want fixed profile + workspace in the metadata header", footer)
 	}
 }
 
-func TestAccessMetadataRejectsUnadvertisedCurrentSelection(t *testing.T) {
+// TestSessionPresentationOmitsEmptyMetadata covers the zero presentation: with no
+// profile or workspace the footer shows only the agent name (no stray separators).
+func TestSessionPresentationOmitsEmptyMetadata(t *testing.T) {
 	t.Parallel()
 
 	base := &fakeAgent{activeLoopID: callID(1)}
 	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "CodeRig"})
 	m.width = 80
-	model, _ := m.Update(accessMetadataMsg{options: AccessOptions{
-		Root:    "/workspace",
-		Current: "3",
-		Choices: []AccessOption{{ID: "2", Label: "Writable"}},
-	}})
-	m = model.(Screen)
 
 	footer := stripANSI(m.footerView())
-	if strings.Contains(footer, "Writable") || strings.Contains(footer, "Access 3") {
-		t.Errorf("footer = %q, must not trust an unadvertised current access selection", footer)
+	if strings.Contains(footer, "·") {
+		t.Errorf("footer = %q, want no metadata separators when no presentation is supplied", footer)
+	}
+}
+
+// TestPermissionDiagnosticsRenderBeforeFirstGate covers the diagnostics-surfacing
+// requirement: manual out-of-catalog allow-family diagnostics are committed in the
+// startup metadata area at the opening banner (systemReadyMsg), so they are visible
+// BEFORE any permission gate could arrive. The banner commits FIRST, then the
+// diagnostics, in order.
+func TestPermissionDiagnosticsRenderBeforeFirstGate(t *testing.T) {
+	t.Parallel()
+
+	diagnostics := []string{"allow family 'net.*' is not in the catalogue", "allow family 'exec.*' is manual"}
+	base := &fakeAgent{activeLoopID: callID(1)}
+	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil },
+		AgentBanner{Name: "CodeRig"},
+		WithSessionPresentation(SessionPresentation{PermissionDiagnostics: diagnostics}))
+	m.width, m.height, m.ready = 80, 24, true
+	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening metadata block
+
+	committed := m.transcript.testCommitted()
+	if len(committed) < 3 {
+		t.Fatalf("committed startup entries = %d, want banner + 2 diagnostics", len(committed))
+	}
+	if banner := committedText(committed[0]); !strings.Contains(banner, "CodeRig") {
+		t.Errorf("committed[0] = %q, want the identity/session banner first", banner)
+	}
+	for i, want := range diagnostics {
+		if got := committedText(committed[1+i]); !strings.Contains(got, want) {
+			t.Errorf("committed[%d] = %q, want diagnostic %q after the banner", 1+i, got, want)
+		}
 	}
 }
 
@@ -64,16 +78,11 @@ func (*runtimeCatalogFake) LoopRuntimeOptions(context.Context, uuid.UUID) (LoopR
 	return LoopRuntimeOptions{}, nil
 }
 
-func (*runtimeCatalogFake) AccessOptions(context.Context) (AccessOptions, error) {
-	return AccessOptions{}, nil
-}
-
 type runtimeControllerFake struct{ *fakeAgent }
 
 func (*runtimeControllerFake) SetMode(context.Context, uuid.UUID, ModeID) error     { return nil }
 func (*runtimeControllerFake) SetModel(context.Context, uuid.UUID, ModelID) error   { return nil }
 func (*runtimeControllerFake) SetEffort(context.Context, uuid.UUID, EffortID) error { return nil }
-func (*runtimeControllerFake) SetAccess(context.Context, AccessID) error            { return nil }
 
 type runtimeFullFake struct {
 	*fakeAgent
@@ -84,16 +93,12 @@ type runtimeFullFake struct {
 func (*runtimeFullFake) LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error) {
 	return LoopRuntimeOptions{Modes: []ModeOption{{ID: "review", Label: "Review"}}}, nil
 }
-func (*runtimeFullFake) AccessOptions(context.Context) (AccessOptions, error) {
-	return AccessOptions{Root: "/workspace", Choices: []AccessOption{{ID: "1", Label: "Read Only"}}}, nil
-}
 func (f *runtimeFullFake) SetMode(_ context.Context, loopID uuid.UUID, id ModeID) error {
 	f.loopID, f.modeID = loopID, id
 	return nil
 }
 func (*runtimeFullFake) SetModel(context.Context, uuid.UUID, ModelID) error   { return nil }
 func (*runtimeFullFake) SetEffort(context.Context, uuid.UUID, EffortID) error { return nil }
-func (*runtimeFullFake) SetAccess(context.Context, AccessID) error            { return nil }
 
 func TestScreenDetectsOptionalRuntimeCapabilitiesWithoutExpandingAgent(t *testing.T) {
 	t.Parallel()

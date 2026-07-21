@@ -25,13 +25,11 @@ type (
 	ModeID              = presentation.ModeID
 	ModelID             = presentation.ModelID
 	EffortID            = presentation.EffortID
-	AccessID            = presentation.AccessID
 	ModeOption          = presentation.ModeOption
 	ModelOption         = presentation.ModelOption
 	EffortOption        = presentation.EffortOption
-	AccessOption        = presentation.AccessOption
 	LoopRuntimeOptions  = presentation.LoopRuntimeOptions
-	AccessOptions       = presentation.AccessOptions
+	SessionPresentation = presentation.SessionPresentation
 	SessionID           = presentation.SessionID
 	SessionSummary      = presentation.SessionSummary
 	SessionBrowser      = presentation.SessionBrowser
@@ -60,6 +58,14 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, o
 
 func WithSessionBrowser(browser SessionBrowser) Option {
 	return presentation.WithSessionBrowser(browser)
+}
+
+// WithSessionPresentation supplies the synchronous, consumer-filled session metadata
+// (workspace root, fixed access profile name, permission diagnostics) the screen
+// captures at construction and displays. Diagnostics are surfaced before the first
+// permission gate; the profile is shown as session metadata, never a mutable control.
+func WithSessionPresentation(p SessionPresentation) Option {
+	return presentation.WithSessionPresentation(p)
 }
 
 // FoldDisplay rebuilds the display projection from session events.

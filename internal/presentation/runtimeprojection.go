@@ -5,7 +5,6 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/loop"
-	"github.com/looprig/harness/pkg/security"
 )
 
 type loopRuntimeState struct {
@@ -25,11 +24,13 @@ type loopRuntimeState struct {
 
 // runtimeProjection is the event-authoritative current runtime and topology
 // view. Available catalog choices deliberately live outside this projection.
+//
+// The fixed access profile is NOT an event projection: it is a synchronous,
+// consumer-supplied constant (SessionPresentation) captured at screen
+// construction, so there is no mutable access level or ceiling to fold here.
 type runtimeProjection struct {
 	loops     map[uuid.UUID]loopRuntimeState
 	loopOrder []uuid.UUID
-	access    security.Level
-	hasAccess bool
 }
 
 func newRuntimeProjection() runtimeProjection {
@@ -42,12 +43,7 @@ func (p runtimeProjection) loop(id uuid.UUID) (loopRuntimeState, bool) {
 }
 
 func (p runtimeProjection) ApplyEvent(ev event.Event) runtimeProjection {
-	switch value := ev.(type) {
-	case event.SecurityLimitChanged:
-		p.access = value.Level
-		p.hasAccess = true
-		return p
-	case event.ActiveLoopChanged:
+	if _, ok := ev.(event.ActiveLoopChanged); ok {
 		return p
 	}
 

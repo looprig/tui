@@ -116,7 +116,7 @@ type fakeAgent struct {
 	answerCalled  bool
 	lastLoopID    uuid.UUID
 	lastCallID    uuid.UUID
-	lastScope     tool.ApprovalScope
+	lastApproval  gate.ApprovalAction
 	lastAnswer    string
 
 	// form-gate recorder: the same capture-and-report shape for RespondGate.
@@ -227,11 +227,11 @@ func (f *fakeAgent) Subscribe(filter event.EventFilter) (EventStream, error) {
 	return f.subStream, nil
 }
 
-func (f *fakeAgent) Approve(_ context.Context, loopID, callID uuid.UUID, scope tool.ApprovalScope) error {
+func (f *fakeAgent) Approve(_ context.Context, loopID, callID uuid.UUID, action gate.ApprovalAction) error {
 	f.approveCalled = true
 	f.lastLoopID = loopID
 	f.lastCallID = callID
-	f.lastScope = scope
+	f.lastApproval = action
 	return f.approveErr
 }
 
@@ -314,6 +314,34 @@ var _ event.Subscription = (*fakeSubscription)(nil)
 // fakeOpen returns an OpenAgent thunk that yields the given agent.
 func fakeOpen(a Agent) OpenAgent {
 	return func(context.Context) (Agent, error) { return a, nil }
+}
+
+// toolRequest builds a typed prepared tool.Request fixture with the given tool name,
+// one-line summary, and unmet requirements — the exact shape the per-turn stream
+// delivers on event.PermissionRequested.Request. The TUI reads these fields verbatim
+// (it never validates or reconstructs), so a test can stage any combination of
+// requirements and candidates.
+func toolRequest(toolName, summary string, requirements ...tool.Requirement) tool.Request {
+	return tool.Request{ToolName: toolName, Summary: summary, Requirements: requirements}
+}
+
+// requirement builds one unmet requirement with a display description and the exact
+// persisted rule-candidate descriptions an "always for this workspace" approval would
+// save. Every string is display-ready — the values double as Match so the fixture is
+// self-consistent.
+func requirement(description string, candidates ...string) tool.Requirement {
+	r := tool.Requirement{Kind: "capability", Match: description, Description: description}
+	for _, c := range candidates {
+		r.Candidates = append(r.Candidates, tool.RuleCandidate{Kind: "capability", Match: c, Description: c})
+	}
+	return r
+}
+
+// bashPermission is the common single-requirement Bash approval fixture used across
+// the permission tests: tool "Bash", the command as summary, one command.execute
+// requirement, and one reusable candidate.
+func bashPermission(command string) tool.Request {
+	return toolRequest("Bash", command, requirement("run "+command, "always allow "+command))
 }
 
 // callID returns a deterministic non-zero UUID for a test, distinguishing gates by

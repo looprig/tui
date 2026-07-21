@@ -2,69 +2,61 @@ package presentation
 
 import (
 	"testing"
-
-	"github.com/looprig/harness/pkg/tool"
 )
 
-// TestPromptFromPermission covers building a prompt view-model from a concrete
-// sealed PermissionRequest: the ToolName/Description/Scopes are copied straight
-// off the request, Kind is promptPermission, and freeText stays false (a
-// permission prompt is never free-text).
+// TestPromptFromPermission covers building the ONE combined permission prompt
+// view-model from a typed prepared tool.Request: the ToolName/Summary are copied
+// straight off the request, EVERY unmet requirement AND its exact persisted candidates
+// project into a single prompt (one prompt, N requirements), Kind is promptPermission,
+// and freeText stays false (a permission gate is never free-text).
 func TestPromptFromPermission(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		req         tool.PermissionRequest
-		wantTool    string
-		wantDesc    string
-		wantScopes  []tool.ApprovalScope
-		wantFreeTxt bool
-	}{
-		{
-			name:        "bash offers once/session/workspace",
-			req:         tool.BashRequest{Command: "go build"},
-			wantTool:    "Bash",
-			wantDesc:    "go build",
-			wantScopes:  []tool.ApprovalScope{tool.ScopeOnce, tool.ScopeSession, tool.ScopeWorkspace},
-			wantFreeTxt: false,
-		},
-		{
-			name:        "unknown offers only once",
-			req:         tool.UnknownRequest{Tool: "Mystery", Summary: "does a thing"},
-			wantTool:    "Mystery",
-			wantDesc:    "does a thing",
-			wantScopes:  []tool.ApprovalScope{tool.ScopeOnce},
-			wantFreeTxt: false,
-		},
+	// A multi-capability request: two unmet requirements, each with its own
+	// display-ready rule candidates. The one prompt must carry them ALL.
+	req := toolRequest("Bash", "run the release script",
+		requirement("execute /bin/release", "always allow /bin/release"),
+		requirement("write /etc/hosts", "always allow writes under /etc", "always allow writes under /etc/hosts"),
+	)
+
+	id := callID(7)
+	p := promptFromPermission(id, req)
+
+	if p.ToolExecutionID != id {
+		t.Errorf("ToolExecutionID = %v, want %v", p.ToolExecutionID, id)
 	}
+	if p.Kind != promptPermission {
+		t.Errorf("Kind = %d, want promptPermission (%d)", p.Kind, promptPermission)
+	}
+	if p.freeText {
+		t.Error("freeText = true, want false for a permission prompt")
+	}
+	if p.ToolName != "Bash" || p.Summary != "run the release script" {
+		t.Errorf("header = (%q, %q), want (Bash, run the release script)", p.ToolName, p.Summary)
+	}
+	if len(p.Requirements) != 2 {
+		t.Fatalf("Requirements len = %d, want 2 (every unmet capability in one prompt)", len(p.Requirements))
+	}
+	if p.Requirements[0].Description != "execute /bin/release" ||
+		len(p.Requirements[0].Candidates) != 1 || p.Requirements[0].Candidates[0] != "always allow /bin/release" {
+		t.Errorf("requirement[0] = %+v, want the execute requirement with its one candidate", p.Requirements[0])
+	}
+	if p.Requirements[1].Description != "write /etc/hosts" || len(p.Requirements[1].Candidates) != 2 {
+		t.Errorf("requirement[1] = %+v, want the write requirement with its two candidates", p.Requirements[1])
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+// TestPromptFromPermissionPureToolNoRequirements covers a pure tool that prepares an
+// empty request: the prompt still builds (header only), with no requirement rows.
+func TestPromptFromPermissionPureToolNoRequirements(t *testing.T) {
+	t.Parallel()
 
-			id := callID(7)
-			p := promptFromPermission(id, tt.req)
-
-			if p.ToolExecutionID != id {
-				t.Errorf("ToolExecutionID = %v, want %v", p.ToolExecutionID, id)
-			}
-			if p.Kind != promptPermission {
-				t.Errorf("Kind = %d, want promptPermission (%d)", p.Kind, promptPermission)
-			}
-			if p.ToolName != tt.wantTool {
-				t.Errorf("ToolName = %q, want %q", p.ToolName, tt.wantTool)
-			}
-			if p.Description != tt.wantDesc {
-				t.Errorf("Description = %q, want %q", p.Description, tt.wantDesc)
-			}
-			if !scopesEqual(p.Scopes, tt.wantScopes) {
-				t.Errorf("Scopes = %v, want %v", p.Scopes, tt.wantScopes)
-			}
-			if p.freeText != tt.wantFreeTxt {
-				t.Errorf("freeText = %v, want %v", p.freeText, tt.wantFreeTxt)
-			}
-		})
+	p := promptFromPermission(callID(8), toolRequest("Mystery", "does a thing"))
+	if p.Kind != promptPermission || p.ToolName != "Mystery" || p.Summary != "does a thing" {
+		t.Errorf("prompt = %+v, want a header-only Mystery permission prompt", p)
+	}
+	if len(p.Requirements) != 0 {
+		t.Errorf("Requirements = %+v, want none for a pure tool", p.Requirements)
 	}
 }
 
@@ -127,17 +119,4 @@ func TestPromptFromUserInput(t *testing.T) {
 			}
 		})
 	}
-}
-
-// scopesEqual reports whether two ApprovalScope slices are element-wise equal.
-func scopesEqual(a, b []tool.ApprovalScope) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

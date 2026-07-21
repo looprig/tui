@@ -398,9 +398,10 @@ func (c *sessionCore) mapAction(a uiAction) (tea.Cmd, bool) {
 	case uiApprove:
 		// Record the decision so the call's committed card reads "Approved …". The loop
 		// emits no decision event, so the keypress is the only source (the gate was
-		// remembered by the transcript on PermissionRequested).
+		// remembered by the transcript on PermissionRequested). Both approve actions —
+		// once and always-for-this-workspace — read as approved on the card.
 		c.transcript = c.transcript.ResolveGate(a.LoopID, a.ToolExecutionID, gateApproved)
-		return approveCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID, a.Scope), false
+		return approveCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID, a.Approval), false
 	case uiDeny:
 		c.transcript = c.transcript.ResolveGate(a.LoopID, a.ToolExecutionID, gateDenied)
 		return denyCmd(c.appCtx, c.agent, a.LoopID, a.ToolExecutionID), false

@@ -136,7 +136,7 @@ func (f formField) satisfied() bool {
 // the gate's ToolExecutionID. It carries everything the renderer needs and the selection
 // state the modal key router (Task 8) mutates — but holds NO agent reference: the
 // interactionModel only PRODUCES a uiAction; Screen drives the agent. A permission
-// prompt uses ToolName/Description/Scopes; a user-input prompt uses
+// prompt uses ToolName/Summary/Requirements; a user-input prompt uses
 // Question/Choices/selected/freeText.
 type prompt struct {
 	ToolExecutionID uuid.UUID
@@ -145,15 +145,22 @@ type prompt struct {
 	// per loop (design §7): a TurnDone/TurnFailed/TurnInterrupted clears only the
 	// prompts whose LoopID matches the finishing loop, so one loop ending never
 	// abandons a sibling loop's pending gate.
-	LoopID      uuid.UUID
-	Kind        promptKind
-	ToolName    string               // promptPermission: approval-prompt header
-	Description string               // promptPermission: approval-prompt body (redacted)
-	Scopes      []tool.ApprovalScope // promptPermission: scopes the request allows
-	Question    string               // promptUserInput: the AskUser question
-	Choices     []string             // promptUserInput: selectable choices (nil → free-text)
-	selected    int                  // promptUserInput: cursor over Choices
-	freeText    bool                 // promptUserInput: true when there are no Choices
+	LoopID   uuid.UUID
+	Kind     promptKind
+	ToolName string // promptPermission: the tool name, for the "Approve <tool>?" header
+	// Summary is the promptPermission one-line request summary (tool.Request.Summary),
+	// shown under the header. It is a display-ready string from the wire.
+	Summary string
+	// Requirements is the promptPermission list of EVERY unmet capability the one
+	// combined prompt must show, each with its exact persisted rule candidates. Every
+	// string here is a display-ready description from the typed gate payload
+	// (tool.Requirement.Description / tool.RuleCandidate.Description) — the TUI never
+	// reconstructs a rule or parses tool arguments.
+	Requirements []requirementLine
+	Question     string   // promptUserInput: the AskUser question
+	Choices      []string // promptUserInput: selectable choices (nil → free-text)
+	selected     int      // promptUserInput: cursor over Choices
+	freeText     bool     // promptUserInput: true when there are no Choices
 
 	// promptForm fields. GateID is carried directly because a form gate is folded
 	// from GateOpened, which names the gate outright — unlike a permission or
@@ -421,18 +428,47 @@ func (p *prompt) cycleChoice(delta int) {
 	f.Choice = ((f.Choice+delta)%n + n) % n
 }
 
-// promptFromPermission builds a permission prompt view-model from a sealed
-// PermissionRequest. ToolName/Description/Scopes are read off the request via its
-// interface methods, so any concrete request type (Bash, FileWrite, Unknown, …)
-// projects uniformly. freeText is false: a permission gate is never free-text.
-func promptFromPermission(callID uuid.UUID, req tool.PermissionRequest) prompt {
-	return prompt{
+// requirementLine is one unmet capability the combined permission prompt shows:
+// the requirement's display description plus the display descriptions of the exact
+// reusable rule candidates a workspace approval would persist. Both are read
+// verbatim off the typed gate payload — never reconstructed.
+type requirementLine struct {
+	Description string
+	Candidates  []string
+}
+
+// promptFromPermission builds the ONE combined permission prompt view-model from a
+// typed prepared tool.Request (the request narrowed to its unmet requirements, each
+// carrying its RuleCandidates). Every unmet requirement and every exact persisted
+// candidate is projected into a single prompt — the TUI renders the typed payload and
+// never reconstructs a rule or parses tool arguments. freeText is false: a permission
+// gate is never free-text.
+func promptFromPermission(callID uuid.UUID, req tool.Request) prompt {
+	p := prompt{
 		ToolExecutionID: callID,
 		Kind:            promptPermission,
-		ToolName:        req.ToolName(),
-		Description:     req.Description(),
-		Scopes:          req.AllowedScopes(),
+		ToolName:        req.ToolName,
+		Summary:         req.Summary,
 	}
+	for _, requirement := range req.Requirements {
+		line := requirementLine{Description: requirement.Description}
+		for _, candidate := range requirement.Candidates {
+			line.Candidates = append(line.Candidates, candidate.Description)
+		}
+		p.Requirements = append(p.Requirements, line)
+	}
+	return p
+}
+
+// permissionRequestSummary is the one-line display description remembered for a
+// gated tool call's committed card. It prefers the request Summary, falling back to
+// the tool name, so the committed card can read "Approved <summary>". It reads only
+// display-ready fields off the typed request.
+func permissionRequestSummary(req tool.Request) string {
+	if req.Summary != "" {
+		return req.Summary
+	}
+	return req.ToolName
 }
 
 // promptFromUserInput builds a user-input prompt view-model. freeText is true
@@ -446,19 +482,6 @@ func promptFromUserInput(callID uuid.UUID, question string, choices []string) pr
 		Choices:         choices,
 		freeText:        len(choices) == 0,
 	}
-}
-
-// offersScope reports whether the permission prompt allows approving at scope.
-// The modal router gates each scope key (y/s/w) on membership so a key for a
-// scope the request never offers (e.g. session on an UnknownRequest) is a no-op
-// rather than producing an approval the policy layer cannot honor.
-func (p *prompt) offersScope(scope tool.ApprovalScope) bool {
-	for _, s := range p.Scopes {
-		if s == scope {
-			return true
-		}
-	}
-	return false
 }
 
 // moveSelection shifts the choice cursor by delta and clamps it to the valid
@@ -481,45 +504,74 @@ func (p *prompt) moveSelection(delta int) {
 	p.selected = next
 }
 
-// scopeHint pairs an ApprovalScope with its key+label legend fragment. The keys
-// match the modal router (interaction.go permissionKey): y/s/w approve at
-// once/session/workspace.
-type scopeHint struct {
-	scope tool.ApprovalScope
-	label string
+// approvalHint pairs one of the three exact approval actions (gate.ApprovalAction)
+// with the key that produces it. The keys match the modal router
+// (interaction.go permissionKey): y approves, a approves-always-for-this-workspace,
+// n denies. The order is the ApprovalControls order — there is no session scope,
+// user-global scope, or second capability prompt.
+type approvalHint struct {
+	key    string
+	action gate.ApprovalAction
 }
 
-// permissionScopeHints is the ordered legend; only scopes the request offers are
-// rendered (offersScope), so an UnknownRequest (ScopeOnce only) shows just [y].
-var permissionScopeHints = []scopeHint{
-	{tool.ScopeOnce, "[y] once"},
-	{tool.ScopeSession, "[s] session"},
-	{tool.ScopeWorkspace, "[w] workspace"},
+// approvalHints is the ordered permission legend, one hint per gate.ApprovalControls
+// control. It is derived from the shared control set so a control can never drift from
+// its key: the labels ARE the gate.ApprovalAction values the session validates against.
+var approvalHints = []approvalHint{
+	{"y", gate.ApprovalApprove},
+	{"a", gate.ApprovalApproveAlwaysWorkspace},
+	{"n", gate.ApprovalDeny},
 }
 
-// renderPermissionBox renders the permission gate as a card: a bordered, padded box
-// with a bold "Approve <ToolName>?" title, the request description as its body, and a
-// footer row of key hints listing ONLY the offered scope keys (y/s/w) plus the
-// always-present [n] deny. When pending > 1 a faint "(+N more pending)" note trails the
-// card. It consumes the view-model only — no agent, no mutation. The interaction
-// contract is unchanged (same keys, same offered-scope derivation, same pending note);
-// only the visual framing is the new card.
+// requirementBullet / candidateBullet prefix the requirement and candidate rows so the
+// combined prompt reads as a list: each unmet capability, and beneath it each exact
+// rule an "always for this workspace" approval would persist.
+const (
+	requirementBullet = "• "
+	candidateBullet   = "    ↳ "
+)
+
+// renderPermissionBox renders the ONE combined tool-preparation approval prompt as a
+// blue-panel card: a bold "Approve <ToolName>?" title, the request summary, then EVERY
+// unmet requirement's description with its exact persisted rule candidates beneath it,
+// and a footer offering exactly the three actions gate.ApprovalControls declares
+// (Approve / Approve always for this workspace / Deny), keyed y/a/n. When pending > 1 a
+// faint "(+N more pending)" note trails the card. It renders the typed payload only —
+// no agent, no mutation, no rule reconstruction.
 func renderPermissionBox(p prompt, width, pending int) string {
 	textW := cardTextWidth(width)
-	title := styles.CardTitleStyle.Render("Approve " + p.ToolName + "?")
-	body := ""
-	if p.Description != "" {
-		body = strings.Join(wrapToWidth(p.Description, textW), "\n")
+	sections := make([]string, 0, 4)
+	sections = append(sections, styles.CardTitleStyle.Render("Approve "+p.ToolName+"?"))
+	if p.Summary != "" {
+		sections = append(sections, strings.Join(wrapToWidth(p.Summary, textW), "\n"))
 	}
-	hints := make([]string, 0, len(permissionScopeHints)+1)
-	for _, h := range permissionScopeHints {
-		if p.offersScope(h.scope) {
-			hints = append(hints, styleKeyHint(h.label))
+	if body := permissionRequirementsBody(p, textW); body != "" {
+		sections = append(sections, body)
+	}
+	footer := make([]string, 0, len(approvalHints))
+	for _, h := range approvalHints {
+		footer = append(footer, styleKeyHint("["+h.key+"] "+string(h.action)))
+	}
+	sections = append(sections, strings.Join(footer, "  "))
+	return cardFrame(cardSections(sections...), width, pending)
+}
+
+// permissionRequirementsBody renders every unmet requirement and, indented beneath
+// each, its exact persisted rule candidates — all display-ready strings straight from
+// the typed payload. An empty requirement list yields "" (a pure tool with nothing to
+// grant), and cardSections drops the empty body.
+func permissionRequirementsBody(p prompt, textW int) string {
+	if len(p.Requirements) == 0 {
+		return ""
+	}
+	rows := make([]string, 0, len(p.Requirements))
+	for _, requirement := range p.Requirements {
+		rows = append(rows, strings.Join(wrapToWidth(requirementBullet+requirement.Description, textW), "\n"))
+		for _, candidate := range requirement.Candidates {
+			rows = append(rows, strings.Join(wrapToWidth(candidateBullet+candidate, textW), "\n"))
 		}
 	}
-	hints = append(hints, styleKeyHint("[n] deny")) // deny is always offered (fail-secure)
-	footer := strings.Join(hints, "  ")
-	return cardFrame(cardSections(title, body, footer), width, pending)
+	return strings.Join(rows, "\n")
 }
 
 // renderAskUserBox renders an AskUser prompt as a card. With choices it shows the

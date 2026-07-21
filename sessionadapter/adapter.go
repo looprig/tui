@@ -16,7 +16,6 @@ import (
 	"github.com/looprig/harness/pkg/journal"
 	"github.com/looprig/harness/pkg/session"
 	"github.com/looprig/harness/pkg/sessionstore"
-	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui"
 )
 
@@ -282,30 +281,26 @@ func (a *sessionAdapter) gateIDFor(loopID, callID uuid.UUID) (gate.ID, error) {
 	return gate.ID{}, &GateNotOpenError{LoopID: loopID, ToolExecutionID: callID}
 }
 
-// Approve resolves a pending tool-call permission gate, granting it at scope. loopID names
-// the gate-opening loop; callID is the tool-execution id.
-func (a *sessionAdapter) Approve(ctx context.Context, loopID, callID uuid.UUID, scope tool.ApprovalScope) error {
+// Approve resolves a pending tool-call permission gate with the chosen approval action
+// — gate.ApprovalApprove or gate.ApprovalApproveAlwaysWorkspace. loopID names the
+// gate-opening loop; callID is the tool-execution id. The action string is sent in the
+// clear with no values (the one combined prompt carries no scope and no per-capability
+// payload); the session validates it against the gate's ApprovalControls and, for the
+// always-workspace action, persists the displayed candidates before execution.
+func (a *sessionAdapter) Approve(ctx context.Context, loopID, callID uuid.UUID, action gate.ApprovalAction) error {
 	gateID, err := a.gateIDFor(loopID, callID)
-	if err != nil {
-		return err
-	}
-	scopeValue, ok := tool.ApprovalScopeValue(scope)
-	if !ok {
-		return &GateNotOpenError{LoopID: loopID, ToolExecutionID: callID}
-	}
-	rawScope, err := json.Marshal(scopeValue)
 	if err != nil {
 		return err
 	}
 	return a.sess.RespondGate(ctx, gate.GateResponse{
 		GateID: gateID,
-		Action: "approve",
-		Values: map[string]json.RawMessage{"scope": rawScope},
+		Action: string(action),
 		Source: gate.ResponseSource{Kind: gate.ResponseFromUser},
 	})
 }
 
-// Deny resolves a pending tool-call permission gate by failing it closed (fail-secure).
+// Deny resolves a pending tool-call permission gate by failing it closed (fail-secure)
+// with the exact gate.ApprovalDeny action.
 func (a *sessionAdapter) Deny(ctx context.Context, loopID, callID uuid.UUID) error {
 	gateID, err := a.gateIDFor(loopID, callID)
 	if err != nil {
@@ -313,7 +308,7 @@ func (a *sessionAdapter) Deny(ctx context.Context, loopID, callID uuid.UUID) err
 	}
 	return a.sess.RespondGate(ctx, gate.GateResponse{
 		GateID: gateID,
-		Action: "deny",
+		Action: string(gate.ApprovalDeny),
 		Source: gate.ResponseSource{Kind: gate.ResponseFromUser},
 	})
 }

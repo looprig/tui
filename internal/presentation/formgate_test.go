@@ -11,7 +11,6 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
-	"github.com/looprig/harness/pkg/tool"
 )
 
 // formGateID is the deterministic gate id the form fixtures carry.
@@ -344,7 +343,7 @@ func TestGateResolvedLeavesNonFormPromptsAlone(t *testing.T) {
 			m = m.ApplyEvent(event.PermissionRequested{
 				Header:          event.Header{Coordinates: identity.Coordinates{LoopID: formLoopID}},
 				ToolExecutionID: uuid.UUID{0x0a},
-				Request:         tool.BashRequest{Command: "ls"},
+				Request:         bashPermission("ls"),
 			})
 			if m.PendingCount() != 2 {
 				t.Fatalf("pending = %d, want 2", m.PendingCount())

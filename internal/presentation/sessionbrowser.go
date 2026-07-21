@@ -28,7 +28,10 @@ type SessionBrowser interface {
 }
 
 type Option func(*screenOptions)
-type screenOptions struct{ sessionBrowser SessionBrowser }
+type screenOptions struct {
+	sessionBrowser SessionBrowser
+	presentation   SessionPresentation
+}
 
 func WithSessionBrowser(browser SessionBrowser) Option {
 	return func(options *screenOptions) { options.sessionBrowser = browser }

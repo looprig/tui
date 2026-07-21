@@ -44,7 +44,7 @@ type definitionState struct {
 	model               model.Model
 	system              string
 	tools               []tool.Definition
-	permissionFactory   PermissionFactory
+	accessGate          AccessGate
 	middlewares         []tool.ToolMiddleware
 	limits              ToolLimits
 	engine              Engine
@@ -122,8 +122,8 @@ func Define(opts ...Option) (Definition, error) {
 			return Definition{}, &DefinitionError{Kind: DefinitionInvalidMiddleware, Field: "middlewares", Value: indexString(index)}
 		}
 	}
-	if _, configured := resolved.seen["permission_factory"]; configured && nilLike(resolved.permissionFactory) {
-		return Definition{}, &DefinitionError{Kind: DefinitionInvalidPermission, Field: "permission_factory"}
+	if _, configured := resolved.seen["access_gate"]; configured && nilLike(resolved.accessGate) {
+		return Definition{}, &DefinitionError{Kind: DefinitionInvalidAccessGate, Field: "access_gate"}
 	}
 	if resolved.engine != EngineNative && resolved.engine != EngineForeignClaude && resolved.engine != EngineForeignCodex {
 		return Definition{}, &DefinitionError{Kind: DefinitionInvalidEngine, Field: "engine"}
@@ -134,9 +134,9 @@ func Define(opts ...Option) (Definition, error) {
 	if _, configured := resolved.seen["policy_revision"]; configured && strings.TrimSpace(resolved.policyRevision) == "" {
 		return Definition{}, &DefinitionError{Kind: DefinitionInvalidPolicyRevision, Field: "policy_revision"}
 	}
-	_, permissionConfigured := resolved.seen["permission_factory"]
+	_, accessConfigured := resolved.seen["access_gate"]
 	_, runtimeConfigured := resolved.seen["runtime_context"]
-	if (permissionConfigured || runtimeConfigured || len(resolved.middlewares) > 0) && strings.TrimSpace(resolved.policyRevision) == "" {
+	if (accessConfigured || runtimeConfigured || len(resolved.middlewares) > 0) && strings.TrimSpace(resolved.policyRevision) == "" {
 		return Definition{}, &DefinitionError{Kind: DefinitionMissingPolicyRevision, Field: "policy_revision"}
 	}
 	if resolved.delegation.Style != DelegationSyncOnly && resolved.delegation.Style != DelegationManaged {
@@ -486,9 +486,6 @@ func (d Definition) Bind(ctx context.Context, bindings tool.Bindings) (BoundDefi
 		cause := &tool.InvalidBindingsError{Field: "loop_id"}
 		return nil, &BindError{Kind: BindInvalidLoopID, Index: -1, Cause: cause}
 	}
-	if d.state.permissionFactory != nil && nilLike(bindings.SecurityLimit) {
-		return nil, &BindError{Kind: BindInvalidSecurityLimit, Index: -1}
-	}
 	if err := validateDefinitionTools(bindings.ExtraTools, "bindings.extra_tools"); err != nil {
 		return nil, &BindError{Kind: BindInvalidDefinition, Index: -1, Cause: err}
 	}
@@ -607,17 +604,7 @@ func (d Definition) Bind(ctx context.Context, bindings tool.Bindings) (BoundDefi
 		})
 	}
 
-	var permission PermissionGate
-	if d.state.permissionFactory != nil {
-		permission, err = d.state.permissionFactory(ctx, cloneBindings(bindings))
-		if err != nil {
-			return nil, err
-		}
-		if nilLike(permission) {
-			return nil, &BindError{Kind: BindInvalidPermission, Index: -1}
-		}
-	}
-	return &boundDefinitionState{definition: d.state, modes: modes, permission: permission}, nil
+	return &boundDefinitionState{definition: d.state, modes: modes}, nil
 }
 
 // BoundDefinition is the sealed read-only runtime view of one bound loop.
@@ -637,7 +624,7 @@ type BoundDefinition interface {
 	Modes() []BoundMode
 	Mode(ModeName) (BoundMode, bool)
 	InitialMode() ModeName
-	Permission() PermissionGate
+	Access() AccessGate
 	Middlewares() []tool.ToolMiddleware
 	DrainTimeout() time.Duration
 	RuntimeContext() RuntimeContextProvider
@@ -653,20 +640,30 @@ type BoundDefinition interface {
 	boundDefinition()
 }
 
+// boundDefinitionState is the sealed bound view. accessOverride, when non-nil,
+// is a binding-time per-loop gate override installed by OverrideBoundAccess;
+// otherwise Access() resolves the loop's OWN definition gate — a subagent
+// binding without an explicit override always inherits its own definition's
+// gate, never another loop's.
 type boundDefinitionState struct {
-	definition *definitionState
-	modes      []BoundMode
-	permission PermissionGate
+	definition     *definitionState
+	modes          []BoundMode
+	accessOverride AccessGate
 }
 
-func (*boundDefinitionState) boundDefinition()              {}
-func (b *boundDefinitionState) Name() identity.AgentName    { return b.definition.name }
-func (b *boundDefinitionState) DisplayName() string         { return b.definition.displayName }
-func (b *boundDefinitionState) Description() string         { return b.definition.description }
-func (b *boundDefinitionState) Engine() Engine              { return b.definition.engine }
-func (b *boundDefinitionState) Client() inference.Client    { return b.definition.client }
-func (b *boundDefinitionState) InitialMode() ModeName       { return b.definition.initialMode }
-func (b *boundDefinitionState) Permission() PermissionGate  { return b.permission }
+func (*boundDefinitionState) boundDefinition()           {}
+func (b *boundDefinitionState) Name() identity.AgentName { return b.definition.name }
+func (b *boundDefinitionState) DisplayName() string      { return b.definition.displayName }
+func (b *boundDefinitionState) Description() string      { return b.definition.description }
+func (b *boundDefinitionState) Engine() Engine           { return b.definition.engine }
+func (b *boundDefinitionState) Client() inference.Client { return b.definition.client }
+func (b *boundDefinitionState) InitialMode() ModeName    { return b.definition.initialMode }
+func (b *boundDefinitionState) Access() AccessGate {
+	if b.accessOverride != nil {
+		return b.accessOverride
+	}
+	return b.definition.accessGate
+}
 func (b *boundDefinitionState) DrainTimeout() time.Duration { return b.definition.drainTimeout }
 func (b *boundDefinitionState) RuntimeContext() RuntimeContextProvider {
 	return b.definition.runtimeContext
@@ -902,12 +899,17 @@ func WithTools(defs ...tool.Definition) Option {
 	defs = append([]tool.Definition(nil), defs...)
 	return func(o *definitionOptions) error { o.tools = append(o.tools, defs...); return nil }
 }
-func WithPermissionFactory(factory PermissionFactory) Option {
+
+// WithAccessGate installs the combined prepared-access decision gate for every
+// tool call this loop runs. Without one, every tool call fails closed: the
+// runner denies unauthorized execution rather than running ungated. The gate is
+// an opaque policy collaborator, so configuring it requires WithPolicyRevision.
+func WithAccessGate(access AccessGate) Option {
 	return func(o *definitionOptions) error {
-		if err := o.singleton("permission_factory"); err != nil {
+		if err := o.singleton("access_gate"); err != nil {
 			return err
 		}
-		o.permissionFactory = factory
+		o.accessGate = access
 		return nil
 	}
 }
