@@ -1855,6 +1855,57 @@ func TestStoredStepToolCardSummarizesInput(t *testing.T) {
 	}
 }
 
+// TestNestedTaskToolSummaryPreservesConcreteName proves the durable nested-card
+// path keeps the Task tool name while redacting all task arguments.
+func TestNestedTaskToolSummaryPreservesConcreteName(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const (
+		subject     = "nested sensitive subject"
+		description = "nested sensitive description"
+		metadata    = "nested sensitive metadata"
+		taskID      = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	)
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "builder", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "build it"))
+	m = m.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("task-create-id", "TaskCreate", `{"subject":"nested sensitive subject","description":"nested sensitive description","metadata":{"secret":"nested sensitive metadata"},"taskId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}`)),
+		toolResult("task-create-id", "created"),
+	))
+	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}})
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse("toolu_X", "Subagent", `{"agent":"builder"}`)),
+		toolResult("toolu_X", "done"),
+	))
+
+	card := findSubagentCard(t, m)
+	if len(card.Children) != 1 {
+		t.Fatalf("card.Children = %d, want 1 nested TaskCreate row; %+v", len(card.Children), card.Children)
+	}
+	child := card.Children[0]
+	if child.ToolName != "TaskCreate" {
+		t.Errorf("nested child ToolName = %q, want TaskCreate", child.ToolName)
+	}
+	if child.Summary != "" {
+		t.Errorf("nested TaskCreate Summary = %q, want empty detail", child.Summary)
+	}
+	rendered := stripANSI(strings.Join(renderToolNode(child, 1, false, 100, false), "\n"))
+	if !strings.Contains(rendered, "TaskCreate") {
+		t.Errorf("nested child rendering = %q, want concrete TaskCreate name", rendered)
+	}
+	for _, secret := range []string{subject, description, metadata, taskID} {
+		if strings.Contains(rendered, secret) {
+			t.Errorf("nested child rendering = %q contains sensitive value %q", rendered, secret)
+		}
+	}
+}
+
 // TestLoopShortForm covers the loopID fallback label (the 8-hex first group of the
 // uuid string), used when a subagent has no/empty agent name.
 func TestLoopShortForm(t *testing.T) {

@@ -7,17 +7,20 @@ import (
 )
 
 const (
-	toolNameReadFile  = "ReadFile"
-	toolNameRead      = "Read"
-	toolNameWriteFile = "WriteFile"
-	toolNameEditFile  = "EditFile"
-	toolNameBash      = "Bash"
-	toolNameFetch     = "Fetch"
-	toolNameWebSearch = "WebSearch"
-	toolNameGlob      = "Glob"
-	toolNameGrep      = "Grep"
-	toolNameTodo      = "Todo"
-	toolNameSkill     = "Skill"
+	toolNameReadFile   = "ReadFile"
+	toolNameRead       = "Read"
+	toolNameWriteFile  = "WriteFile"
+	toolNameEditFile   = "EditFile"
+	toolNameBash       = "Bash"
+	toolNameFetch      = "Fetch"
+	toolNameWebSearch  = "WebSearch"
+	toolNameGlob       = "Glob"
+	toolNameGrep       = "Grep"
+	toolNameTaskCreate = "TaskCreate"
+	toolNameTaskUpdate = "TaskUpdate"
+	toolNameTaskGet    = "TaskGet"
+	toolNameTaskList   = "TaskList"
+	toolNameSkill      = "Skill"
 )
 
 type pathSummaryArgs struct {
@@ -54,10 +57,6 @@ type grepSummaryArgs struct {
 	Path    string `json:"path"`
 }
 
-type todoSummaryArgs struct {
-	Action string `json:"action"`
-}
-
 type skillSummaryArgs struct {
 	Name string `json:"name"`
 }
@@ -84,8 +83,8 @@ func toolUseSummary(name string, input json.RawMessage) string {
 		return globSummary(input)
 	case toolNameGrep:
 		return grepSummary(input)
-	case toolNameTodo:
-		return todoSummary(input)
+	case toolNameTaskCreate, toolNameTaskUpdate, toolNameTaskGet, toolNameTaskList:
+		return ""
 	case toolNameSkill:
 		return skillSummary(input)
 	default:
@@ -179,14 +178,6 @@ func summaryInPath(value, path string) string {
 		return value
 	}
 	return value + " in " + path
-}
-
-func todoSummary(input json.RawMessage) string {
-	var args todoSummaryArgs
-	if err := json.Unmarshal(input, &args); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(args.Action)
 }
 
 func skillSummary(input json.RawMessage) string {

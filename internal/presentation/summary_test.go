@@ -1,6 +1,59 @@
 package presentation
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// TestTaskToolUseSummaryRedacted pins the durable presentation boundary for the
+// loop-scoped task tools: the card keeps its concrete tool name, but its
+// reconstructed detail is intentionally empty even when stored arguments contain
+// task text, metadata, and identifiers.
+func TestTaskToolUseSummaryRedacted(t *testing.T) {
+	t.Parallel()
+
+	const (
+		subject     = "sensitive task subject"
+		description = "sensitive task description"
+		metadata    = "sensitive task metadata"
+		taskID      = "11111111-2222-3333-4444-555555555555"
+	)
+
+	inputs := []struct {
+		name  string
+		input string
+	}{
+		{name: "TaskCreate", input: `{"subject":"` + subject + `","description":"` + description + `","metadata":{"secret":"` + metadata + `"},"taskId":"` + taskID + `"}`},
+		{name: "TaskUpdate", input: `{"subject":"` + subject + `","description":"` + description + `","metadata":{"secret":"` + metadata + `"},"taskId":"` + taskID + `"}`},
+		{name: "TaskGet", input: `{"subject":"` + subject + `","description":"` + description + `","metadata":{"secret":"` + metadata + `"},"taskId":"` + taskID + `"}`},
+		{name: "TaskList", input: `{"subject":"` + subject + `","description":"` + description + `","metadata":{"secret":"` + metadata + `"},"taskId":"` + taskID + `"}`},
+	}
+	for _, tt := range inputs {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := toolUseSummary(tt.name, json.RawMessage(tt.input))
+			if got != "" {
+				t.Fatalf("toolUseSummary(%q) = %q, want empty detail", tt.name, got)
+			}
+			for _, secret := range []string{subject, description, metadata, taskID} {
+				if strings.Contains(got, secret) {
+					t.Errorf("toolUseSummary(%q) = %q contains sensitive value %q", tt.name, got, secret)
+				}
+			}
+		})
+	}
+}
+
+// TestTaskSummaryHasNoTodoPresentationCase prevents the removed Todo tool from
+// regaining a presentation-specific argument summary.
+func TestTaskSummaryHasNoTodoPresentationCase(t *testing.T) {
+	t.Parallel()
+
+	if got := toolUseSummary("Todo", json.RawMessage(`{"action":"create"}`)); got != "" {
+		t.Fatalf("toolUseSummary(%q) = %q, want no Todo-specific summary", "Todo", got)
+	}
+}
 
 // TestToolRunSummary pins the collapsed-run label builder: the "N tools · names" text and
 // the any-failed flag. A failed tool (ToolError/ToolCancelled) or subagent (subFailed/
