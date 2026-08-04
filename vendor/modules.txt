@@ -1,4 +1,4 @@
-# charm.land/bubbles/v2 v2.1.0
+# charm.land/bubbles/v2 v2.1.1
 ## explicit; go 1.25.0
 charm.land/bubbles/v2/cursor
 charm.land/bubbles/v2/internal/memoization
@@ -6,7 +6,7 @@ charm.land/bubbles/v2/internal/runeutil
 charm.land/bubbles/v2/key
 charm.land/bubbles/v2/textarea
 charm.land/bubbles/v2/viewport
-# charm.land/bubbletea/v2 v2.0.7
+# charm.land/bubbletea/v2 v2.0.8
 ## explicit; go 1.25.0
 charm.land/bubbletea/v2
 # charm.land/glamour/v2 v2.0.1
@@ -15,7 +15,7 @@ charm.land/glamour/v2
 charm.land/glamour/v2/ansi
 charm.land/glamour/v2/internal/autolink
 charm.land/glamour/v2/styles
-# charm.land/lipgloss/v2 v2.0.4
+# charm.land/lipgloss/v2 v2.0.5
 ## explicit; go 1.25.0
 charm.land/lipgloss/v2
 charm.land/lipgloss/v2/table
@@ -47,8 +47,8 @@ cloud.google.com/go/compute/metadata
 ## explicit; go 1.18
 github.com/BurntSushi/toml
 github.com/BurntSushi/toml/internal
-# github.com/alecthomas/chroma/v2 v2.20.0
-## explicit; go 1.22
+# github.com/alecthomas/chroma/v2 v2.27.0
+## explicit; go 1.25
 github.com/alecthomas/chroma/v2
 github.com/alecthomas/chroma/v2/formatters
 github.com/alecthomas/chroma/v2/formatters/html
@@ -110,7 +110,7 @@ github.com/cespare/xxhash/v2
 # github.com/charmbracelet/colorprofile v0.4.3
 ## explicit; go 1.25.0
 github.com/charmbracelet/colorprofile
-# github.com/charmbracelet/ultraviolet v0.0.0-20260525132238-948f4557a654
+# github.com/charmbracelet/ultraviolet v0.0.0-20260803092147-8b693049ce2a
 ## explicit; go 1.25.0
 github.com/charmbracelet/ultraviolet
 # github.com/charmbracelet/x/ansi v0.11.7
@@ -118,8 +118,8 @@ github.com/charmbracelet/ultraviolet
 github.com/charmbracelet/x/ansi
 github.com/charmbracelet/x/ansi/kitty
 github.com/charmbracelet/x/ansi/parser
-# github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf
-## explicit; go 1.19
+# github.com/charmbracelet/x/exp/slice v0.0.0-20260803091719-3755ebad01b1
+## explicit; go 1.24.0
 github.com/charmbracelet/x/exp/slice
 # github.com/charmbracelet/x/term v0.2.2
 ## explicit; go 1.24.0
@@ -136,10 +136,11 @@ github.com/clipperhouse/displaywidth
 # github.com/clipperhouse/uax29/v2 v2.7.0
 ## explicit; go 1.18
 github.com/clipperhouse/uax29/v2/graphemes
-# github.com/dlclark/regexp2 v1.11.5
-## explicit; go 1.13
-github.com/dlclark/regexp2
-github.com/dlclark/regexp2/syntax
+# github.com/dlclark/regexp2/v2 v2.5.2
+## explicit; go 1.25
+github.com/dlclark/regexp2/v2
+github.com/dlclark/regexp2/v2/helpers
+github.com/dlclark/regexp2/v2/syntax
 # github.com/felixge/httpsnoop v1.1.0
 ## explicit; go 1.25
 github.com/felixge/httpsnoop
@@ -228,7 +229,7 @@ github.com/looprig/harness/pkg/session
 github.com/looprig/harness/pkg/sessionstore
 github.com/looprig/harness/pkg/tool
 github.com/looprig/harness/pkg/workspacestore
-# github.com/looprig/inference v0.6.0
+# github.com/looprig/inference v0.7.0
 ## explicit; go 1.26.4
 github.com/looprig/inference
 github.com/looprig/inference/codec
@@ -248,11 +249,11 @@ github.com/looprig/inference/wire/sse
 # github.com/looprig/storage v0.3.0
 ## explicit; go 1.25.0
 github.com/looprig/storage
-# github.com/lucasb-eyer/go-colorful v1.4.0
+# github.com/lucasb-eyer/go-colorful v1.4.1
 ## explicit; go 1.12
 github.com/lucasb-eyer/go-colorful
-# github.com/mattn/go-runewidth v0.0.23
-## explicit; go 1.20
+# github.com/mattn/go-runewidth v0.0.27
+## explicit; go 1.23
 github.com/mattn/go-runewidth
 # github.com/microcosm-cc/bluemonday v1.0.27
 ## explicit; go 1.19
@@ -332,7 +333,7 @@ github.com/tidwall/sjson
 # github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e
 ## explicit; go 1.19
 github.com/xo/terminfo
-# github.com/yuin/goldmark v1.8.2
+# github.com/yuin/goldmark v1.8.5
 ## explicit; go 1.22
 github.com/yuin/goldmark
 github.com/yuin/goldmark/ast
