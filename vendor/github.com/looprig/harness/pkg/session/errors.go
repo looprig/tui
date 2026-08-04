@@ -185,6 +185,36 @@ func (e *AgentNameMismatchError) Error() string {
 	return "session: restore agent name mismatch: persisted=" + strconv.Quote(string(e.Persisted)) + " != configured=" + strconv.Quote(string(e.Configured)) + "; pass WithAllowConfigMismatch to override"
 }
 
+const (
+	RestoreRuntimeMissing            = "missing_runtime"
+	RestoreRuntimeUnavailable        = "runtime_unavailable"
+	RestoreRuntimeTargetMismatch     = "target_mismatch"
+	RestoreRuntimeCredentialMismatch = "credential_mismatch" // #nosec G101 -- closed error-category label, not a credential
+	RestoreRuntimeEffortMismatch     = "effort_mismatch"
+)
+
+// RestoreRuntimeMismatchError reports a fail-closed adapter restore decision.
+// Its public text is deliberately category-only: journal selectors, model keys,
+// credentials, and catalog/provider details never reach model-facing errors.
+type RestoreRuntimeMismatchError struct {
+	Kind  string
+	Cause error
+}
+
+func (e *RestoreRuntimeMismatchError) Error() string {
+	if e == nil || e.Kind == "" {
+		return "session: restore runtime mismatch"
+	}
+	return "session: restore runtime mismatch: " + string(e.Kind)
+}
+
+func (e *RestoreRuntimeMismatchError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type RestoreDiscoveryErrorKind string
 
 const (
