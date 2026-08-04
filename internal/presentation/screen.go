@@ -319,6 +319,8 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleResize(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		return m.routeToEditor(msg)
 	case tea.MouseMsg:
 		cmd := m.handleMouse(msg)
 		return m, cmd
@@ -409,7 +411,14 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleSessionsListed(msg)
 		return m, cmd
 	}
-	return m, nil
+	// Anything the arms above do not claim belongs to a widget, not to the Screen: the
+	// textarea's reply to its own ctrl+v clipboard read (an UNEXPORTED type, so it can
+	// only be forwarded blind — no case could ever match it) and the cursor-blink tick.
+	// Dropping them here is what made ctrl+v a silent no-op, so they are forwarded to the
+	// editor under the same precedence a paste gets. ForwardToEditor only lets a
+	// text-entry mode see them, and gates the completion-panel refresh on the value
+	// actually changing, so a blink tick never reaches the filesystem.
+	return m.routeToEditor(msg)
 }
 
 // FinalizeHandoff extends the core ownership finalizer with any stale replacement cleanup
@@ -1115,6 +1124,47 @@ func (m *Screen) beginGracefulQuit() tea.Cmd {
 // prompt, Esc interrupts a running turn; (4) the viewport consumes ONLY its non-conflicting
 // nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
 // input — falls through to the composer.
+// routeToEditor delivers a NON-keypress message to the composer. It serves the explicit
+// tea.PasteMsg arm and the trailing default of Update, which together cover every way
+// text can reach the editor without arriving as a keypress:
+//
+//   - A bracketed paste. Bubble Tea v2 decodes one into a single tea.PasteMsg — the
+//     terminal's paste markers swallow the intervening bytes, so NONE of the pasted
+//     characters arrive as keypresses and handleKey never sees them.
+//   - The textarea's reply to its own ctrl+v binding, which reads the system clipboard in
+//     a command. That reply type is UNEXPORTED by the textarea package, so it cannot be
+//     matched by a case here — the only way to complete the round trip is to forward the
+//     messages Update does not recognize, which is exactly what the default arm does.
+//   - The cursor-blink tick that keeps the composer caret alive.
+//
+// It applies the same precedence handleKey does, minus the parts these messages cannot
+// mean. None of them is a chord or a navigation key, so the global chords and the
+// viewport paging keys are skipped outright:
+//
+//   - quitting wins first, exactly as in handleKey: once the bounded agent close is in
+//     flight no input may mutate state or dispatch work.
+//   - an open runtime/session tray owns the keyboard and offers no text field, so the
+//     message is inert (matching those trays' `default: return m, nil` key arms) rather
+//     than leaking into the composer hidden behind the tray.
+//   - otherwise the interaction model decides by mode (see ForwardToEditor): the
+//     composer takes it, a free-text answer prompt takes it, every other prompt ignores it.
+//
+// None of these ever changes the transcript — only the composer's text — so it syncs the
+// viewport SIZE (the editor may have auto-grown) without re-rendering, the same cheap
+// path routeToInteraction takes for a plain composer edit.
+func (m Screen) routeToEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.quitting {
+		return m, nil
+	}
+	if m.runtimeTray != nil || m.sessionTray != nil {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.interaction, cmd = m.interaction.ForwardToEditor(msg)
+	m.resize()
+	return m, cmd
+}
+
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Once shutdown owns the agent, every later key is inert until Bubble Tea
 	// processes the queued QuitMsg. This guard must precede global chords, prompts,
@@ -1194,7 +1244,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.status == StatusRunning || m.activePrompt() != nil || m.compaction.IsActive(m.focusedLoopID) {
 				m.pendingResume = id
 				if m.status == StatusRunning {
-					return m, m.sessionCore.interruptRunning()
+					return m, m.sessionCore.interruptRunning(m.focusedLoopID)
 				}
 				m.status = StatusInterrupting
 				return m, interruptTurn(m.appCtx, m.agent)
@@ -1214,7 +1264,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.interaction.slash != nil || m.interaction.files != nil {
 			return m.routeToInteraction(msg)
 		}
-		return m, m.sessionCore.interruptRunning()
+		return m, m.sessionCore.interruptRunning(m.focusedLoopID)
 	}
 	// Precedence (4): the viewport consumes ONLY PageUp/PageDown/Home/End (handleKey returns
 	// false for every other key), so those scroll the content.
@@ -1258,6 +1308,12 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// core's default submit does (buildBlocks from action.Text), and a build error commits
 		// the same faint error entry.
 		cmd, present = m.sessionCore.submitToLoop(m.focusedLoopID, action.Text)
+	} else if action.Kind == uiInterrupt {
+		// Interrupt follows FOCUS for the same reason submit does: the status line the
+		// user read before pressing esc is the focused loop's. Intercepted here (rather
+		// than left to mapAction) because focus is presentation-owned — the core has no
+		// notion of which loop the user is watching.
+		cmd = m.sessionCore.interruptRunning(m.focusedLoopID)
 	} else if action.Kind == uiRunSlash && action.Slash == "/compact" {
 		// Focus is presentation-owned and intentionally independent from the
 		// session's active loop. Manual compaction follows what the user is

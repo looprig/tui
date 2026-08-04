@@ -575,6 +575,42 @@ func (m interactionModel) answerKey(msg tea.KeyPressMsg) (interactionModel, uiAc
 	return m, noop, cmd
 }
 
+// ForwardToEditor routes a NON-keypress message to the editor. It is the sibling of
+// Update, whose argument is a tea.KeyPressMsg and which therefore cannot carry any of the
+// messages the editor still needs:
+//
+//   - tea.PasteMsg — Bubble Tea v2 delivers bracketed-paste text as its own message
+//     rather than folding it into a keypress the way v1 did.
+//   - the textarea's reply to its OWN ctrl+v binding, which reads the system clipboard in
+//     a command and answers with a package-INTERNAL message. Being unexported, it can
+//     never be matched by type here; it can only be forwarded blind, which is why Screen
+//     routes its unhandled messages through this door rather than enumerating cases.
+//   - the cursor-blink tick, which keeps the composer caret alive.
+//
+// Only the two text-entry modes accept one. modeCompose refreshes the completion panels
+// so a pasted "/cmd" or "@path" behaves exactly as a typed one does — but ONLY when the
+// value actually changed, because a blink tick arrives on a timer and refreshCompletion
+// touches the filesystem. modeAnswerPrompt writes straight to the editor without touching
+// the panels, mirroring answerKey: the input box IS the answer field there, and slash/@
+// completion is a compose-only affordance. Every other mode (permission, choice, form,
+// open-URL) drives discrete controls with no free-text editor, so the message is inert
+// rather than silently filling a composer hidden behind the card.
+func (m interactionModel) ForwardToEditor(msg tea.Msg) (interactionModel, tea.Cmd) {
+	switch m.mode {
+	case modeCompose:
+		before := m.input.Value()
+		cmd := m.input.Update(msg)
+		if m.input.Value() != before {
+			m.refreshCompletion()
+		}
+		return m, cmd
+	case modeAnswerPrompt:
+		return m, m.input.Update(msg)
+	default:
+		return m, nil
+	}
+}
+
 // composeKey routes a key in modeCompose. When the slash panel is visible it owns
 // tab/up/down/enter (mirroring screen.go's handleKey/handleEnter): tab fills the
 // input with the highlighted command, up/down navigate the panel, and enter
@@ -676,17 +712,31 @@ func (m interactionModel) composeEnter() (interactionModel, uiAction) {
 	return m, uiAction{Kind: uiSubmit, Text: v}
 }
 
-// forwardToInput sends the key to the editor and rebuilds the slash-completion
-// panel from the new value: a leading-slash word (no whitespace) rebuilds it from
-// the prefix (nil if nothing matches); anything else hides it. It returns the
+// forwardToInput sends the message — a keypress, or a paste (see ForwardToEditor) — to
+// the editor and rebuilds the completion panels from the new value. It returns the
 // editor's Cmd (cursor blink) so the caller can keep the composer cursor alive. It
 // mirrors screen.go's forwardToInput so compose behavior is identical.
-func (m *interactionModel) forwardToInput(msg tea.KeyPressMsg) tea.Cmd {
+//
+// It rebuilds UNCONDITIONALLY, even for a key that left the value untouched: that is the
+// long-standing per-keystroke behavior (an arrow key hides a stale panel), and a key is a
+// deliberate user action, so the cost is bounded by typing speed. The value-gated variant
+// exists in ForwardToEditor for messages that arrive on a TIMER.
+func (m *interactionModel) forwardToInput(msg tea.Msg) tea.Cmd {
 	cmd := m.input.Update(msg)
+	m.refreshCompletion()
+	return cmd
+}
+
+// refreshCompletion rebuilds the completion panels from the editor's CURRENT value: a
+// leading-slash word (no whitespace) opens the command panel from that prefix (nil if
+// nothing matches); otherwise an @path being typed at the end opens the file panel. They
+// are mutually exclusive, and any other text hides both.
+//
+// NOTE the file panel calls inputpkg.ListFiles, which touches the FILESYSTEM. Every caller
+// must therefore be driven by a real user edit — never by a timer — or the composer would
+// stat a directory on every tick. See ForwardToEditor's value gate.
+func (m *interactionModel) refreshCompletion() {
 	v := m.input.Value()
-	// A leading-slash word opens the command panel; otherwise an @path being typed at
-	// the end of the editor opens the file panel. They are mutually exclusive, and any
-	// other text hides both.
 	m.slash, m.files = nil, nil
 	switch {
 	case strings.HasPrefix(v, "/") && !strings.ContainsAny(v, " \t\n"):
@@ -696,7 +746,6 @@ func (m *interactionModel) forwardToInput(msg tea.KeyPressMsg) tea.Cmd {
 			m.files = components.NewFileComplete(inputpkg.ListFiles(partial))
 		}
 	}
-	return cmd
 }
 
 // helpText builds the /help listing from the canonical command table. Screen

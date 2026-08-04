@@ -182,10 +182,18 @@ func (c *sessionCore) handleEvent(ev event.Event) (tea.Cmd, turnPhase) {
 // displayed status from that loop's freshly folded bit. A background (non-active) loop's turn
 // events fold their bit but leave the displayed status untouched — the active-loop projection,
 // not the root, owns the status now. Interrupting/Resetting are owned by their own handlers
-// and are NOT set here, but the active loop's terminal resolves Interrupting → Idle (completing
-// an in-flight interrupt). It returns the phase transition (relative to the active loop) so a
+// and are NOT set here, but a terminal resolves Interrupting → Idle (completing an in-flight
+// interrupt). It returns the phase transition (relative to the active loop) so a
 // shell can drive its presentation reaction; non-turn and background-loop turn events return
 // turnUnchanged.
+//
+// The Interrupting resolution is deliberately checked BEFORE the background-loop early return,
+// and accepts ANY loop's terminal. Session interrupt is session-wide (harness Session.Interrupt
+// snapshots every live loop), so the loop that reports the terminal need not be the active one —
+// requiring the ACTIVE loop's terminal wedged the UI in "Interrupting…" forever whenever the
+// interrupted loop was a subagent. Interrupting is a session-GLOBAL status (focusedStatus
+// surfaces it regardless of focus), so that wedge froze every loop's status line, not just the
+// interrupted one's.
 func (c *sessionCore) applyTurnStatus(ev event.Event) turnPhase {
 	loopID := ev.EventHeader().LoopID
 	var terminal bool
@@ -198,12 +206,12 @@ func (c *sessionCore) applyTurnStatus(ev event.Event) turnPhase {
 	default:
 		return turnUnchanged
 	}
+	if terminal && c.status == StatusInterrupting {
+		c.status = StatusIdle // any loop's terminal resolves the session-wide interrupt
+		return turnEnded
+	}
 	if loopID != c.effectiveActiveLoopID() {
 		return turnUnchanged // a background loop's bit folded; the displayed status is unmoved
-	}
-	if terminal && c.status == StatusInterrupting {
-		c.status = StatusIdle // the active loop's terminal resolves the in-flight interrupt
-		return turnEnded
 	}
 	c.deriveActiveStatus()
 	if terminal {
@@ -410,7 +418,10 @@ func (c *sessionCore) mapAction(a uiAction) (tea.Cmd, bool) {
 	case uiGateRespond:
 		return respondGateCmd(c.appCtx, c.agent, a.GateID, a.GateAction, a.Values), false
 	case uiInterrupt:
-		return c.interruptRunning(), false
+		// A prompt-raised interrupt (esc on a choice/answer card) carries the gate's own
+		// loop, which is the loop the user is being asked about. A zero LoopID falls back
+		// to the session-status gate inside interruptRunning.
+		return c.interruptRunning(a.LoopID), false
 	default: // uiNoop
 		return nil, false
 	}
@@ -490,14 +501,27 @@ func (c *sessionCore) runSlash(name string) (tea.Cmd, bool) {
 	}
 }
 
-// interruptRunning begins an interrupt only while Running: it flips to Interrupting and
-// returns the bounded Interrupt command. The loop owns queueing, so there is no TUI-side
-// queue to drop — the loop returns any queued inputs as InputCancelled events on the
-// subscription (harmless to the transcript today). From any other status it is a no-op.
-// It is the home for both the Esc-in-compose path and the uiInterrupt action raised from
-// a choice/answer prompt.
-func (c *sessionCore) interruptRunning() tea.Cmd {
-	if c.status != StatusRunning {
+// interruptRunning begins an interrupt and returns the bounded Interrupt command, flipping
+// to Interrupting. It is the home for both the Esc-in-compose path and the uiInterrupt
+// action raised from a choice/answer prompt.
+//
+// watched is the loop the USER is looking at (Screen's focusedLoopID). It must be part of
+// the gate because the two things the user reads as "this loop is busy" both follow focus,
+// not the session-active loop: focusedStatus draws the status line from the focused loop's
+// own bit, and a composer submit is routed to the focused loop by submitToLoop. Gating on
+// c.status alone — which tracks the ACTIVE loop — made Esc a silent no-op in exactly the
+// situation that needs it most: watching a running subagent while the active loop sits
+// idle, with submissions piling up in the watched loop's queue behind the turn Esc was
+// supposed to stop. The session status stays in the gate so the pre-existing behavior (Esc
+// while the active loop runs) is preserved; this is strictly a widening.
+//
+// The loop owns queueing, so there is no TUI-side queue to drop. The harness RETAINS
+// human-authored queued input across an ordinary interrupt (loopruntime's
+// retainUserQueuedInbox: AgencyUser entries stay in FIFO order, machine-created
+// continuation/delegate entries are cancelled), so the queued message becomes the next
+// turn rather than being discarded.
+func (c *sessionCore) interruptRunning(watched uuid.UUID) tea.Cmd {
+	if c.status != StatusRunning && !c.loopRunning[watched] {
 		return nil
 	}
 	c.status = StatusInterrupting
