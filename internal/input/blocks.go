@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/looprig/core/content"
@@ -191,19 +190,22 @@ func denyReason(clean string) (string, bool) {
 	return "", false
 }
 
-// readAttachment opens clean with O_NOFOLLOW (rejecting a symlinked final
-// component) and O_NONBLOCK (so a FIFO/named pipe does not block the open until
-// a writer connects), confirms it is a regular file via fd stat, enforces the
-// size cap at stat time and again after a bounded read, and returns the bytes.
+// readAttachment opens clean with a no-follow, non-blocking open (rejecting a
+// symlinked/reparse-point final component, and — on platforms where it means
+// anything — not blocking on a FIFO/named pipe until a writer connects),
+// confirms it is a regular file via fd stat, enforces the size cap at stat
+// time and again after a bounded read, and returns the bytes. See
+// openNoFollow in attachment_open_unix.go / attachment_open_windows.go for
+// the platform-specific mechanism.
 func readAttachment(clean string) ([]byte, error) {
-	// #nosec G304 -- user-selected local path, validated by denylist + classify + O_NOFOLLOW + fd stat
-	f, err := os.OpenFile(clean, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	// #nosec G304 -- user-selected local path, validated by denylist + classify + openNoFollow + fd stat
+	f, err := openNoFollow(clean)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, &AttachmentNotFoundError{Path: clean, Cause: err}
 		}
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, &DeniedAttachmentError{Path: clean, Reason: "symlinked path component (O_NOFOLLOW)"}
+		if errors.Is(err, errAttachmentSymlink) {
+			return nil, &DeniedAttachmentError{Path: clean, Reason: "symlinked path component (no-follow)"}
 		}
 		return nil, &DeniedAttachmentError{Path: clean, Reason: "cannot open (symlink or permission)"}
 	}
