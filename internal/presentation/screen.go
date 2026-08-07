@@ -231,13 +231,25 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 	}
 	runtimeCatalog, _ := agent.(RuntimeCatalog)
 	runtimeController, _ := agent.(RuntimeController)
+	// The presentation is consumer-supplied (WithSessionPresentation) when a caller
+	// explicitly passes it — that is the authoritative override. Otherwise it falls back to
+	// the constructed agent's own SessionPresenter capability, mirroring
+	// handleReopenResult's reopen-time refresh. Without this fallback, no caller in this
+	// codebase ever supplies the option, so the footer's profile/workspace metadata stayed
+	// blank until the first /clear reopen — the only path that ever type-asserted the agent.
+	presented := options.presentation
+	if !options.presentationSet {
+		if presenter, ok := agent.(SessionPresenter); ok {
+			presented = presenter.SessionPresentation()
+		}
+	}
 	m := Screen{
 		sessionCore:       newSessionCore(ctx, agent, open, banner),
 		runtimeCatalog:    runtimeCatalog,
 		runtimeController: runtimeController,
 		runtime:           newRuntimeProjection(),
 		integrations:      newIntegrationProjection(),
-		presentation:      options.presentation,
+		presentation:      presented,
 		sessionBrowser:    options.sessionBrowser,
 		viewport:          viewportModel{atTail: true},
 		collapse:          newCollapseState(),

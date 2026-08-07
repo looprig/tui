@@ -74,8 +74,13 @@ type SessionPresenter interface {
 
 // WithSessionPresentation supplies the synchronous session metadata (workspace, fixed
 // profile, permission diagnostics) the Screen captures at construction. It is
-// consumer-filled and minimal; an omitted option yields the zero presentation (no
-// profile, no workspace, no diagnostics).
+// consumer-filled and minimal; an omitted option falls back to the constructed Agent's own
+// SessionPresenter capability, if it implements one (see New), and otherwise yields the
+// zero presentation (no profile, no workspace, no diagnostics). A SUPPLIED option always
+// wins over the agent's capability: it is the explicit, consumer-authoritative override.
 func WithSessionPresentation(p SessionPresentation) Option {
-	return func(options *screenOptions) { options.presentation = p }
+	return func(options *screenOptions) {
+		options.presentation = p
+		options.presentationSet = true
+	}
 }

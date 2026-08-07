@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -39,6 +40,61 @@ func TestSessionPresentationOmitsEmptyMetadata(t *testing.T) {
 	footer := stripANSI(m.footerView())
 	if strings.Contains(footer, "·") {
 		t.Errorf("footer = %q, want no metadata separators when no presentation is supplied", footer)
+	}
+}
+
+// TestSessionPresentationUsesAgentSessionPresenterAtConstruction pins the fix for the
+// blank-footer-on-first-launch bug: New's ONLY route to a presentation used to be the
+// (never-supplied-by-any-real-caller) WithSessionPresentation option, so the footer's
+// profile/workspace metadata was blank until the first /clear reopen, which is the only
+// path that ever type-asserted the agent as a SessionPresenter. New must perform the SAME
+// type assertion at construction, with NO reopen involved, so the very first frame already
+// carries the constructed agent's own session presentation.
+func TestSessionPresentationUsesAgentSessionPresenterAtConstruction(t *testing.T) {
+	t.Parallel()
+
+	agent := presenterAgent{
+		fakeAgent: &fakeAgent{activeLoopID: callID(1)},
+		pres: SessionPresentation{
+			ProfileName:           "ReadOnly",
+			WorkspaceRoot:         "/workspace",
+			PermissionDiagnostics: []string{"initial diag"},
+		},
+	}
+	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil }, AgentBanner{Name: "CodeRig"})
+	m.width = 80
+
+	if !reflect.DeepEqual(m.presentation, agent.pres) {
+		t.Fatalf("presentation = %+v, want the constructed agent's SessionPresentation() %+v", m.presentation, agent.pres)
+	}
+	footer := stripANSI(m.footerView())
+	if !strings.Contains(footer, "CodeRig · ReadOnly · /workspace") {
+		t.Errorf("footer = %q, want the agent's own fixed profile + workspace at construction, no reopen involved", footer)
+	}
+}
+
+// TestSessionPresentationOptionOverridesAgentSessionPresenterAtConstruction covers the
+// explicit-option precedence: WithSessionPresentation is the consumer-supplied
+// construction-time override (per its doc comment); when a caller supplies it, it wins over
+// the agent's own SessionPresenter capability even if the agent implements one.
+func TestSessionPresentationOptionOverridesAgentSessionPresenterAtConstruction(t *testing.T) {
+	t.Parallel()
+
+	agent := presenterAgent{
+		fakeAgent: &fakeAgent{activeLoopID: callID(1)},
+		pres:      SessionPresentation{ProfileName: "FromAgent", WorkspaceRoot: "/from-agent"},
+	}
+	option := SessionPresentation{ProfileName: "FromOption", WorkspaceRoot: "/from-option"}
+	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil },
+		AgentBanner{Name: "CodeRig"}, WithSessionPresentation(option))
+	m.width = 80
+
+	if !reflect.DeepEqual(m.presentation, option) {
+		t.Fatalf("presentation = %+v, want the explicit WithSessionPresentation option %+v", m.presentation, option)
+	}
+	footer := stripANSI(m.footerView())
+	if !strings.Contains(footer, "FromOption") || strings.Contains(footer, "FromAgent") {
+		t.Errorf("footer = %q, want the explicit option to win over the agent's SessionPresenter", footer)
 	}
 }
 

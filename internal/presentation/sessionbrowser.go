@@ -31,6 +31,10 @@ type Option func(*screenOptions)
 type screenOptions struct {
 	sessionBrowser SessionBrowser
 	presentation   SessionPresentation
+	// presentationSet distinguishes an explicit WithSessionPresentation(SessionPresentation{})
+	// call from an omitted option: both leave presentation at its zero value, but only the
+	// former must suppress New's SessionPresenter fallback (see WithSessionPresentation).
+	presentationSet bool
 }
 
 func WithSessionBrowser(browser SessionBrowser) Option {
