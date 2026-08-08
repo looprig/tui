@@ -33,9 +33,12 @@ and selection provenance.
 ## Approach
 
 Trace the runtime event shape that produces the extra rows and remove the unstyled separator at
-the composition boundary where it is introduced. Do not globally remove `renderThinking`'s
-railed spacer or tool-node spacing. Both collapsed tool summaries and expanded tool nodes must
-be adjacent to the preceding railed spacer with no fully empty rows between them.
+the composition boundary where it is introduced. Require the separator's provenance to identify
+a committed assistant entry; a visually identical bare rail produced by an empty tool-result
+line must retain its spacing before a later tool or Subagent card. Do not globally remove
+`renderThinking`'s railed spacer or tool-node spacing. Both collapsed tool summaries and expanded
+tool nodes must be adjacent to the preceding assistant spacer with no fully empty rows between
+them.
 
 ## Testing
 

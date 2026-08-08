@@ -3843,6 +3843,204 @@ func TestThinkingOnlyThenToolsNoDoubledRail(t *testing.T) {
 	}
 }
 
+// TestRemoveEmptyStepGaps pins the final composition invariant for a connected assistant
+// step: the renderer keeps the intentional bare rail spacer but removes fully empty rows
+// between that spacer and the following tool node or collapsed tool summary. Other blank
+// separators remain untouched, including the ordinary boundary between a user row and a
+// pure-tool step.
+func TestRemoveEmptyStepGaps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		committed []entry
+		in        []renderedLine
+		want      []string
+	}{
+		{
+			name:      "collapsed tool summary follows thinking rail",
+			committed: []entry{{ID: 1, Kind: kindAssistant}, {ID: 5, Kind: kindTool}},
+			in: []renderedLine{
+				{styled: "│ thought for 3s", entry: 1},
+				{styled: "│", entry: 1},
+				blankSeparator(1, 2),
+				blankSeparator(1, 3),
+				{styled: "○ 1 tool · Bash", plain: "○ 1 tool · Bash", entry: 5},
+			},
+			want: []string{"│ thought for 3s", "│", "○ 1 tool · Bash"},
+		},
+		{
+			name:      "expanded tool node follows narration rail",
+			committed: []entry{{ID: 2, Kind: kindAssistant}, {ID: 6, Kind: kindTool}},
+			in: []renderedLine{
+				{styled: "│ Let me explore the repo.", entry: 2},
+				{styled: "│", entry: 2},
+				blankSeparator(2, 2),
+				blankSeparator(2, 3),
+				{styled: "○ Bash(ls -la)", plain: "○ Bash(ls -la)", entry: 6},
+			},
+			want: []string{"│ Let me explore the repo.", "│", "○ Bash(ls -la)"},
+		},
+		{
+			name:      "already connected step is unchanged",
+			committed: []entry{{ID: 1, Kind: kindAssistant}, {ID: 5, Kind: kindTool}},
+			in: []renderedLine{
+				{styled: "│ thought for 3s", entry: 1},
+				{styled: "│", entry: 1},
+				{styled: "○ Bash(ls)", plain: "○ Bash(ls)", entry: 5},
+			},
+			want: []string{"│ thought for 3s", "│", "○ Bash(ls)"},
+		},
+		{
+			name:      "turn boundary remains blank without a preceding rail spacer",
+			committed: []entry{{ID: 3, Kind: kindUser}, {ID: 5, Kind: kindTool}},
+			in: []renderedLine{
+				{styled: "user message", plain: "user message", entry: 3},
+				blankSeparator(3, 1),
+				{styled: "○ Bash(ls)", plain: "○ Bash(ls)", entry: 5},
+			},
+			want: []string{"user message", "", "○ Bash(ls)"},
+		},
+		{
+			name:      "empty tool detail keeps spacing before a subagent card",
+			committed: []entry{{ID: 4, Kind: kindTool}},
+			in: []renderedLine{
+				{styled: "│ output", plain: "│ output", entry: 4},
+				{styled: "│", entry: 4},
+				blankSeparator(4, 2),
+				blankSeparator(4, 3),
+				{styled: "○ Subagent(explore)", plain: "○ Subagent(explore)", entry: liveTailEntryID},
+			},
+			want: []string{"│ output", "│", "", "", "○ Subagent(explore)"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotLines := removeEmptyStepGaps(tt.in, tt.committed)
+			got := make([]string, len(gotLines))
+			for i := range gotLines {
+				got[i] = stripANSI(gotLines[i].styled)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("removeEmptyStepGaps() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFocusedStepRailContinuesIntoLiveTool proves removeEmptyStepGaps is applied at the
+// real committed→live composition seam. A provisionally committed thinking block ends in
+// its intentional rail spacer; the following live tool must touch that spacer directly,
+// without the committed entry's ordinary trailing blank surviving between them.
+func TestFocusedStepRailContinuesIntoLiveTool(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(1)
+	m := newScreenSized(t, &fakeAgent{activeLoopID: primary}, 80, 24)
+	p := m.transcript.ensureProjection(primary)
+	p.committed = []entry{{
+		ID:   1,
+		Kind: kindAssistant,
+		Blocks: []content.Block{
+			&content.ThinkingBlock{Thinking: "planning quietly"},
+		},
+		thinkDur: 3 * time.Second,
+	}}
+	p.live = liveSeg{Calls: []ToolCallView{{
+		ToolName: "Bash",
+		Summary:  "ls -la",
+		Status:   ToolRunning,
+	}}}
+
+	lines := m.renderFocused()
+	node := -1
+	for i := range lines {
+		if strings.HasPrefix(stripANSI(lines[i].styled), "◍ Bash") {
+			node = i
+			break
+		}
+	}
+	if node < 1 {
+		t.Fatalf("live Bash node missing; lines=%q", plainAll(lines))
+	}
+	if got := strings.TrimSpace(stripANSI(lines[node-1].styled)); got != "│" {
+		t.Errorf("row before live Bash = %q, want bare rail with no empty gap; lines=%q", got, plainAll(lines))
+	}
+}
+
+// TestCommittedStepHasNoEmptyRowsBeforeTools exercises the authoritative StepDone event path
+// across the four visible shapes: thinking-only or narrated, each with its tool run collapsed
+// or expanded. In every case the assistant entry's final railed row must be directly adjacent
+// to the tool summary/node; the normal blank after the completed tool run is outside this seam.
+func TestCommittedStepHasNoEmptyRowsBeforeTools(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		narration string
+		expanded  bool
+		toolLabel string
+	}{
+		{name: "thinking only collapsed", toolLabel: "○ 1 tool · Bash"},
+		{name: "thinking only expanded", expanded: true, toolLabel: "○ Bash"},
+		{name: "narrated collapsed", narration: "Let me explore the repo.", toolLabel: "○ 1 tool · Bash"},
+		{name: "narrated expanded", narration: "Let me explore the repo.", expanded: true, toolLabel: "○ Bash"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			primary := callID(1)
+			m := newScreenSized(t, &fakeAgent{activeLoopID: primary}, 80, 24)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("inspect")})
+			m = feed(t, m, stepDoneFrom(primary,
+				aiMessage("planning quietly", tt.narration, toolUse("t1", "Bash", `{"cmd":"ls -la"}`)),
+				toolResult("t1", "output"),
+			))
+			if tt.expanded {
+				m.collapse.ToggleAll()
+			}
+
+			committed, _ := m.transcript.projectionFor(primary)
+			var assistantID displayID
+			for i := range committed {
+				if committed[i].Kind == kindAssistant {
+					assistantID = committed[i].ID
+					break
+				}
+			}
+			if assistantID == 0 {
+				t.Fatal("precondition: no committed assistant entry")
+			}
+
+			lines := m.renderFocused()
+			assistantLast, toolAt := -1, -1
+			for i := range lines {
+				if lines[i].entry == assistantID {
+					assistantLast = i
+				}
+				if strings.HasPrefix(stripANSI(lines[i].styled), tt.toolLabel) {
+					toolAt = i
+				}
+			}
+			if assistantLast < 0 || toolAt < 0 {
+				t.Fatalf("missing assistant/tool rows: assistant=%d tool=%d lines=%q", assistantLast, toolAt, plainAll(lines))
+			}
+			if toolAt != assistantLast+1 {
+				t.Errorf("tool row = %d, want %d directly after assistant rail; lines=%q", toolAt, assistantLast+1, plainAll(lines))
+			}
+			if got := strings.TrimSpace(stripANSI(lines[assistantLast].styled)); got != "│" {
+				t.Errorf("assistant final row = %q, want bare rail spacer", got)
+			}
+		})
+	}
+}
+
 // TestToolRunCollapsedSummary proves a completed contiguous run of tool entries collapses,
 // under the DEFAULT (collapsed) fold, to exactly ONE "○ N tools · names" summary node whose
 // first line carries sub == 0 and entry == runID (so the existing header-click handler

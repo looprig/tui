@@ -1883,6 +1883,11 @@ func (m Screen) renderFocused() []renderedLine {
 		i++
 	}
 	out = append(out, m.liveTailLines(live)...)
+	// Entry-local rendering deliberately owns its railed spacer rows, while committed/live
+	// composition owns ordinary blank separators. At a step seam those layers can overlap and
+	// leave fully empty rows between a bare rail and its following tool node. Normalize only
+	// that unmistakable shape; all turn-boundary blanks remain intact.
+	out = removeEmptyStepGaps(out, committed)
 	// The focused loop's pending queued inputs render LAST — below the live tail, where the
 	// next turn's input will land — so a user firing several messages mid-turn sees them
 	// stacked. They drop the instant each one's turn starts (startTurnUser commits the real
@@ -1890,6 +1895,57 @@ func (m Screen) renderFocused() []renderedLine {
 	// committed row.
 	out = append(out, m.queuedTailLines()...)
 	return out
+}
+
+// removeEmptyStepGaps removes fully empty separator rows only when provenance says the gap is
+// owned by a committed assistant entry and it interrupts that entry's otherwise connected rail:
+// a bare "│" spacer immediately before the empty run and a tool node (or collapsed tool-run
+// summary) immediately after it. Requiring the committed kindAssistant ID prevents a visually
+// identical bare rail from an empty tool-result line from losing its intentional spacing before
+// a following Subagent card. The pass returns a fresh slice and preserves every retained row's
+// provenance.
+func removeEmptyStepGaps(lines []renderedLine, committed []entry) []renderedLine {
+	assistantIDs := make(map[displayID]struct{})
+	for i := range committed {
+		if committed[i].Kind == kindAssistant {
+			assistantIDs[committed[i].ID] = struct{}{}
+		}
+	}
+
+	out := make([]renderedLine, 0, len(lines))
+	for i := 0; i < len(lines); {
+		if lines[i].styled != "" || lines[i].plain != "" {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+
+		j := i + 1
+		for j < len(lines) && lines[j].styled == "" && lines[j].plain == "" {
+			j++
+		}
+		_, assistantGap := assistantIDs[lines[i].entry]
+		if len(out) > 0 && j < len(lines) && assistantGap &&
+			out[len(out)-1].entry == lines[i].entry && isBareRailRow(out[len(out)-1]) && isToolNodeRow(lines[j]) {
+			i = j
+			continue
+		}
+		out = append(out, lines[i:j]...)
+		i = j
+	}
+	return out
+}
+
+func isBareRailRow(line renderedLine) bool {
+	return strings.TrimSpace(plainFromStyled(line.styled)) == "│"
+}
+
+func isToolNodeRow(line renderedLine) bool {
+	text := line.plain
+	if text == "" {
+		text = plainFromStyled(line.styled)
+	}
+	return strings.HasPrefix(text, "○ ") || strings.HasPrefix(text, "◍ ")
 }
 
 // markClickableHeader marks the first rendered row as an effective click target. Callers
@@ -1931,7 +1987,8 @@ func railSeparator(id displayID, lineCount int) renderedLine {
 // parallel) tool calls read as one cohesive group, the assistant message visibly leading its
 // calls, the rail continuing unbroken between their nodes. Every other adjacency is a turn
 // boundary and keeps its blank, and the last entry (no next, so i+1 is out of range) is always a
-// boundary — preserving the one-gap seam to the live tail.
+// boundary. removeEmptyStepGaps later removes that blank only when final composition proves
+// the live tail continues the same rail directly into a tool node.
 func intraTurnSeparator(committed []entry, i int) bool {
 	if i+1 >= len(committed) || committed[i+1].Kind != kindTool {
 		return false
