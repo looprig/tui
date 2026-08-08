@@ -18,6 +18,8 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
+	contextcount "github.com/looprig/inference/contextcount"
+	model "github.com/looprig/inference/model"
 	"github.com/looprig/tui/components"
 	"github.com/looprig/tui/styles"
 )
@@ -25,6 +27,29 @@ import (
 // compile-time assertion that Screen satisfies tea.Model (a value receiver, so the
 // concrete value — not a pointer — is the model the runtime drives).
 var _ tea.Model = Screen{}
+
+func TestModernStatusSeparatesRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(1)
+	m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 24)
+	m.runtime = m.runtime.ApplyEvent(event.LoopStarted{
+		Header:  event.Header{Coordinates: identity.Coordinates{LoopID: loopID}, AgentName: "builder"},
+		Runtime: event.ModelRuntime{Key: model.ModelKey{Model: "zai-org/GLM-5.2-TEE"}},
+	})
+	m.runtime = m.runtime.ApplyEvent(event.ContextMeasured{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: loopID}},
+		Measurement: event.ContextMeasurement{
+			InputTokens: content.TokenCount(40),
+			InputLimit:  content.TokenCount(100),
+			Quality:     contextcount.CountQualityHeuristicEstimate,
+		},
+	})
+
+	if got, want := stripANSI(m.statusLine()), "○ idle · zai-org/GLM-5.2-TEE · ~40% context"; got != want {
+		t.Errorf("statusLine = %q, want %q", got, want)
+	}
+}
 
 // updateScreen drives m.Update with msg and returns the concrete Screen plus the
 // cmd, failing the test if the model is not a Screen. It mirrors updateScreen.
@@ -4391,10 +4416,10 @@ func TestModernBarActiveFilter(t *testing.T) {
 	}
 }
 
-// TestModernBarMarkerAndFormat pins the modern bar's rendered form through m.bar(): the FOCUSED
-// loop carries the filled ● mark and every other loop the hollow ○, each formatted as
-// "<mark> <name> (<mode> - #<id4>)". Every loop uses its own current mode. Focus flips the
-// marks.
+// TestModernBarMarkerAndFormat pins the modern bar's compact rendered form through
+// m.bar(): the FOCUSED loop carries the filled ● mark and every other loop the hollow
+// ○, each formatted only as "<mark> <name>". Focus flips the marks; runtime mode
+// changes do not add metadata back to the compact row.
 func TestModernBarMarkerAndFormat(t *testing.T) {
 	t.Parallel()
 
@@ -4417,11 +4442,11 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 		InitialMode: "plan",
 	})
 
-	// Primary focused: both loops show their own mode and the subagent is unfocused.
+	// Primary focused: the subagent is unfocused and runtime metadata stays hidden.
 	plain := stripANSI(m.bar().Render(m.width))
 	for _, want := range []string{
-		barSegWithMode(barFocusedMark, "operator-primary", "quick", primary),
-		barSegWithMode(barUnfocusedMark, "operator", "plan", sub),
+		barSegOf(barFocusedMark, "operator-primary", primary),
+		barSegOf(barUnfocusedMark, "operator", sub),
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("bar = %q, want it to contain %q", plain, want)
@@ -4431,18 +4456,16 @@ func TestModernBarMarkerAndFormat(t *testing.T) {
 	// Focusing the subagent flips the marks: sub becomes ●.
 	m.focusLoop(sub)
 	plain = stripANSI(m.bar().Render(m.width))
-	if want := barSegWithMode(barFocusedMark, "operator", "plan", sub); !strings.Contains(plain, want) {
+	if want := barSegOf(barFocusedMark, "operator", sub); !strings.Contains(plain, want) {
 		t.Errorf("bar = %q, want the focused subagent to carry the ● mark (%q)", plain, want)
 	}
 
-	// A mode-change event updates that loop's footer metadata without affecting the others.
+	// A mode-change event leaves the compact footer text unchanged.
+	beforeModeChange := plain
 	m = feed(t, m, event.LoopModeChanged{Header: hdr(sub), PreviousMode: "plan", Mode: "quick"})
 	plain = stripANSI(m.bar().Render(m.width))
-	if want := barSegWithMode(barFocusedMark, "operator", "quick", sub); !strings.Contains(plain, want) {
-		t.Errorf("bar after LoopModeChanged = %q, want current mode in %q", plain, want)
-	}
-	if stale := barSegWithMode(barFocusedMark, "operator", "plan", sub); strings.Contains(plain, stale) {
-		t.Errorf("bar after LoopModeChanged = %q, must not retain stale mode %q", plain, stale)
+	if plain != beforeModeChange {
+		t.Errorf("bar after LoopModeChanged = %q, want compact row unchanged from %q", plain, beforeModeChange)
 	}
 }
 

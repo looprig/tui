@@ -10,9 +10,9 @@ import (
 )
 
 // TestSessionPresentationFooterShowsFixedProfileAndWorkspace covers the synchronous,
-// consumer-supplied session metadata in the footer: the agent name, then the FIXED
-// access profile name, then the workspace root. The profile is metadata, NOT a mutable
-// control.
+// consumer-supplied session metadata in the footer: the workspace root followed by the
+// fixed access profile badge. Product branding belongs in the startup banner, not the
+// persistent footer.
 func TestSessionPresentationFooterShowsFixedProfileAndWorkspace(t *testing.T) {
 	t.Parallel()
 
@@ -23,8 +23,8 @@ func TestSessionPresentationFooterShowsFixedProfileAndWorkspace(t *testing.T) {
 	m.width = 80
 
 	footer := stripANSI(m.footerView())
-	if !strings.Contains(footer, "CodeRig · Writable · /workspace") {
-		t.Errorf("footer = %q, want fixed profile + workspace in the metadata header", footer)
+	if got, want := strings.Split(footer, "\n")[0], "/workspace [WRITABLE]"; got != want {
+		t.Errorf("footer header = %q, want %q", got, want)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSessionPresentationUsesAgentSessionPresenterAtConstruction(t *testing.T
 		t.Fatalf("presentation = %+v, want the constructed agent's SessionPresentation() %+v", m.presentation, agent.pres)
 	}
 	footer := stripANSI(m.footerView())
-	if !strings.Contains(footer, "CodeRig · ReadOnly · /workspace") {
+	if !strings.Contains(footer, "/workspace [READONLY]") {
 		t.Errorf("footer = %q, want the agent's own fixed profile + workspace at construction, no reopen involved", footer)
 	}
 }
@@ -93,7 +93,7 @@ func TestSessionPresentationOptionOverridesAgentSessionPresenterAtConstruction(t
 		t.Fatalf("presentation = %+v, want the explicit WithSessionPresentation option %+v", m.presentation, option)
 	}
 	footer := stripANSI(m.footerView())
-	if !strings.Contains(footer, "FromOption") || strings.Contains(footer, "FromAgent") {
+	if !strings.Contains(footer, "[FROMOPTION]") || strings.Contains(footer, "[FROMAGENT]") {
 		t.Errorf("footer = %q, want the explicit option to win over the agent's SessionPresenter", footer)
 	}
 }

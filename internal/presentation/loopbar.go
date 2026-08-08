@@ -8,7 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/core/uuid"
-	"github.com/looprig/harness/pkg/loop"
 	"github.com/looprig/tui/styles"
 )
 
@@ -20,7 +19,6 @@ import (
 type loopBarEntry struct {
 	id         uuid.UUID
 	name       string
-	mode       loop.ModeName
 	live, gate bool
 }
 
@@ -43,19 +41,13 @@ type loopBar struct {
 }
 
 // Bar glyphs (design §Active-loops bar): a leading mark per segment — a FILLED ● for the
-// focused loop, a hollow ○ for every other loop — plus a trailing gate mark. The current
-// mode and short id are shown after the agent name ("<mark> <name> (<mode> - #<id4>)").
+// focused loop, a hollow ○ for every other loop — plus a trailing gate mark.
 const (
-	barFocusedMark   = "●"    // the focused loop (filled circle)
-	barUnfocusedMark = "○"    // a non-focused loop (hollow circle)
-	barGateMark      = "!"    // this loop has a pending gate awaiting the user
-	barMarkSep       = " "    // between the leading mark and the loop name
-	barMetaOpen      = " ("   // opens the parenthesised mode/id metadata
-	barModeIDSep     = " - #" // separates a current mode from the prefixed short id
-	barIDPrefix      = "#"    // identifies the compact loop id
-	barMetaClose     = ")"    // closes the parenthesised mode/id metadata
-	barSep           = "  "   // between adjacent segments (and before the overflow marker)
-	barIDLen         = 4      // leading hex chars of the loop id shown as its short form
+	barFocusedMark   = "●"  // the focused loop (filled circle)
+	barUnfocusedMark = "○"  // a non-focused loop (hollow circle)
+	barGateMark      = "!"  // this loop has a pending gate awaiting the user
+	barMarkSep       = " "  // between the leading mark and the loop name
+	barSep           = "  " // between adjacent segments (and before the overflow marker)
 )
 
 // barSeg is one rendered segment's provenance: the loop id it maps to and the half-open
@@ -69,7 +61,7 @@ type barSeg struct {
 }
 
 // Render draws the bar as a single line: each visible loop's
-// "<mark> <name> (<mode> - #<id4>)" (plus a trailing "!" when gated), joined by a small gap,
+// "<mark> <name>" (plus a trailing "!" when gated), joined by a small gap,
 // followed by a "… +N" overflow marker when
 // the visible cap hides loops. The visible set is bounded by max (not width), so a wide frame
 // and a narrow one draw the same segments in the same columns — which is exactly why HitTest
@@ -244,17 +236,12 @@ func (b loopBar) render(kept []loopBarEntry) ([]barSeg, string) {
 	return segs, sb.String()
 }
 
-// segBody is a loop segment's ANSI-free "<mark> <name> (<mode> - #<id4>)" — the shared layout both
-// segPlain (which HitTest measures spans on) and segStyled (which Render draws) build from, so
-// a drawn column and a hit-tested column can never disagree. The leading mark encodes focus
-// (leadMark: filled ● when focused, hollow ○ otherwise); the current mode and short id are
-// parenthesised after the agent name. Older events without a mode fall back to "(#<id4>)".
+// segBody is a loop segment's compact ANSI-free "<mark> <name>" — the shared layout
+// both segPlain (which HitTest measures spans on) and segStyled (which Render draws)
+// build from, so a drawn column and a hit-tested column can never disagree. The
+// leading mark encodes focus: filled ● when focused, hollow ○ otherwise.
 func (b loopBar) segBody(e loopBarEntry) string {
-	meta := barIDPrefix + shortLoopID(e.id)
-	if e.mode != "" {
-		meta = string(e.mode) + barModeIDSep + shortLoopID(e.id)
-	}
-	return b.leadMark(e) + barMarkSep + e.name + barMetaOpen + meta + barMetaClose
+	return b.leadMark(e) + barMarkSep + e.name
 }
 
 // segPlain is a loop segment's ANSI-free text — segBody plus a trailing "!" when gated — the
@@ -267,9 +254,8 @@ func (b loopBar) segPlain(e loopBarEntry) string {
 	return s
 }
 
-// segStyled is segBody in the bar's lighter tone: the bar normally renders faint
-// (StatusStyle) so it reads as quiet, subordinate context, and the focused loop is set apart
-// by an additionally BOLD name (plus its filled ● mark). The segment under the pointer instead
+// segStyled renders unfocused segments faint (StatusStyle), so they read as quiet,
+// subordinate context, while the focused loop is bright white and bold. The segment under the pointer instead
 // gets the solid pastel-blue action color, with only its text label underlined (not the mark).
 // A pending gate's "!" remains in the warn
 // color. Styling is zero-width, so segStyled has the same display width as segPlain and the
@@ -284,11 +270,14 @@ func (b loopBar) segStyled(e loopBarEntry) string {
 		}
 		return out
 	}
-	style := styles.StatusStyle
 	if e.id == b.focused {
-		style = styles.StatusStyle.Bold(true)
+		out := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Render(body)
+		if e.gate {
+			out += styles.NoticeWarnStyle.Render(barGateMark)
+		}
+		return out
 	}
-	out := style.Render(body)
+	out := styles.StatusStyle.Render(body)
 	if e.gate {
 		out += styles.NoticeWarnStyle.Render(barGateMark)
 	}
@@ -308,15 +297,4 @@ func (b loopBar) leadMark(e loopBarEntry) string {
 // overflowText is the "… +N" marker shown when the visible cap hides N loops.
 func overflowText(hidden int) string {
 	return "… +" + strconv.Itoa(hidden)
-}
-
-// shortLoopID is a loop id's compact bar form: the leading barIDLen hex chars of its uuid
-// string (e.g. "a1b2"), a stable, terse id for a bar segment. A shorter string (should not
-// happen for a real uuid) is returned as-is.
-func shortLoopID(id uuid.UUID) string {
-	s := id.String()
-	if len(s) >= barIDLen {
-		return s[:barIDLen]
-	}
-	return s
 }

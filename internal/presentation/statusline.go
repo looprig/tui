@@ -5,15 +5,16 @@ import "github.com/looprig/tui/styles"
 // Status labels — the legible one-line descriptions of the turn-lifecycle state,
 // derived from the session Status plus the live interaction signals.
 const (
-	labelIdle         = "idle"
-	labelWaiting      = "waiting…"
-	labelStreaming    = "streaming…"
-	labelThinking     = "thinking…"
-	labelApproval     = "awaiting approval"
-	labelInput        = "awaiting input"
-	labelCompacting   = "compacting conversation…"
-	labelInterrupting = "interrupting…"
-	labelClearing     = "clearing…"
+	labelIdle               = "idle"
+	labelWaiting            = "waiting…"
+	labelStreaming          = "streaming…"
+	labelThinking           = "thinking…"
+	labelApproval           = "awaiting approval"
+	labelInput              = "awaiting input"
+	labelCompacting         = "compacting conversation…"
+	labelInterrupting       = "interrupting…"
+	labelClearing           = "clearing…"
+	statusMetadataSeparator = " · "
 )
 
 // statusInputs carries the live interaction signals the status label is derived

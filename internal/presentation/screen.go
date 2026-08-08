@@ -2018,11 +2018,6 @@ func (m Screen) bar() loopBar {
 	gated := m.interaction.pendingGateLoops()
 	active := m.effectiveActiveLoopID()
 	entries := activeBarEntries(infos, gated, m.focusedLoopID, active)
-	for i := range entries {
-		if state, ok := m.runtime.loop(entries[i].id); ok {
-			entries[i].mode = state.mode
-		}
-	}
 	return loopBar{
 		entries: entries,
 		focused: m.focusedLoopID,
@@ -2146,7 +2141,7 @@ func (m Screen) statusLine() string {
 		line += styles.StatusStyle.Render(" (" + formatElapsed(d) + ")")
 	}
 	if metadata := m.focusedRuntimeStatus(); metadata != "" {
-		line += styles.StatusStyle.Render("  " + metadata)
+		line += styles.StatusStyle.Render(statusMetadataSeparator + metadata)
 	}
 	// Integrations trail the loop's own metadata: they are session-wide, not a
 	// property of the focused loop, so they read last. The segment is empty
@@ -2180,7 +2175,7 @@ func (m Screen) focusedRuntimeStatus() string {
 		}
 		parts = append(parts, prefix+strconv.FormatUint(pct, 10)+"% context")
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, statusMetadataSeparator)
 }
 
 // turnElapsed returns the focused loop's live turn-elapsed duration and whether to show it.
@@ -2279,19 +2274,15 @@ func (m Screen) footerView() string {
 	return m.footer().View(m.width)
 }
 
-// footer builds the bottom footer header: the agent name, then the FIXED session
-// metadata — the access profile name and the workspace root — supplied synchronously
-// as SessionPresentation. The profile is displayed as metadata here, never as a
-// mutable control (there is no way to change it from the TUI).
+// footer builds the bottom footer header from the FIXED session metadata supplied
+// synchronously as SessionPresentation. The profile is displayed as metadata here,
+// never as a mutable control (there is no way to change it from the TUI). Product
+// branding remains in the startup banner rather than repeating in every frame.
 func (m Screen) footer() loopFooter {
-	parts := make([]string, 0, 3)
-	if name := strings.TrimSpace(m.banner.Name); name != "" {
-		parts = append(parts, name)
-	}
-	parts = append(parts, m.presentation.footerParts()...)
+	parts := m.presentation.footerParts()
 	header := ""
 	if len(parts) > 0 {
-		header = strings.Join(parts, " · ")
+		header = strings.Join(parts, " ")
 	}
 	return loopFooter{header: header, bar: m.bar()}
 }

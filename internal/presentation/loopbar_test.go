@@ -7,17 +7,48 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/looprig/core/uuid"
+	"github.com/looprig/tui/styles"
 )
 
-// barSegOf builds the expected ANSI-free fallback segment text for a mark/name/id when
-// no current mode is available, so the render assertions stay pinned to the component's
-// own layout.
-func barSegOf(mark, name string, id uuid.UUID) string {
-	return mark + barMarkSep + name + " (#" + shortLoopID(id) + ")"
+// barSegOf builds the expected compact ANSI-free segment text. The id argument keeps
+// call sites readable while documenting that runtime identity is intentionally omitted.
+func barSegOf(mark, name string, _ uuid.UUID) string {
+	return mark + barMarkSep + name
 }
 
-func barSegWithMode(mark, name, mode string, id uuid.UUID) string {
-	return mark + barMarkSep + name + " (" + mode + " - #" + shortLoopID(id) + ")"
+func TestLoopBarFocusedStyle(t *testing.T) {
+	t.Parallel()
+
+	focusedID, otherID := loopID(0x01), loopID(0x02)
+	bar := loopBar{focused: focusedID}
+	focused := loopBarEntry{id: focusedID, name: "builder"}
+	other := loopBarEntry{id: otherID, name: "planner"}
+
+	wantFocused := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Render(bar.segBody(focused))
+	if got := bar.segStyled(focused); got != wantFocused {
+		t.Errorf("focused segment = %q, want bright white %q", got, wantFocused)
+	}
+	wantOther := styles.StatusStyle.Render(bar.segBody(other))
+	if got := bar.segStyled(other); got != wantOther {
+		t.Errorf("unfocused segment = %q, want subtle %q", got, wantOther)
+	}
+}
+
+func TestLoopBarOmitsRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	focusedID, otherID := loopID(0x01), loopID(0x02)
+	bar := loopBar{
+		entries: []loopBarEntry{
+			{id: focusedID, name: "builder"},
+			{id: otherID, name: "planner"},
+		},
+		focused: focusedID,
+	}
+
+	if got, want := stripANSI(bar.Render(80)), "● builder  ○ planner"; got != want {
+		t.Errorf("loop bar = %q, want %q", got, want)
+	}
 }
 
 // TestLoopBarRender covers the bar's one-line render: the leading focused ● / unfocused ○
@@ -391,28 +422,6 @@ func TestLoopBarCycle(t *testing.T) {
 			bar := loopBar{entries: tt.entries, focused: tt.focused}
 			if got := bar.cycle(tt.dir); got != tt.want {
 				t.Errorf("cycle(%d) = %v, want %v", tt.dir, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestShortLoopID covers the compact bar id form (the leading 4 hex chars of the uuid).
-func TestShortLoopID(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   uuid.UUID
-		want string
-	}{
-		{name: "leading hex group", in: loopID(0xAB), want: "ab00"},
-		{name: "zero id", in: uuid.UUID{}, want: "0000"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := shortLoopID(tt.in); got != tt.want {
-				t.Errorf("shortLoopID(%v) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

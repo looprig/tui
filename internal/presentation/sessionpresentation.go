@@ -25,16 +25,16 @@ type SessionPresentation struct {
 	PermissionDiagnostics []string
 }
 
-// footerParts returns the non-empty session-metadata fragments the footer renders
-// AFTER the agent name: the fixed profile name, then the workspace root. Order is
-// stable (profile before workspace) so the footer header reads identically each frame.
+// footerParts returns the non-empty session-metadata fragments the footer renders: the
+// workspace root followed by the fixed profile as an uppercase badge. Product branding is
+// intentionally absent from the persistent footer; the startup banner already owns it.
 func (p SessionPresentation) footerParts() []string {
 	parts := make([]string, 0, 2)
-	if name := strings.TrimSpace(p.ProfileName); name != "" {
-		parts = append(parts, name)
-	}
 	if root := strings.TrimSpace(p.WorkspaceRoot); root != "" {
 		parts = append(parts, root)
+	}
+	if name := strings.TrimSpace(p.ProfileName); name != "" {
+		parts = append(parts, "["+strings.ToUpper(name)+"]")
 	}
 	return parts
 }

@@ -221,10 +221,10 @@ func TestBrowserResumeRefreshesSecurityPresentation(t *testing.T) {
 	m, _ = updateScreen(t, m, msg)
 
 	footer := stripANSI(m.footerView())
-	if !strings.Contains(footer, "ReadOnly") || !strings.Contains(footer, "/resumed/root") {
+	if !strings.Contains(footer, "[READONLY]") || !strings.Contains(footer, "/resumed/root") {
 		t.Errorf("footer = %q, want the RESUMED session's fixed profile + workspace", footer)
 	}
-	if strings.Contains(footer, "Writable") || strings.Contains(footer, "/prior/root") {
+	if strings.Contains(footer, "[WRITABLE]") || strings.Contains(footer, "/prior/root") {
 		t.Errorf("footer = %q, still shows the PRIOR session's security context", footer)
 	}
 	if joined := committedJoined(m); !strings.Contains(joined, "resumed diag") || strings.Contains(joined, "prior diag") {
@@ -251,7 +251,7 @@ func TestBrowserResumeClearsPresentationWhenAgentSuppliesNone(t *testing.T) {
 	m, _ = updateScreen(t, m, msg)
 
 	footer := stripANSI(m.footerView())
-	if strings.Contains(footer, "Writable") || strings.Contains(footer, "/prior/root") {
+	if strings.Contains(footer, "[WRITABLE]") || strings.Contains(footer, "/prior/root") {
 		t.Errorf("footer = %q, want the prior security context CLEARED on resume", footer)
 	}
 	if joined := committedJoined(m); strings.Contains(joined, "prior diag") {
@@ -275,7 +275,7 @@ func TestClearRetainsPresentationWhenAgentSuppliesNone(t *testing.T) {
 	m, _ = updateScreen(t, m, reopenResultMsg{agent: fresh})
 
 	footer := stripANSI(m.footerView())
-	if !strings.Contains(footer, "Writable") || !strings.Contains(footer, "/prior/root") {
+	if !strings.Contains(footer, "[WRITABLE]") || !strings.Contains(footer, "/prior/root") {
 		t.Errorf("footer = %q, want the same-family profile + workspace retained on /clear", footer)
 	}
 }
