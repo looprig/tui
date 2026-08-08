@@ -1,5 +1,15 @@
 # Markdown Table Row Separators Design
 
+## Superseded
+
+Commit `765ba06` implemented this row-separator approach, but separators did not
+solve detached wrapped descriptions: Glamour still wrapped each grid cell
+independently, leaving continuation text visually separated from its row labels.
+The responsive record renderer supersedes this design. Compact tables still render
+directly through Glamour, while description-heavy tables that would wrap switch to
+aligned or stacked key/value records. This keeps all content visible without an
+upstream or vendored patch.
+
 ## Problem
 
 Markdown tables rendered in the TUI wrap long cells to the available terminal width. Without separators between body rows, a wrapped continuation line can look like a new or displaced row, especially because user and assistant content also carries a two-column timeline rail.

@@ -2,7 +2,6 @@ package styles
 
 import (
 	"bytes"
-	"sort"
 	"strings"
 
 	"charm.land/glamour/v2"
@@ -55,22 +54,33 @@ type responsiveTableReplacement struct {
 func renderMarkdownTables(r *glamour.TermRenderer, markdown string, width int) (string, error) {
 	tables := parseResponsiveTables(markdown, width)
 	if len(tables) == 0 {
-		return r.Render(markdown)
+		return renderOriginalMarkdown(r, markdown)
 	}
 
 	marked, replacements, ok := markResponsiveTables(markdown, tables)
 	if !ok {
-		return r.Render(markdown)
+		return renderOriginalMarkdown(r, markdown)
 	}
 	rendered, err := r.Render(marked)
 	if err != nil {
-		return r.Render(markdown)
+		return renderOriginalMarkdown(r, markdown)
 	}
 	for _, replacement := range replacements {
 		rendered, ok, err = replaceResponsiveTable(r, rendered, replacement, width)
 		if err != nil || !ok {
-			return r.Render(markdown)
+			return renderOriginalMarkdown(r, markdown)
 		}
+	}
+	return rendered, nil
+}
+
+func renderOriginalMarkdown(r *glamour.TermRenderer, markdown string) (string, error) {
+	rendered, err := r.Render(markdown)
+	if err != nil {
+		return rendered, err
+	}
+	if strings.TrimSpace(markdown) != "" && strings.TrimSpace(rendered) == "" {
+		return markdown, nil
 	}
 	return rendered, nil
 }
@@ -473,68 +483,6 @@ func allocateGridColumns(metrics []markdownColumnMetrics, available int) []int {
 	return allocations
 }
 
-// markTableBodyBoundaries inserts a one-cell-per-column marker row between adjacent
-// body rows reported by Goldmark's GFM table parser. Using the same parser as Glamour
-// keeps pipe-less rows, escaped pipes, code fences, and nested tables in lockstep.
-func markTableBodyBoundaries(markdown string) (string, string) {
-	marker := unusedTableMarker(markdown)
-	if marker == "" {
-		return markdown, ""
-	}
-
-	source := []byte(markdown)
-	parser := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser()
-	document := parser.Parse(text.NewReader(source))
-	insertions := tableBoundaryInsertions(document, source, marker)
-	if len(insertions) == 0 {
-		return markdown, ""
-	}
-
-	var marked strings.Builder
-	start := 0
-	for _, insertion := range insertions {
-		marked.Write(source[start:insertion.offset])
-		marked.WriteString(insertion.line)
-		start = insertion.offset
-	}
-	marked.Write(source[start:])
-	return marked.String(), marker
-}
-
-type tableBoundaryInsertion struct {
-	offset int
-	line   string
-}
-
-func tableBoundaryInsertions(document goldmarkast.Node, source []byte, marker string) []tableBoundaryInsertion {
-	var insertions []tableBoundaryInsertion
-	_ = goldmarkast.Walk(document, func(node goldmarkast.Node, entering bool) (goldmarkast.WalkStatus, error) {
-		table, ok := node.(*tableast.Table)
-		if !entering || !ok {
-			return goldmarkast.WalkContinue, nil
-		}
-		bodyRow := 0
-		for child := table.FirstChild(); child != nil; child = child.NextSibling() {
-			row, body := child.(*tableast.TableRow)
-			if !body {
-				continue
-			}
-			if bodyRow > 0 {
-				lineStart := sourceLineStart(source, row.Pos())
-				prefix := string(source[lineStart:row.Pos()]) + sourceLeadingWhitespace(source[row.Pos():])
-				insertions = append(insertions, tableBoundaryInsertion{
-					offset: lineStart,
-					line:   prefix + markerTableRow(len(table.Alignments), marker) + sourceLineEndingAt(source, row.Pos()),
-				})
-			}
-			bodyRow++
-		}
-		return goldmarkast.WalkSkipChildren, nil
-	})
-	sort.Slice(insertions, func(i, j int) bool { return insertions[i].offset < insertions[j].offset })
-	return insertions
-}
-
 func sourceLineStart(source []byte, offset int) int {
 	if offset > len(source) {
 		offset = len(source)
@@ -556,47 +504,4 @@ func sourceLineEnd(source []byte, offset int) int {
 		return offset + newline + 1
 	}
 	return len(source)
-}
-
-func sourceLeadingWhitespace(source []byte) string {
-	end := 0
-	for end < len(source) && (source[end] == ' ' || source[end] == '\t') {
-		end++
-	}
-	return string(source[:end])
-}
-
-func sourceLineEndingAt(source []byte, offset int) string {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(source) {
-		offset = len(source)
-	}
-	if newline := bytes.IndexByte(source[offset:], '\n'); newline > 0 && source[offset+newline-1] == '\r' {
-		return "\r\n"
-	}
-	return "\n"
-}
-
-func unusedTableMarker(markdown string) string {
-	for marker := rune(0xE000); marker <= 0xF8FF; marker++ {
-		if !strings.ContainsRune(markdown, marker) {
-			return string(marker)
-		}
-	}
-	for marker := rune(0xF0000); marker <= 0xFFFFD; marker++ {
-		if !strings.ContainsRune(markdown, marker) {
-			return string(marker)
-		}
-	}
-	return ""
-}
-
-func markerTableRow(columns int, marker string) string {
-	cells := make([]string, columns)
-	for i := range cells {
-		cells[i] = marker
-	}
-	return "| " + strings.Join(cells, " | ") + " |"
 }

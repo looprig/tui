@@ -5,27 +5,25 @@ import (
 	"testing"
 )
 
-// FuzzMarkTableBodyBoundaries exercises the Markdown-facing parser with arbitrary
-// model output. A selected marker must be absent from the input and present only when
-// the adapter actually changed the document.
-func FuzzMarkTableBodyBoundaries(f *testing.F) {
-	f.Add("| A | B |\n| --- | --- |\n| one | long value |\n| two | another value |")
-	f.Add("```markdown\n| A | B |\n| --- | --- |\n| one | value |\n| two | value |\n```")
-	f.Add("ordinary prose\n\n- with a list")
+func FuzzRenderMarkdownTables(f *testing.F) {
+	f.Add("| A | Notes |\n|---|---|\n| one | a sufficiently long narrative value with several words |", 40)
+	f.Add("```markdown\n| A | B |\n|---|---|\n| one | two |\n```", 30)
+	f.Add("ordinary prose\n\n- with a list", 80)
 
-	f.Fuzz(func(t *testing.T, markdown string) {
-		marked, marker := markTableBodyBoundaries(markdown)
-		if marker == "" {
-			if marked != markdown {
-				t.Fatalf("marker is empty but Markdown changed:\ngot  %q\nwant %q", marked, markdown)
-			}
-			return
+	f.Fuzz(func(t *testing.T, markdown string, width int) {
+		if width < 1 || width > 240 {
+			t.Skip()
 		}
-		if strings.Contains(markdown, marker) {
-			t.Fatalf("selected marker %q already occurs in input", marker)
+		r, err := NewMarkdownRenderer(width)
+		if err != nil {
+			t.Fatalf("NewMarkdownRenderer(%d): %v", width, err)
 		}
-		if !strings.Contains(marked, marker) {
-			t.Fatalf("selected marker %q does not occur in transformed Markdown %q", marker, marked)
+		out, err := RenderMarkdown(r, markdown, width)
+		if err != nil {
+			t.Fatalf("RenderMarkdown(): %v", err)
+		}
+		if strings.TrimSpace(markdown) != "" && strings.TrimSpace(out) == "" {
+			t.Fatalf("non-empty Markdown rendered empty")
 		}
 	})
 }
