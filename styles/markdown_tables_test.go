@@ -2,7 +2,10 @@ package styles
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestResponsiveMarkdownTables(t *testing.T) {
@@ -146,5 +149,71 @@ func TestMarkdownTableColumnAllocationStaysWithinWidth(t *testing.T) {
 	}
 	if total != available {
 		t.Fatalf("allocateGridColumns() = %v totaling %d, want total %d", allocations, total, available)
+	}
+}
+
+func TestMarkdownTableRendersResponsiveRecords(t *testing.T) {
+	t.Parallel()
+
+	const width = 118
+	const markdown = `| Module | Language | What it does |
+| --- | --- | --- |
+| core | Go | Foundational shared types: the content block/message vocabulary used across every module, plus logging and uuid. No deps. Everyone imports this; it imports nothing. |
+| storage | Go | Neutral, stdlib-only storage contracts — four primitives: Ledger, Leaser, KV, and Blobs. Zero third-party deps. |
+| fsstore | Go | Storage primitives implemented over the local filesystem. Single-host durable backend. |
+| natsstore | Go | Storage primitives over NATS JetStream — embedded in-process or remote broker. The only NATS-dependent module. |`
+	r, err := NewMarkdownRenderer(width)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer(%d): %v", width, err)
+	}
+	out, err := RenderMarkdown(r, markdown, width)
+	if err != nil {
+		t.Fatalf("RenderMarkdown(): %v", err)
+	}
+	plain := xansi.Strip(out)
+
+	wantFragments := []string{
+		"Module        core",
+		"Language      Go",
+		"What it does  Foundational shared types:",
+		"              and uuid.",
+		"Module        storage",
+		"              party deps.",
+	}
+	for _, fragment := range wantFragments {
+		if !strings.Contains(plain, fragment) {
+			t.Errorf("rendered records do not contain %q:\n%s", fragment, plain)
+		}
+	}
+	if strings.Contains(plain, "Module │ Language") {
+		t.Errorf("rendered records still contain grid header:\n%s", plain)
+	}
+	if count := strings.Count(plain, "Module        "); count != 4 {
+		t.Errorf("Module label occurs %d times, want 4:\n%s", count, plain)
+	}
+
+	bodyValues := []string{
+		"core", "Go", "Foundational shared types:",
+		"storage", "Go", "Neutral, stdlib-only storage contracts",
+		"fsstore", "Go", "Storage primitives implemented over the local filesystem.",
+		"natsstore", "Go", "Storage primitives over NATS JetStream",
+	}
+	position := 0
+	for _, value := range bodyValues {
+		index := strings.Index(plain[position:], value)
+		if index < 0 {
+			t.Fatalf("body value %q missing or out of source order:\n%s", value, plain)
+		}
+		position += index + len(value)
+	}
+
+	separator := strings.Repeat("─", width)
+	if count := strings.Count(plain, separator); count != 3 {
+		t.Errorf("full-width separator occurs %d times, want 3:\n%s", count, plain)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if lineWidth := xansi.StringWidth(line); lineWidth > width {
+			t.Errorf("rendered line width = %d, want <= %d: %q", lineWidth, width, xansi.Strip(line))
+		}
 	}
 }

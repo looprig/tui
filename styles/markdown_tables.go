@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/glamour/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/yuin/goldmark"
 	goldmarkast "github.com/yuin/goldmark/ast"
@@ -14,10 +16,14 @@ import (
 )
 
 const (
-	narrativeMinimumWords  = 4
-	narrativeMinimumWidth  = 28
-	minimumGridColumnWidth = 3
-	narrativeSoftFloor     = 16
+	narrativeMinimumWords   = 4
+	narrativeMinimumWidth   = 28
+	minimumGridColumnWidth  = 3
+	narrativeSoftFloor      = 16
+	recordLeadingPadding    = 1
+	recordFieldGap          = 2
+	recordMinimumValueWidth = 24
+	recordStackedIndent     = 2
 )
 
 type markdownTableCell struct {
@@ -39,6 +45,197 @@ type markdownColumnMetrics struct {
 	width     int
 	nonEmpty  int
 	narrative bool
+}
+
+type responsiveTableReplacement struct {
+	table  markdownTable
+	marker string
+}
+
+func renderMarkdownTables(r *glamour.TermRenderer, markdown string, width int) (string, error) {
+	tables := parseResponsiveTables(markdown, width)
+	if len(tables) == 0 {
+		return r.Render(markdown)
+	}
+
+	marked, replacements, ok := markResponsiveTables(markdown, tables)
+	if !ok {
+		return r.Render(markdown)
+	}
+	rendered, err := r.Render(marked)
+	if err != nil {
+		return r.Render(markdown)
+	}
+	for _, replacement := range replacements {
+		rendered, ok, err = replaceResponsiveTable(r, rendered, replacement, width)
+		if err != nil || !ok {
+			return r.Render(markdown)
+		}
+	}
+	return rendered, nil
+}
+
+func markResponsiveTables(markdown string, tables []markdownTable) (string, []responsiveTableReplacement, bool) {
+	replacements := make([]responsiveTableReplacement, len(tables))
+	used := make(map[rune]bool, len(tables))
+	for i, table := range tables {
+		marker := unusedResponsiveTableMarker(markdown, used)
+		if marker == "" || table.start < 0 || table.end < table.start || table.end > len(markdown) {
+			return markdown, nil, false
+		}
+		used[[]rune(marker)[0]] = true
+		replacements[i] = responsiveTableReplacement{table: table, marker: marker}
+	}
+
+	marked := markdown
+	for i := len(replacements) - 1; i >= 0; i-- {
+		replacement := replacements[i]
+		source := markdown[replacement.table.start:replacement.table.end]
+		lineEnding := ""
+		switch {
+		case strings.HasSuffix(source, "\r\n"):
+			lineEnding = "\r\n"
+		case strings.HasSuffix(source, "\n"):
+			lineEnding = "\n"
+		}
+		placeholder := replacement.table.prefix + replacement.marker + lineEnding
+		marked = marked[:replacement.table.start] + placeholder + marked[replacement.table.end:]
+	}
+	return marked, replacements, true
+}
+
+func unusedResponsiveTableMarker(markdown string, used map[rune]bool) string {
+	for marker := rune(0xE000); marker <= 0xF8FF; marker++ {
+		if !used[marker] && !strings.ContainsRune(markdown, marker) {
+			return string(marker)
+		}
+	}
+	for marker := rune(0xF0000); marker <= 0xFFFFD; marker++ {
+		if !used[marker] && !strings.ContainsRune(markdown, marker) {
+			return string(marker)
+		}
+	}
+	return ""
+}
+
+func replaceResponsiveTable(
+	r *glamour.TermRenderer,
+	rendered string,
+	replacement responsiveTableReplacement,
+	width int,
+) (string, bool, error) {
+	lines := strings.Split(rendered, "\n")
+	markerLine := -1
+	markerOffset := -1
+	for i, line := range lines {
+		if offset := strings.Index(line, replacement.marker); offset >= 0 {
+			if markerLine >= 0 {
+				return rendered, false, nil
+			}
+			markerLine = i
+			markerOffset = offset
+		}
+	}
+	if markerLine < 0 {
+		return rendered, false, nil
+	}
+
+	prefix := lines[markerLine][:markerOffset]
+	contentWidth := width - xansi.StringWidth(prefix)
+	if contentWidth < 1 {
+		return rendered, false, nil
+	}
+	records, err := renderResponsiveRecords(r, replacement.table, contentWidth)
+	if err != nil || len(records) == 0 {
+		return rendered, false, err
+	}
+	for i := range records {
+		records[i] = prefix + records[i]
+	}
+	lines[markerLine] = strings.Join(records, "\n")
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width int) ([]string, error) {
+	labelWidth := 0
+	for _, header := range table.headers {
+		labelWidth = max(labelWidth, xansi.StringWidth(header.plain))
+	}
+	alignedValueWidth := width - recordLeadingPadding - labelWidth - recordFieldGap
+	stacked := alignedValueWidth < recordMinimumValueWidth
+	valueWidth := alignedValueWidth
+	if stacked {
+		valueWidth = width - recordStackedIndent
+	}
+	if valueWidth < 1 {
+		return nil, nil
+	}
+
+	labelStyle := lipgloss.NewStyle().Bold(true)
+	ruleStyle := lipgloss.NewStyle().Faint(true)
+	lines := make([]string, 0, len(table.rows)*len(table.headers))
+	for rowIndex, row := range table.rows {
+		for column, header := range table.headers {
+			value, err := renderTableCell(r, row[column].raw)
+			if err != nil {
+				return nil, err
+			}
+			wrapped := strings.Split(xansi.Wrap(value, valueWidth, ""), "\n")
+			if len(wrapped) == 0 {
+				wrapped = []string{""}
+			}
+			label := labelStyle.Render(header.plain)
+			if stacked {
+				lines = append(lines, strings.Repeat(" ", recordLeadingPadding)+label)
+				for _, valueLine := range wrapped {
+					lines = append(lines, strings.Repeat(" ", recordStackedIndent)+valueLine)
+				}
+				continue
+			}
+
+			labelPadding := labelWidth - xansi.StringWidth(header.plain)
+			fieldPrefix := strings.Repeat(" ", recordLeadingPadding) + label +
+				strings.Repeat(" ", labelPadding+recordFieldGap)
+			continuation := strings.Repeat(" ", recordLeadingPadding+labelWidth+recordFieldGap)
+			for lineIndex, valueLine := range wrapped {
+				if lineIndex == 0 {
+					lines = append(lines, fieldPrefix+valueLine)
+				} else {
+					lines = append(lines, continuation+valueLine)
+				}
+			}
+		}
+		if rowIndex < len(table.rows)-1 {
+			lines = append(lines, ruleStyle.Render(strings.Repeat("─", width)))
+		}
+	}
+	return lines, nil
+}
+
+func renderTableCell(r *glamour.TermRenderer, raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	rendered, err := r.Render(raw)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(rendered, "\n")
+	for len(lines) > 0 && strings.TrimSpace(xansi.Strip(lines[0])) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(xansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for i, line := range lines {
+		plain := strings.TrimRight(xansi.Strip(line), " \t\r")
+		if plain == "" {
+			lines[i] = ""
+			continue
+		}
+		lines[i] = xansi.Cut(line, 0, xansi.StringWidth(plain))
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func parseResponsiveTables(markdown string, width int) []markdownTable {
@@ -396,40 +593,4 @@ func markerTableRow(columns int, marker string) string {
 		cells[i] = marker
 	}
 	return "| " + strings.Join(cells, " | ") + " |"
-}
-
-func replaceMarkedTableRows(rendered, marker string) string {
-	lines := strings.Split(rendered, "\n")
-	for i, line := range lines {
-		if strings.Contains(line, marker) {
-			lines[i] = tableRowSeparator(line, marker)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func tableRowSeparator(line, marker string) string {
-	plain := xansi.Strip(line)
-	markerOffset := strings.Index(plain, marker)
-	if markerOffset < 0 {
-		return line
-	}
-	tableStart := max(0, xansi.StringWidth(plain[:markerOffset])-1)
-	prefix := xansi.Cut(line, 0, tableStart)
-	table := xansi.Cut(plain, tableStart, xansi.StringWidth(plain))
-
-	var separator strings.Builder
-	separator.WriteString(prefix)
-	for _, char := range table {
-		width := xansi.StringWidth(string(char))
-		if width < 1 {
-			continue
-		}
-		glyph := "─"
-		if char == '│' || char == '|' {
-			glyph = "┼"
-		}
-		separator.WriteString(strings.Repeat(glyph, width))
-	}
-	return separator.String()
 }

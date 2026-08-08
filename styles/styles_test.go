@@ -90,7 +90,7 @@ func TestMarkdownTableSeparatesWrappedBodyRows(t *testing.T) {
 | --- | --- |
 | looprig | In-process Harness loop using a configured gateway/client |
 | claude-code | Claude Code ACP harness |
-| codex | Codex ACP harness |`)
+| codex | Codex ACP harness |`, 52)
 	if err != nil {
 		t.Fatalf("Render() error = %v, want nil", err)
 	}
@@ -141,7 +141,7 @@ func TestMarkdownRendererLeavesNonTableMarkdownUnchanged(t *testing.T) {
 		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
 	}
 	const markdown = "## Heading\n\n- alpha\n- bravo\n\nA normal paragraph."
-	got, err := RenderMarkdown(r, markdown)
+	got, err := RenderMarkdown(r, markdown, 52)
 	if err != nil {
 		t.Fatalf("Render() error = %v, want nil", err)
 	}
@@ -162,7 +162,7 @@ func TestMarkdownRendererLeavesTableShapedCodeFenceUnchanged(t *testing.T) {
 		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
 	}
 	const markdown = "```markdown\n| Harness | Description |\n| --- | --- |\n| looprig | first |\n| codex | second |\n```"
-	got, err := RenderMarkdown(r, markdown)
+	got, err := RenderMarkdown(r, markdown, 52)
 	if err != nil {
 		t.Fatalf("Render() error = %v, want nil", err)
 	}
@@ -226,7 +226,7 @@ second
 			if err != nil {
 				t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
 			}
-			out, err := RenderMarkdown(r, tt.markdown)
+			out, err := RenderMarkdown(r, tt.markdown, 52)
 			if err != nil {
 				t.Fatalf("RenderMarkdown() error = %v, want nil", err)
 			}

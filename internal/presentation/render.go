@@ -66,11 +66,12 @@ func renderMDDot(md string, width int, dot string) string {
 		return ""
 	}
 
-	r, err := styles.NewMarkdownRenderer(max(0, width-dotWidth))
+	renderWidth := max(0, width-dotWidth)
+	r, err := styles.NewMarkdownRenderer(renderWidth)
 	if err != nil {
 		return dot + md
 	}
-	out, err := styles.RenderMarkdown(r, md)
+	out, err := styles.RenderMarkdown(r, md, renderWidth)
 	if err != nil {
 		return dot + md
 	}
@@ -490,11 +491,12 @@ func renderMDRail(md string, width int, bar string) string {
 		}
 		return strings.Join(out, "\n")
 	}
-	r, err := styles.NewMarkdownRenderer(max(0, width-barWidth))
+	renderWidth := max(0, width-barWidth)
+	r, err := styles.NewMarkdownRenderer(renderWidth)
 	if err != nil {
 		return raw()
 	}
-	out, err := styles.RenderMarkdown(r, md)
+	out, err := styles.RenderMarkdown(r, md, renderWidth)
 	if err != nil {
 		return raw()
 	}

@@ -417,16 +417,8 @@ func NewMarkdownRenderer(width int) (*glamour.TermRenderer, error) {
 	)
 }
 
-// RenderMarkdown keeps the TUI's table readability policy outside Glamour. Glamour
-// currently exposes table wrapping but not Lip Gloss's BorderRow switch, so wrapped
-// body rows otherwise run together. The adapter inserts logical marker rows before
-// Glamour parses the document and turns only those rendered rows into separators.
-// Markdown without a multi-row table takes the unmodified Glamour path.
-func RenderMarkdown(r *glamour.TermRenderer, markdown string) (string, error) {
-	marked, marker := markTableBodyBoundaries(markdown)
-	out, err := r.Render(marked)
-	if err != nil || marker == "" {
-		return out, err
-	}
-	return replaceMarkedTableRows(out, marker), nil
+// RenderMarkdown keeps the TUI's responsive table policy outside Glamour while
+// preserving Glamour's exact output for documents whose tables remain readable.
+func RenderMarkdown(r *glamour.TermRenderer, markdown string, width int) (string, error) {
+	return renderMarkdownTables(r, markdown, width)
 }
