@@ -217,3 +217,144 @@ func TestMarkdownTableRendersResponsiveRecords(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownTableNarrowLayout(t *testing.T) {
+	t.Parallel()
+
+	const markdown = "| A long label | Notes |\n|---|---|\n| x | a narrative value with enough words to wrap |"
+	plain, _ := renderResponsiveTableForTest(t, markdown, 22)
+	for _, want := range []string{"A long label", "  x", "Notes", "  a narrative"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("stacked records do not contain %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "A long label │ Notes") {
+		t.Errorf("narrow table stayed in grid layout:\n%s", plain)
+	}
+}
+
+func TestMarkdownTableNarrowLongLabelFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	const width = 16
+	const markdown = "| An extraordinarily long label | N |\n|---|---|\n| x | a narrative value with enough words to wrap |"
+	_, out := renderResponsiveTableForTest(t, markdown, width)
+	for _, line := range strings.Split(out, "\n") {
+		if got := xansi.StringWidth(line); got > width {
+			t.Errorf("stacked label line width = %d, want <= %d: %q", got, width, xansi.Strip(line))
+		}
+	}
+}
+
+func TestMarkdownTableRichCells(t *testing.T) {
+	t.Parallel()
+
+	const markdown = "| Key | Notes |\n|---|---|\n| `core` | See **shared types** at [docs](https://example.com/docs) for the complete description. |"
+	plain, out := renderResponsiveTableForTest(t, markdown, 42)
+	for _, want := range []string{"core", "shared types", "docs"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("rich records do not contain %q:\n%s", want, plain)
+		}
+	}
+	if !strings.Contains(out, "38;2;162;210;255") {
+		t.Errorf("inline code color missing from %q", out)
+	}
+	if !strings.Contains(out, ";1m") {
+		t.Errorf("bold styling missing from %q", out)
+	}
+	if !strings.Contains(out, "\x1b]8;") {
+		t.Errorf("OSC hyperlink missing from %q", out)
+	}
+}
+
+func TestMarkdownTableUnicodeWidth(t *testing.T) {
+	t.Parallel()
+
+	const width = 32
+	const markdown = "| 名前 | 説明 |\n|---|---|\n| 核心 | これは十分な単語を含む長い説明 text with several words |"
+	plain, out := renderResponsiveTableForTest(t, markdown, width)
+	for _, want := range []string{"名前", "核心", "説明"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("Unicode records do not contain %q:\n%s", want, plain)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if got := xansi.StringWidth(line); got > width {
+			t.Errorf("Unicode line width = %d, want <= %d: %q", got, width, xansi.Strip(line))
+		}
+	}
+}
+
+func TestMarkdownTableEmptyUnevenCells(t *testing.T) {
+	t.Parallel()
+
+	const markdown = "| Key | State | Notes |\n|---|---|---|\n| core | ready | This narrative has enough words to require records. |\n| tui |"
+	plain, _ := renderResponsiveTableForTest(t, markdown, 30)
+	for _, want := range []string{"Key", "core", "State", "ready", "Notes", "tui"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("uneven records do not contain %q:\n%s", want, plain)
+		}
+	}
+	if count := strings.Count(plain, "State"); count != 2 {
+		t.Errorf("State label occurs %d times, want 2:\n%s", count, plain)
+	}
+	if count := strings.Count(plain, "Notes"); count != 2 {
+		t.Errorf("Notes label occurs %d times, want 2:\n%s", count, plain)
+	}
+}
+
+func TestMarkdownTableBlockquotePrefix(t *testing.T) {
+	t.Parallel()
+
+	const markdown = `> | Key | Notes |
+> |---|---|
+> | core | This narrative value has enough words to require a responsive record. |
+> | tui | Another narrative value has enough words to require a responsive record. |`
+	plain, _ := renderResponsiveTableForTest(t, markdown, 44)
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "│ ") {
+			t.Errorf("blockquoted record line lost rendered container prefix: %q", line)
+		}
+	}
+}
+
+func TestMarkdownTableResize(t *testing.T) {
+	t.Parallel()
+
+	const markdown = "| Key | Notes |\n|---|---|\n| core | This narrative value contains enough words that it wraps in a narrow grid. |"
+	widePlain, wideOut := renderResponsiveTableForTest(t, markdown, 140)
+	narrowPlain, _ := renderResponsiveTableForTest(t, markdown, 38)
+	if !strings.Contains(widePlain, "Key") || !strings.Contains(widePlain, "│") {
+		t.Errorf("wide table did not remain a grid:\n%s", widePlain)
+	}
+	r, err := NewMarkdownRenderer(140)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer(140): %v", err)
+	}
+	direct, err := r.Render(markdown)
+	if err != nil {
+		t.Fatalf("direct Render(): %v", err)
+	}
+	if wideOut != direct {
+		t.Errorf("wide grid changed from direct Glamour output")
+	}
+	if strings.Contains(narrowPlain, "Key │ Notes") || !strings.Contains(narrowPlain, " Key") {
+		t.Errorf("narrow table did not switch to records:\n%s", narrowPlain)
+	}
+}
+
+func renderResponsiveTableForTest(t *testing.T, markdown string, width int) (string, string) {
+	t.Helper()
+	r, err := NewMarkdownRenderer(width)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer(%d): %v", width, err)
+	}
+	out, err := RenderMarkdown(r, markdown, width)
+	if err != nil {
+		t.Fatalf("RenderMarkdown(width=%d): %v", width, err)
+	}
+	return xansi.Strip(out), out
+}

@@ -186,7 +186,13 @@ func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width
 			}
 			label := labelStyle.Render(header.plain)
 			if stacked {
-				lines = append(lines, strings.Repeat(" ", recordLeadingPadding)+label)
+				labelLineWidth := width - recordLeadingPadding
+				if labelLineWidth < 1 {
+					return nil, nil
+				}
+				for _, labelLine := range strings.Split(xansi.Wrap(label, labelLineWidth, ""), "\n") {
+					lines = append(lines, strings.Repeat(" ", recordLeadingPadding)+labelLine)
+				}
 				for _, valueLine := range wrapped {
 					lines = append(lines, strings.Repeat(" ", recordStackedIndent)+valueLine)
 				}
