@@ -24,7 +24,7 @@ func TestLoopBarFocusedStyle(t *testing.T) {
 	focused := loopBarEntry{id: focusedID, name: "builder"}
 	other := loopBarEntry{id: otherID, name: "planner"}
 
-	wantFocused := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Render(bar.segBody(focused))
+	wantFocused := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(bar.segBody(focused))
 	if got := bar.segStyled(focused); got != wantFocused {
 		t.Errorf("focused segment = %q, want bright white %q", got, wantFocused)
 	}

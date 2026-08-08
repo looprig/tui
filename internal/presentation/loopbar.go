@@ -255,7 +255,7 @@ func (b loopBar) segPlain(e loopBarEntry) string {
 }
 
 // segStyled renders unfocused segments faint (StatusStyle), so they read as quiet,
-// subordinate context, while the focused loop is bright white and bold. The segment under the pointer instead
+// subordinate context, while the focused loop is bright white at normal weight. The segment under the pointer instead
 // gets the solid pastel-blue action color, with only its text label underlined (not the mark).
 // A pending gate's "!" remains in the warn
 // color. Styling is zero-width, so segStyled has the same display width as segPlain and the
@@ -271,7 +271,7 @@ func (b loopBar) segStyled(e loopBarEntry) string {
 		return out
 	}
 	if e.id == b.focused {
-		out := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Render(body)
+		out := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(body)
 		if e.gate {
 			out += styles.NoticeWarnStyle.Render(barGateMark)
 		}
