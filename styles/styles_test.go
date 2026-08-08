@@ -549,6 +549,21 @@ func TestRailNodeGlyphs(t *testing.T) {
 	}
 }
 
+// TestRailStyleIsQuieterThanThinking pins the timeline rail to its own dark-neutral
+// foreground. Reasoning text remains merely faint, while the structural rail recedes
+// further and node glyphs keep their independent status colors.
+func TestRailStyleIsQuieterThanThinking(t *testing.T) {
+	t.Parallel()
+
+	want := lipgloss.NewStyle().Foreground(lipgloss.Color(RailColor)).Render("│")
+	if got := RailStyle.Render("│"); got != want {
+		t.Errorf("RailStyle = %q, want dedicated subtle foreground %q", got, want)
+	}
+	if got := RailStyle.Render("│"); got == ThinkingStyle.Render("│") {
+		t.Errorf("RailStyle = ThinkingStyle = %q, want the rail quieter than reasoning text", got)
+	}
+}
+
 // TestSuccessfulToolNodeUsesBrandLime pins the completed-tool affordance: success keeps
 // the quiet hollow-circle shape, but uses the same lime foreground as the filled assistant
 // node. Failure remains independently red through the NodeFailed branch.

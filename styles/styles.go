@@ -345,6 +345,15 @@ var SubagentStyle = lipgloss.NewStyle().Faint(true)
 // non-italic rail renders as a clean, unbroken vertical line.
 var ThinkingStyle = lipgloss.NewStyle().Faint(true)
 
+// RailColor is the quiet dark-neutral foreground used only for the assistant-step
+// timeline. It keeps the structural "│" visible enough to follow without competing
+// with reasoning, narration, result text, or the status-colored node glyphs.
+const RailColor = "#505050"
+
+// RailStyle renders timeline spines and connectors independently from ThinkingStyle,
+// allowing the rail to recede without also reducing the readability of reasoning text.
+var RailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(RailColor))
+
 // NewMarkdownRenderer builds a glamour renderer for the given wrap width.
 //
 // It uses the static DarkStyleConfig deliberately — never glamour.WithAutoStyle().

@@ -42,26 +42,39 @@ func TestRailNode(t *testing.T) {
 	}
 }
 
-// TestRailNodeWrap verifies that long node text wraps onto continuation lines that hang
-// under the text (spine + RailWidth blank), never under the glyph.
+// TestRailNodeWrap verifies that long node text wraps onto continuation lines whose node
+// column becomes a rail. The rail occupies the same RailWidth cells as the replaced glyph,
+// so text stays aligned while the assistant step's timeline remains continuous.
 func TestRailNodeWrap(t *testing.T) {
 	t.Parallel()
-	// Narrow width forces a wrap: budget = width - RailWidth*(depth+1) = 10-2 = 8 cols.
-	got := RailNode(styles.LitDot, "hello world here", 0, 10)
-	if len(got) < 2 {
-		t.Fatalf("RailNode did not wrap: got %d line(s): %q", len(got), got)
+
+	tests := []struct {
+		name       string
+		depth      int
+		width      int
+		wantPrefix string
+	}{
+		{name: "root node", depth: 0, width: 10, wantPrefix: "│ "},
+		{name: "nested node", depth: 1, width: 12, wantPrefix: "│ │ "},
 	}
-	cont := ansi.Strip(got[1])
-	// Continuation aligns under the first line's TEXT: depth 0 spine is empty, so it is
-	// exactly RailWidth (2) leading blanks, then the wrapped word — never the glyph.
-	if !strings.HasPrefix(cont, "  ") {
-		t.Errorf("continuation line = %q, want it to start with a RailWidth blank", cont)
-	}
-	if strings.Contains(cont, "●") {
-		t.Errorf("continuation line = %q must not repeat the node glyph", cont)
-	}
-	if strings.TrimSpace(cont) == "" {
-		t.Errorf("continuation line = %q carries no wrapped text", cont)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := RailNode(styles.LitDot, "hello world here", tt.depth, tt.width)
+			if len(got) < 2 {
+				t.Fatalf("RailNode did not wrap: got %d line(s): %q", len(got), got)
+			}
+			cont := ansi.Strip(got[1])
+			if !strings.HasPrefix(cont, tt.wantPrefix) {
+				t.Errorf("continuation line = %q, want continuous rail prefix %q", cont, tt.wantPrefix)
+			}
+			if strings.Contains(cont, "●") {
+				t.Errorf("continuation line = %q must replace, not repeat, the node glyph", cont)
+			}
+			if strings.TrimSpace(cont) == "" {
+				t.Errorf("continuation line = %q carries no wrapped text", cont)
+			}
+		})
 	}
 }
 

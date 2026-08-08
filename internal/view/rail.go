@@ -17,16 +17,16 @@ const railGlyph = "│ "
 const RailWidth = 2
 
 // railSpine returns n leading styled rail columns ("│ " each). railSpine(0) == "".
-// It is the faint vertical spine shared with the thinking rail, so nodes at nesting
-// depth n hang below n bars.
+// It is the quiet vertical spine shared by thinking, wrapped nodes, and tool details,
+// so nodes at nesting depth n hang below n bars.
 func RailSpine(n int) string {
-	return strings.Repeat(styles.ThinkingStyle.Render(railGlyph), n)
+	return strings.Repeat(styles.RailStyle.Render(railGlyph), n)
 }
 
 // railNode renders a node row at depth: `depth` leading rail columns, then the node
 // glyph (2 cols, e.g. styles.LitDot / styles.ToolNode(...)), then width-wrapped text
-// hanging under the glyph. Continuation lines carry the spine plus a railWidth blank so
-// wrapped text aligns under the first line's text, never under the glyph. glyph is
+// hanging under the glyph. Continuation lines replace the node's glyph column with another
+// rail level, preserving both text alignment and the step's continuous timeline. glyph is
 // pre-styled by the caller; text is plain. Trailing spaces are trimmed per row.
 func RailNode(glyph, text string, depth, width int) []string {
 	return RailNodeStyled(glyph, text, lipgloss.NewStyle(), depth, width)
@@ -40,9 +40,9 @@ func RailNode(glyph, text string, depth, width int) []string {
 func RailNodeStyled(glyph, text string, textStyle lipgloss.Style, depth, width int) []string {
 	spine := RailSpine(depth)
 	rows := WrapToWidth(text, max(1, width-RailWidth*(depth+1)))
-	// Continuation indent: the spine, then a railWidth blank standing in for the glyph
-	// column, so wrapped text lines up under the first line's text.
-	contIndent := spine + strings.Repeat(" ", RailWidth)
+	// The next rail level occupies the same RailWidth cells as the node glyph, so wrapped
+	// text remains aligned while the timeline continues through every physical row.
+	contIndent := RailSpine(depth + 1)
 	out := make([]string, 0, len(rows))
 	for i, row := range rows {
 		styled := textStyle.Render(row)
@@ -72,5 +72,5 @@ func RailDetail(text string, depth, width int) []string {
 // continued as a rail with no glyph — railSpine(depth) plus a trailing rail glyph trimmed
 // of its trailing space, so the row is just the faint vertical bars.
 func RailConnector(depth int) string {
-	return RailSpine(depth) + styles.ThinkingStyle.Render(strings.TrimRight(railGlyph, " "))
+	return RailSpine(depth) + styles.RailStyle.Render(strings.TrimRight(railGlyph, " "))
 }

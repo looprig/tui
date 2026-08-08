@@ -40,9 +40,9 @@ const hintSeparator = " · "
 const cardConnector = "⎿ "
 
 // dotWidth is the display width of the assistant bullet prefix ("● "), which also
-// matches glamour's "dark" document left margin. Narration wraps to this much less
-// than the content width so continuation lines — indented to align under the first
-// line — still fit.
+// matches glamour's "dark" document left margin and the shared "│ " rail width.
+// Narration wraps to this much less than the content width so continuation lines —
+// railed to align under the first line — still fit.
 const dotWidth = 2
 
 // renderMD renders markdown to ANSI behind the static committed bullet (styles.LitDot,
@@ -57,7 +57,7 @@ func renderMD(md string, width int) string {
 // begins on the SAME line as the bullet. glamour's "dark" style indents every line by
 // a 2-column document margin and brackets the block with blank lines; those are
 // stripped so the text aligns with the dot — first line "<dot>text", continuation
-// lines indented to clear the bullet. On a glamour construction or render error it
+// lines use the shared rail in the dot's column. On a glamour construction or render error it
 // falls back to the raw text behind the dot, so the UI always gets readable output.
 // dot MUST be dotWidth (2) columns wide so continuation-line alignment holds; callers
 // pass either the static styles.Dot (committed) or a blink-phased live bullet.
@@ -76,12 +76,12 @@ func renderMDDot(md string, width int, dot string) string {
 	}
 
 	lines := dedentDocument(out)
-	indent := strings.Repeat(" ", dotWidth)
+	continuationRail := railSpine(1)
 	for i := range lines {
 		if i == 0 {
 			lines[i] = dot + lines[i]
 		} else {
-			lines[i] = indent + lines[i]
+			lines[i] = continuationRail + lines[i]
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -515,9 +515,8 @@ func firstLine(s string) string {
 	return s
 }
 
-// thinkingRail is the left-rail margin ("│ ") that prefixes EVERY line of the
-// expanded thinking block — header included — so the block renders as one unbroken
-// vertical rail attaching the reasoning to the assistant turn it precedes.
+// thinkingRail is the plain left-rail margin used when matching clickable transcript
+// labels. renderThinking produces the same visible prefix with the dedicated RailStyle.
 const thinkingRail = "│ "
 
 // renderThinking renders the model's reasoning under the unified ctrl+t expand flag,
@@ -543,8 +542,8 @@ func renderThinking(s string, expand bool, width int, header string) string {
 	// AI message when collapsed, before the reasoning body when expanded). The "│ " rail stays
 	// unbroken (like an empty reasoning line), never a bare gap.
 	out := []string{
-		styles.ThinkingStyle.Render(thinkingRail + header),
-		styles.ThinkingStyle.Render(thinkingRail),
+		railSpine(1) + styles.ThinkingStyle.Render(header),
+		railSpine(1),
 	}
 	if !expand {
 		// COLLAPSED: header + the rail gap, no reasoning body. No arrow, no glyph, no
@@ -553,12 +552,12 @@ func renderThinking(s string, expand bool, width int, header string) string {
 	}
 	for _, raw := range strings.Split(s, "\n") {
 		for _, line := range wrapToWidth(raw, width-barWidth) {
-			out = append(out, styles.ThinkingStyle.Render(thinkingRail+line))
+			out = append(out, railSpine(1)+styles.ThinkingStyle.Render(line))
 		}
 	}
 	// A trailing rail gap closes the expanded block: it sets the reasoning body off from the
 	// AI message that follows, keeping the "│" rail (a bare blank line would break it).
-	out = append(out, styles.ThinkingStyle.Render(thinkingRail))
+	out = append(out, railSpine(1))
 	return strings.Join(out, "\n")
 }
 

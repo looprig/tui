@@ -110,6 +110,39 @@ func TestRenderMDAlignsWithDot(t *testing.T) {
 	}
 }
 
+// TestRenderMDWrappedContinuationUsesRail pins a multi-line AI message to the same
+// continuous timeline as thinking and tools: the ● occupies the node column on the
+// first row, and every continuation row replaces it with the subtle │ rail.
+func TestRenderMDWrappedContinuationUsesRail(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(stripANSI(renderMD("alpha beta gamma delta epsilon", 12)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("renderMD did not wrap: lines = %#v", lines)
+	}
+	for i, line := range lines[1:] {
+		if !strings.HasPrefix(line, "│ ") {
+			t.Errorf("continuation line %d = %q, want continuous rail prefix %q", i+1, line, "│ ")
+		}
+	}
+}
+
+// TestRenderThinkingUsesSubtleRailStyle ensures thinking's structural rail uses the
+// dedicated quiet color without applying that color to the readable reasoning label.
+func TestRenderThinkingUsesSubtleRailStyle(t *testing.T) {
+	t.Parallel()
+
+	got := renderThinking("reasoning", false, 80, "thought")
+	first := strings.SplitN(got, "\n", 2)[0]
+	wantPrefix := styles.RailStyle.Render("│ ")
+	if !strings.HasPrefix(first, wantPrefix) {
+		t.Errorf("thinking header = %q, want rail-style prefix %q", first, wantPrefix)
+	}
+	if !strings.Contains(first, styles.ThinkingStyle.Render("thought")) {
+		t.Errorf("thinking header = %q, want separately styled reasoning label", first)
+	}
+}
+
 // makeLines returns a slice of n distinct result lines ("line0".."lineN-1").
 func makeLines(n int) []string {
 	out := make([]string, n)

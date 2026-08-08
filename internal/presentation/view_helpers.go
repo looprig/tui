@@ -13,4 +13,5 @@ func railNodeStyled(glyph, text string, style lipgloss.Style, depth, width int) 
 func railDetail(text string, depth, width int) []string {
 	return view.RailDetail(text, depth, width)
 }
+func railSpine(depth int) string     { return view.RailSpine(depth) }
 func railConnector(depth int) string { return view.RailConnector(depth) }
