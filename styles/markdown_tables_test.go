@@ -267,6 +267,60 @@ func TestMarkdownTableRichCells(t *testing.T) {
 	}
 }
 
+func TestMarkdownTableNonemptyCellFallsBackWithoutContentLoss(t *testing.T) {
+	t.Parallel()
+
+	const width = 36
+	const markdown = `| Key | Notes |
+|---|---|
+| core | This narrative value has enough words to require responsive records. |
+| broken | <!A |`
+	r, err := NewMarkdownRenderer(width)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer(%d): %v", width, err)
+	}
+	direct, err := r.Render(markdown)
+	if err != nil {
+		t.Fatalf("direct Render(): %v", err)
+	}
+	if !strings.Contains(xansi.Strip(direct), "<!A") {
+		t.Fatalf("test precondition failed: direct Glamour output lost the cell: %q", direct)
+	}
+	got, err := RenderMarkdown(r, markdown, width)
+	if err != nil {
+		t.Fatalf("RenderMarkdown(): %v", err)
+	}
+	if got != direct {
+		t.Fatalf("RenderMarkdown() did not fall back after a nonempty cell rendered empty:\ngot  %q\nwant %q", got, direct)
+	}
+}
+
+func TestMarkdownTableRichHeadersPreserveInlineRendering(t *testing.T) {
+	t.Parallel()
+
+	const markdown = "| [Key](https://example.com/key) | `Notes` **Details** |\n|---|---|\n| core | This narrative value has enough words to require responsive records. |"
+	plain, out := renderResponsiveTableForTest(t, markdown, 44)
+	for _, want := range []string{"Key", "Notes", "Details", "core"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("rich header output does not contain %q:\n%s", want, plain)
+		}
+	}
+	if !strings.Contains(out, "\x1b]8;") || !strings.Contains(out, "https://example.com/key") {
+		t.Errorf("header hyperlink/OSC sequence missing from %q", out)
+	}
+	if !strings.Contains(out, "\x1b]8;;\a") {
+		t.Errorf("header hyperlink closing OSC sequence missing from %q", out)
+	}
+	if !strings.Contains(out, "38;2;162;210;255") {
+		t.Errorf("header inline-code color missing from %q", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if got := xansi.StringWidth(line); got > 44 {
+			t.Errorf("rich-header line width = %d, want <= 44: %q", got, xansi.Strip(line))
+		}
+	}
+}
+
 func TestMarkdownTableUnicodeWidth(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package styles
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 
 	"charm.land/glamour/v2"
@@ -13,6 +14,8 @@ import (
 	tableast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
+
+var errResponsiveTableCellRenderedEmpty = errors.New("nonempty responsive table cell rendered empty")
 
 const (
 	narrativeMinimumWords   = 4
@@ -171,6 +174,19 @@ func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width
 	for _, header := range table.headers {
 		labelWidth = max(labelWidth, xansi.StringWidth(header.plain))
 	}
+	labelStyle := lipgloss.NewStyle().Bold(true)
+	labels := make([]string, len(table.headers))
+	for column, header := range table.headers {
+		rendered, err := renderTableCell(r, header.raw)
+		if err != nil {
+			return nil, err
+		}
+		plainWidth := xansi.StringWidth(header.plain)
+		if xansi.StringWidth(rendered) > plainWidth {
+			rendered = xansi.Cut(rendered, 0, plainWidth)
+		}
+		labels[column] = labelStyle.Render(rendered)
+	}
 	alignedValueWidth := width - recordLeadingPadding - labelWidth - recordFieldGap
 	stacked := alignedValueWidth < recordMinimumValueWidth
 	valueWidth := alignedValueWidth
@@ -181,7 +197,6 @@ func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width
 		return nil, nil
 	}
 
-	labelStyle := lipgloss.NewStyle().Bold(true)
 	ruleStyle := lipgloss.NewStyle().Faint(true)
 	lines := make([]string, 0, len(table.rows)*len(table.headers))
 	for rowIndex, row := range table.rows {
@@ -194,7 +209,7 @@ func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width
 			if len(wrapped) == 0 {
 				wrapped = []string{""}
 			}
-			label := labelStyle.Render(header.plain)
+			label := labels[column]
 			if stacked {
 				labelLineWidth := width - recordLeadingPadding
 				if labelLineWidth < 1 {
@@ -251,7 +266,11 @@ func renderTableCell(r *glamour.TermRenderer, raw string) (string, error) {
 		}
 		lines[i] = xansi.Cut(line, 0, xansi.StringWidth(plain))
 	}
-	return strings.Join(lines, "\n"), nil
+	result := strings.Join(lines, "\n")
+	if strings.TrimSpace(raw) != "" && strings.TrimSpace(xansi.Strip(result)) == "" {
+		return "", errResponsiveTableCellRenderedEmpty
+	}
+	return result, nil
 }
 
 func parseResponsiveTables(markdown string, width int) []markdownTable {

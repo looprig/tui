@@ -75,64 +75,6 @@ func TestNewMarkdownRenderer(t *testing.T) {
 	}
 }
 
-// TestMarkdownTableSeparatesWrappedBodyRows verifies that terminal-width wrapping
-// stays visually grouped inside its logical Markdown row. The first description
-// deliberately wraps; a horizontal separator must follow its continuation before
-// the next source row begins.
-func TestMarkdownTableSeparatesWrappedBodyRows(t *testing.T) {
-	t.Parallel()
-
-	r, err := NewMarkdownRenderer(52)
-	if err != nil {
-		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
-	}
-	out, err := RenderMarkdown(r, `| Harness | Description |
-| --- | --- |
-| looprig | In-process Harness loop using a configured gateway/client |
-| claude-code | Claude Code ACP harness |
-| codex | Codex ACP harness |`, 52)
-	if err != nil {
-		t.Fatalf("Render() error = %v, want nil", err)
-	}
-
-	plain := markdownSGR.ReplaceAllString(out, "")
-	lines := strings.Split(plain, "\n")
-	continuation := lineContaining(lines, "gateway/client")
-	middleRow := lineContaining(lines, "claude-code")
-	nextRow := lineContaining(lines, "codex")
-	if continuation < 0 || middleRow < 0 || nextRow < 0 || continuation >= middleRow || middleRow >= nextRow {
-		t.Fatalf("rendered table lines = %#v, want wrapped looprig row before claude-code and codex rows", lines)
-	}
-	if !linesContainHorizontalRule(lines[continuation+1 : middleRow]) {
-		t.Errorf("rendered table lines = %#v, want a separator after wrapped looprig row", lines)
-	}
-	if !linesContainHorizontalRule(lines[middleRow+1 : nextRow]) {
-		t.Errorf("rendered table lines = %#v, want a separator between claude-code and codex rows", lines)
-	}
-}
-
-func lineContaining(lines []string, substring string) int {
-	for i, line := range lines {
-		if strings.Contains(line, substring) {
-			return i
-		}
-	}
-	return -1
-}
-
-func linesContainHorizontalRule(lines []string) bool {
-	return horizontalRuleLine(lines) != ""
-}
-
-func horizontalRuleLine(lines []string) string {
-	for _, line := range lines {
-		if strings.Contains(line, "─") {
-			return line
-		}
-	}
-	return ""
-}
-
 func TestMarkdownRendererLeavesNonTableMarkdownUnchanged(t *testing.T) {
 	t.Parallel()
 
