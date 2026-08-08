@@ -156,20 +156,20 @@ func brandBlueLabelSpan(s string, underlineStart, underlineEnd int, glowFrame ui
 }
 
 // brandBlueTranscriptLabel selects the semantic link within a clickable transcript row:
-// "thought for Ns" without its rail, or only "N tool(s)" in a collapsed tool-run summary.
+// "thought for Ns" without its rail, or the complete activity list in a collapsed tool-run
+// summary. Semantic summaries begin with a count after the node glyph; expanded tool names do
+// not, so they remain blue without misrepresenting the tool name as the collapse link.
 // Expanded tool nodes remain blue on hover but carry no underline because the group label is
 // absent and tool names themselves are not the collapse link.
 func brandBlueTranscriptLabel(s string, phase uint) string {
 	if strings.HasPrefix(s, thinkingRail) {
 		return brandBlueLabelSpan(s, len(thinkingRail), len(strings.TrimRight(s, " ")), phase)
 	}
-	if divider := strings.Index(s, " · "); divider >= 0 {
-		if glyphEnd := strings.IndexByte(s, ' '); glyphEnd >= 0 {
-			labelStart := glyphEnd + 1
-			label := s[labelStart:divider]
-			if strings.HasSuffix(label, " tool") || strings.HasSuffix(label, " tools") {
-				return brandBlueLabelSpan(s, labelStart, divider, phase)
-			}
+	if glyphEnd := strings.IndexByte(s, ' '); glyphEnd >= 0 {
+		labelStart := glyphEnd + 1
+		label := strings.TrimRight(s[labelStart:], " ")
+		if len(label) > 0 && label[0] >= '0' && label[0] <= '9' {
+			return brandBlueLabelSpan(s, labelStart, labelStart+len(label), phase)
 		}
 	}
 	return brandBlueLabel(s, phase)

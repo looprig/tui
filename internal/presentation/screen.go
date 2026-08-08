@@ -1781,7 +1781,7 @@ func (m *Screen) rerender() {
 //
 // MODERN-ONLY TOOL-RUN AGGREGATION: a maximal contiguous run of committed kindTool entries
 // folds as a UNIT sharing thinking's ctrl+t fold and keyed on the run's first displayID
-// (runID). Collapsed (the default) the run renders as ONE "○ N tools · names" summary node
+// (runID). Collapsed (the default) the run renders as one semantic activity summary node
 // (toolRunSummaryLines) whose first line carries sub == 0 / entry == runID, so the existing
 // header-click handler toggles the whole run; expanded, every tool entry renders on its own.
 // Non-tool entries take the unchanged per-entry path.
@@ -1815,7 +1815,7 @@ func (m Screen) renderFocused() []renderedLine {
 	var out []renderedLine
 	for i := 0; i < len(committed); {
 		// A contiguous run of committed tool entries folds as a UNIT: collapsed → one
-		// "○ N tools · names" summary node (keyed on the run's first id, runID), expanded →
+		// semantic activity summary node (keyed on the run's first id, runID), expanded →
 		// every entry individually. Non-tool entries keep the per-entry path below.
 		if committed[i].Kind == kindTool {
 			j := i + 1
