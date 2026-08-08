@@ -562,6 +562,104 @@ func TestModernCompletionTraySelectionRunsBackgroundTransition(t *testing.T) {
 	}
 }
 
+func TestModernCompletionTrayBackgroundTransitionAdvancesForEveryTrayKind(t *testing.T) {
+	t.Parallel()
+
+	trays := []struct {
+		name string
+		open func(*Screen)
+	}{
+		{
+			name: "slash command",
+			open: func(m *Screen) { m.interaction.slash = components.NewSlashComplete("/") },
+		},
+		{
+			name: "file",
+			open: func(m *Screen) {
+				m.interaction.files = components.NewFileComplete([]components.FileItem{{Path: "first.go"}})
+			},
+		},
+		{
+			name: "runtime value",
+			open: func(m *Screen) {
+				m.runtimeTray = components.NewValueComplete([]components.ValueItem{{ID: "sonnet", Label: "Sonnet"}}, "")
+			},
+		},
+		{
+			name: "session",
+			open: func(m *Screen) {
+				m.sessionTray = components.NewSessionComplete([]components.SessionItem{{ID: "one", Title: "One"}})
+			},
+		},
+	}
+
+	for _, tt := range trays {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+			tt.open(&m)
+			if cmd := m.startTrayGlow(); cmd == nil {
+				t.Fatal("opening tray did not schedule background transition")
+			}
+
+			epoch := m.trayGlowEpoch
+			for frame := uint(0); frame <= trayGlowFinalFrame; frame++ {
+				line := strings.Split(m.completionTrayView(m.height), "\n")[0]
+				open, _ := styles.DeriveBackgroundSGR(traySelectionColor(frame))
+				if !strings.HasPrefix(line, open) {
+					t.Errorf("frame %d selected row does not open with transition background: %q", frame, line)
+				}
+				if frame == trayGlowFinalFrame {
+					break
+				}
+				var next tea.Cmd
+				m, next = updateScreen(t, m, trayGlowMsg{epoch: epoch})
+				if m.trayGlowFrame != frame+1 {
+					t.Fatalf("tray glow frame = %d, want %d", m.trayGlowFrame, frame+1)
+				}
+				if frame+1 < trayGlowFinalFrame && next == nil {
+					t.Fatalf("tray glow stopped early at frame %d", frame+1)
+				}
+			}
+		})
+	}
+}
+
+func TestModernCompletionTrayStartsBackgroundTransitionWhenOpened(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+		kind byte
+	}{
+		{name: "slash command", key: "/", kind: 's'},
+		{name: "file", key: "@", kind: 'f'},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+			beforeEpoch := m.trayGlowEpoch
+
+			m, _ = updateScreen(t, m, keyPress(tt.key))
+
+			kind, _, open := m.completionCursor()
+			if !open || kind != tt.kind {
+				t.Fatalf("completion after %q = (kind %q, open %t), want kind %q open", tt.key, kind, open, tt.kind)
+			}
+			if m.trayGlowEpoch != beforeEpoch+1 {
+				t.Fatalf("tray glow epoch = %d, want %d after opening", m.trayGlowEpoch, beforeEpoch+1)
+			}
+			if m.trayGlowFrame != 0 {
+				t.Fatalf("initial tray glow frame = %d, want 0", m.trayGlowFrame)
+			}
+		})
+	}
+}
+
 func TestModernCompletionTrayAppearsAboveInput(t *testing.T) {
 	t.Parallel()
 

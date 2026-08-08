@@ -832,7 +832,7 @@ func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
 }
 
 func (m *Screen) handleTrayGlow(msg trayGlowMsg) tea.Cmd {
-	if msg.epoch != m.trayGlowEpoch || (m.interaction.slash == nil && m.interaction.files == nil) {
+	if msg.epoch != m.trayGlowEpoch || !m.completionTrayOpen() {
 		return nil
 	}
 	if m.trayGlowFrame >= trayGlowFinalFrame {
@@ -843,6 +843,10 @@ func (m *Screen) handleTrayGlow(msg trayGlowMsg) tea.Cmd {
 		return nil
 	}
 	return trayGlowCmd(msg.epoch)
+}
+
+func (m Screen) completionTrayOpen() bool {
+	return m.sessionTray != nil || m.runtimeTray != nil || m.interaction.slash != nil || m.interaction.files != nil
 }
 
 func (m *Screen) startTrayGlow() tea.Cmd {
@@ -1399,11 +1403,12 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.resize()
 	}
 	var trayGlow tea.Cmd
-	if msg.String() == "up" || msg.String() == "down" {
-		afterKind, afterCursor, afterOpen := m.completionCursor()
-		if beforeOpen && afterOpen && beforeKind == afterKind && beforeCursor != afterCursor {
-			trayGlow = m.startTrayGlow()
-		}
+	afterKind, afterCursor, afterOpen := m.completionCursor()
+	opened := afterOpen && (!beforeOpen || beforeKind != afterKind)
+	moved := (msg.String() == "up" || msg.String() == "down") &&
+		beforeOpen && afterOpen && beforeKind == afterKind && beforeCursor != afterCursor
+	if opened || moved {
+		trayGlow = m.startTrayGlow()
 	}
 	return m, tea.Batch(cmd, blink, trayGlow)
 }
