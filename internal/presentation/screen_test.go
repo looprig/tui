@@ -55,8 +55,8 @@ func TestStatusLineUsesCommittedPostCompactionContext(t *testing.T) {
 	t.Parallel()
 
 	loopID := callID(0x31)
-	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x32))
-	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x33))
+	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x32), 0x80)
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x33), 0x20)
 	m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 24)
 	m = feed(t, m, event.LoopStarted{
 		Header:  hdr(loopID),
@@ -75,7 +75,7 @@ func TestStatusLineUsesCommittedPostCompactionContext(t *testing.T) {
 		AttemptID:        event.CompactAttemptID(callID(0x34)),
 		WaiterCommandIDs: []uuid.UUID{callID(0x35)},
 		Reason:           event.CompactionReasonManual,
-		Basis:            postContext.Basis,
+		Basis:            preContext.Basis,
 		Summary:          userMsg("compacted"),
 		PostContext:      postContext,
 	})
@@ -85,6 +85,32 @@ func TestStatusLineUsesCommittedPostCompactionContext(t *testing.T) {
 	}
 	if strings.Contains(got, "~80% context") {
 		t.Errorf("post-compaction statusLine = %q, still contains stale ~80%% context", got)
+	}
+}
+
+func TestStatusLineUsesCommittedPostCompactionContextAsFirstContextEvent(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x36)
+	preBasis := event.ContextBasis{Revision: 1, ThroughEventID: callID(0x37)}
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x38), 0x20)
+	m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 24)
+	m = feed(t, m, event.LoopStarted{
+		Header:  hdr(loopID),
+		Runtime: event.ModelRuntime{Key: postContext.Model},
+	})
+	m = feed(t, m, event.CompactionCommitted{
+		Header:           hdr(loopID),
+		AttemptID:        event.CompactAttemptID(callID(0x39)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x3a)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            preBasis,
+		Summary:          userMsg("compacted"),
+		PostContext:      postContext,
+	})
+
+	if got := stripANSI(m.statusLine()); !strings.Contains(got, "~20% context") {
+		t.Errorf("first-context-event statusLine = %q, want ~20%% context", got)
 	}
 }
 

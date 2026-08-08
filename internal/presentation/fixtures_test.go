@@ -15,6 +15,8 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/tool"
+	contextcount "github.com/looprig/inference/contextcount"
+	model "github.com/looprig/inference/model"
 )
 
 func writeFile(t *testing.T, dir, name string, data []byte) string {
@@ -30,6 +32,20 @@ func writeFile(t *testing.T, dir, name string, data []byte) string {
 // doubles and the small pure helpers — shared by every *_test.go in package tui. They
 // live here (not co-located with any one shell) because they are shell-independent: a
 // fakeAgent drives sessionCore, Screen, and the reducer/render unit tests alike.
+
+func validContextMeasurement(input, limit content.TokenCount, revision event.ContextRevision, throughEventID uuid.UUID, fingerprint byte) event.ContextMeasurement {
+	return event.ContextMeasurement{
+		Basis: event.ContextBasis{
+			Revision:       revision,
+			ThroughEventID: throughEventID,
+		},
+		Model:              model.ModelKey{Provider: "provider", Model: "model"},
+		RequestFingerprint: [32]byte{fingerprint},
+		InputTokens:        input,
+		InputLimit:         limit,
+		Quality:            contextcount.CountQualityHeuristicEstimate,
+	}
+}
 
 // compile-time assertion that the test double satisfies the (widened) Agent
 // interface; if a method is added or its signature drifts, this fails to build.

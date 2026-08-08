@@ -12,20 +12,6 @@ import (
 	model "github.com/looprig/inference/model"
 )
 
-func validContextMeasurement(input, limit content.TokenCount, revision event.ContextRevision, throughEventID uuid.UUID) event.ContextMeasurement {
-	return event.ContextMeasurement{
-		Basis: event.ContextBasis{
-			Revision:       revision,
-			ThroughEventID: throughEventID,
-		},
-		Model:              model.ModelKey{Provider: "provider", Model: "model"},
-		RequestFingerprint: [32]byte{0x42},
-		InputTokens:        input,
-		InputLimit:         limit,
-		Quality:            contextcount.CountQualityHeuristicEstimate,
-	}
-}
-
 func TestRuntimeProjectionFoldsAuthoritativeLoopEvents(t *testing.T) {
 	t.Parallel()
 
@@ -112,9 +98,9 @@ func TestRuntimeProjectionUsesCommittedPostCompactionContext(t *testing.T) {
 
 	compactedLoopID := callID(0x21)
 	otherLoopID := callID(0x22)
-	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x23))
-	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x24))
-	otherContext := validContextMeasurement(content.TokenCount(60), content.TokenCount(100), 1, callID(0x25))
+	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x23), 0x80)
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x24), 0x20)
+	otherContext := validContextMeasurement(content.TokenCount(60), content.TokenCount(100), 1, callID(0x25), 0x60)
 
 	projection := newRuntimeProjection()
 	for _, loopID := range []uuid.UUID{compactedLoopID, otherLoopID} {
@@ -136,7 +122,7 @@ func TestRuntimeProjectionUsesCommittedPostCompactionContext(t *testing.T) {
 		AttemptID:        event.CompactAttemptID(callID(0x26)),
 		WaiterCommandIDs: []uuid.UUID{callID(0x27)},
 		Reason:           event.CompactionReasonManual,
-		Basis:            postContext.Basis,
+		Basis:            preContext.Basis,
 		Summary:          userMsg("compacted"),
 		PostContext:      postContext,
 	})
@@ -155,6 +141,33 @@ func TestRuntimeProjectionUsesCommittedPostCompactionContext(t *testing.T) {
 	}
 	if !other.hasContext || other.context != otherContext {
 		t.Fatalf("other loop context = (%+v, %v), want (%+v, true)", other.context, other.hasContext, otherContext)
+	}
+}
+
+func TestRuntimeProjectionUsesCommittedPostCompactionContextWithoutPriorMeasurement(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x28)
+	preBasis := event.ContextBasis{Revision: 1, ThroughEventID: callID(0x29)}
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x2a), 0x20)
+
+	projection := newRuntimeProjection().ApplyEvent(event.LoopStarted{Header: hdr(loopID)})
+	projection = projection.ApplyEvent(event.CompactionCommitted{
+		Header:           hdr(loopID),
+		AttemptID:        event.CompactAttemptID(callID(0x2b)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x2c)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            preBasis,
+		Summary:          userMsg("compacted"),
+		PostContext:      postContext,
+	})
+
+	state, ok := projection.loop(loopID)
+	if !ok {
+		t.Fatal("loop missing from runtime projection")
+	}
+	if !state.hasContext || state.context != postContext {
+		t.Fatalf("first context-bearing event produced (%+v, %v), want (%+v, true)", state.context, state.hasContext, postContext)
 	}
 }
 
