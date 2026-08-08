@@ -8,10 +8,33 @@ import (
 	"github.com/looprig/tui/styles"
 )
 
+// TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly pins the picker's second row to
+// exactly the two things worth showing to pick a session to resume: when it was last used
+// and its short id. CodeRig's picker only ever lists CodeRig's own sessions, so an agent
+// kind like "coderig:builder" is identical on every row and carries no information: showing
+// it is pure noise. A loop count is likewise not a useful signal for choosing which session
+// to resume.
+func TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly(t *testing.T) {
+	tray := NewSessionComplete([]SessionItem{
+		{ID: "one", Title: "First", LastUsed: "2026-07-15", ShortID: "12345678"},
+	})
+	lines := strings.Split(tray.ViewWindowBackground(80, 3, styles.TraySelectedBg), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("row count = %d, want at least 2", len(lines))
+	}
+	row2 := ansi.Strip(lines[1])
+	if !strings.Contains(row2, "2026-07-15") || !strings.Contains(row2, "12345678") {
+		t.Fatalf("row 2 = %q, want the last-used date and short id", row2)
+	}
+	if strings.Contains(row2, "loop") {
+		t.Errorf("row 2 = %q, want no loop count", row2)
+	}
+}
+
 func TestSessionCompleteRendersTwoRowsWithContinuousUnboxedRail(t *testing.T) {
 	tray := NewSessionComplete([]SessionItem{
-		{ID: "one", Title: "First", State: "idle", Activity: "2m ago", Kind: "coderig", Loops: 3, Created: "2026-07-15", ShortID: "12345678"},
-		{ID: "two", Title: "Second", State: "stopped", Kind: "coderig", Loops: 1, Created: "2026-07-14", ShortID: "87654321"},
+		{ID: "one", Title: "First", State: "idle", Activity: "2m ago", LastUsed: "2026-07-15", ShortID: "12345678"},
+		{ID: "two", Title: "Second", State: "stopped", LastUsed: "2026-07-14", ShortID: "87654321"},
 	})
 	lines := strings.Split(tray.ViewWindowBackground(80, 6, styles.TraySelectedBg), "\n")
 	if len(lines) != 5 {

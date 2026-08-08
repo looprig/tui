@@ -61,6 +61,12 @@ type reopenResultMsg struct {
 	agent   Agent
 	err     error
 	handoff *reopenHandoff
+	// warning is set when the replacement succeeded only after recovering from an earlier,
+	// non-fatal failure (a session-browser resume rejected/failed and fell back to a fresh
+	// session — see beginSessionResume). nil on an ordinary /clear or successful resume.
+	// Meaningful only when err is nil; the caller surfaces it as a committed notice rather
+	// than a fatal error.
+	warning error
 }
 
 // closeForQuitResultMsg reports completion of the exactly-once replacement close deferred by

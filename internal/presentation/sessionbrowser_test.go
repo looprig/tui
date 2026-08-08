@@ -2,16 +2,19 @@ package presentation
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
 type sessionBrowserFake struct {
-	sessions []SessionSummary
-	resumed  SessionID
-	fresh    Agent
+	sessions  []SessionSummary
+	resumed   SessionID
+	fresh     Agent
+	resumeErr error
 }
 
 func (f *sessionBrowserFake) ListSessions(context.Context) ([]SessionSummary, error) {
@@ -19,6 +22,9 @@ func (f *sessionBrowserFake) ListSessions(context.Context) ([]SessionSummary, er
 }
 func (f *sessionBrowserFake) ResumeSession(_ context.Context, id SessionID) (Agent, error) {
 	f.resumed = id
+	if f.resumeErr != nil {
+		return nil, f.resumeErr
+	}
 	return f.fresh, nil
 }
 
@@ -51,6 +57,115 @@ func TestIdleSessionResumeUsesCloseBeforeOpenHandoff(t *testing.T) {
 	}
 	if old.closeCalls != 1 {
 		t.Fatalf("old Close calls = %d, want 1", old.closeCalls)
+	}
+}
+
+// TestSessionResumeRejectionFallsBackToFreshSession proves a rejected/failed resume (e.g.
+// harness's RestoreRejectedError from config drift) does not surface as a plain reopen
+// failure: it falls back to opening a fresh session — the same path /clear uses — carrying
+// the original error as a non-fatal warning rather than a fatal one, so the caller never
+// has to choose between losing the TUI and pretending the resume succeeded.
+func TestSessionResumeRejectionFallsBackToFreshSession(t *testing.T) {
+	old := &fakeAgent{activeLoopID: callID(1)}
+	fresh := &fakeAgent{activeLoopID: callID(2)}
+	resumeErr := errors.New("session: restore rejected by policy: 1 warn category (runtime); 0 info changes")
+	browser := &sessionBrowserFake{resumeErr: resumeErr}
+	screen := New(context.Background(), old, func(context.Context) (Agent, error) { return fresh, nil }, AgentBanner{}, WithSessionBrowser(browser))
+	id := callID(3)
+
+	msg := screen.beginSessionResume(id)().(reopenResultMsg)
+	if msg.err != nil {
+		t.Fatalf("reopen result err = %v, want nil (fallback should recover)", msg.err)
+	}
+	if msg.agent != fresh {
+		t.Fatalf("reopen result agent = %#v, want the fallback fresh session", msg.agent)
+	}
+	if browser.resumed != id {
+		t.Fatalf("resumed session id = %s, want %s", browser.resumed, id)
+	}
+	if !errors.Is(msg.warning, resumeErr) {
+		t.Fatalf("reopen result warning = %v, want it to be/wrap %v", msg.warning, resumeErr)
+	}
+	if old.closeCalls != 1 {
+		t.Fatalf("old Close calls = %d, want 1", old.closeCalls)
+	}
+}
+
+// TestSessionResumeRejectionStaysAliveWithWarningNotice drives the fallback through
+// Update, proving the TUI stays live (a real agent, not stuck in StatusResetting) and
+// surfaces the original rejection as a committed notice instead of silently swallowing
+// it.
+func TestSessionResumeRejectionStaysAliveWithWarningNotice(t *testing.T) {
+	old := &fakeAgent{activeLoopID: callID(1)}
+	fresh := &fakeAgent{activeLoopID: callID(2)}
+	resumeErr := errors.New("session: restore rejected by policy: 1 warn category (runtime); 0 info changes")
+	browser := &sessionBrowserFake{resumeErr: resumeErr}
+	m := New(context.Background(), old, func(context.Context) (Agent, error) { return fresh, nil }, AgentBanner{Name: "CodeRig"}, WithSessionBrowser(browser))
+	m.restoring = false
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	msg := m.beginSessionResume(callID(3))().(reopenResultMsg)
+	m, _ = updateScreen(t, m, msg)
+
+	if m.agent != fresh {
+		t.Fatalf("agent after rejected resume = %#v, want the fallback fresh session (TUI must stay live)", m.agent)
+	}
+	if m.status == StatusResetting {
+		t.Fatalf("status after rejected resume = %v, want NOT stuck in Resetting", m.status)
+	}
+	if joined := committedJoined(m); !strings.Contains(joined, resumeErr.Error()) {
+		t.Errorf("committed = %q, want the rejection surfaced as a notice", joined)
+	}
+}
+
+// TestSessionResumeRejectionStaysFatalWhenFallbackAlsoFails proves the fallback is not a
+// blanket error swallow: if even a fresh session cannot be opened, there is genuinely
+// nowhere left to land, and the reopen must still surface as a real (fatal) error carrying
+// both failures.
+func TestSessionResumeRejectionStaysFatalWhenFallbackAlsoFails(t *testing.T) {
+	old := &fakeAgent{activeLoopID: callID(1)}
+	resumeErr := errors.New("session: restore rejected by policy")
+	fallbackErr := errors.New("open: disk full")
+	browser := &sessionBrowserFake{resumeErr: resumeErr}
+	screen := New(context.Background(), old, func(context.Context) (Agent, error) { return nil, fallbackErr }, AgentBanner{}, WithSessionBrowser(browser))
+
+	msg := screen.beginSessionResume(callID(3))().(reopenResultMsg)
+	if msg.err == nil {
+		t.Fatal("reopen result err = nil, want a fatal error when both resume and fallback fail")
+	}
+	if !errors.Is(msg.err, resumeErr) || !errors.Is(msg.err, fallbackErr) {
+		t.Fatalf("reopen result err = %v, want it to wrap both %v and %v", msg.err, resumeErr, fallbackErr)
+	}
+	if msg.agent != nil {
+		t.Fatalf("reopen result agent = %#v, want nil", msg.agent)
+	}
+}
+
+// TestSessionsListedShowsLastUsedFallingBackToCreated pins the picker's second row to
+// recency, not creation: a session that has actually run a turn shows when it was last
+// active; a session that never ran one (LastActiveAt stays the zero value) falls back to
+// when it was opened, rather than showing a zero/blank date.
+func TestSessionsListedShowsLastUsedFallingBackToCreated(t *testing.T) {
+	agent := &fakeAgent{activeLoopID: callID(1)}
+	active := SessionID(callID(2))
+	neverActive := SessionID(callID(3))
+	browser := &sessionBrowserFake{sessions: []SessionSummary{
+		{ID: active, Title: "active session", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), LastActiveAt: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)},
+		{ID: neverActive, Title: "never active", CreatedAt: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)},
+	}}
+	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil }, AgentBanner{}, WithSessionBrowser(browser))
+
+	m, _ = updateScreen(t, m, sessionsListedMsg{sessions: browser.sessions})
+
+	if m.sessionTray == nil {
+		t.Fatal("sessionTray is nil after sessionsListedMsg")
+	}
+	if got := m.sessionTray.Selected().LastUsed; got != "2026-07-15" {
+		t.Errorf("active session LastUsed = %q, want 2026-07-15 (LastActiveAt)", got)
+	}
+	m.sessionTray.Down()
+	if got := m.sessionTray.Selected().LastUsed; got != "2026-07-14" {
+		t.Errorf("never-active session LastUsed = %q, want 2026-07-14 (falls back to CreatedAt)", got)
 	}
 }
 

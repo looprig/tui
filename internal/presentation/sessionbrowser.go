@@ -15,8 +15,6 @@ type SessionSummary struct {
 	ID           SessionID
 	Title        string
 	State        string
-	AgentKind    string
-	LoopCount    int
 	CreatedAt    time.Time
 	LastActiveAt time.Time
 }

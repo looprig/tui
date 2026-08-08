@@ -15,9 +15,7 @@ type SessionItem struct {
 	Title    string
 	State    string
 	Activity string
-	Kind     string
-	Loops    int
-	Created  string
+	LastUsed string
 	ShortID  string
 }
 
@@ -68,7 +66,7 @@ func (s *SessionComplete) ViewWindowBackground(width, maxRows int, selectedBg co
 		selected := i == s.cursor
 		rows = append(rows,
 			renderSessionLine(width, item.Title+joinMetadata(item.State, item.Activity), selected, selectedBg),
-			renderSessionLine(width, fmt.Sprintf("%s · %d loops · %s · %s", item.Kind, item.Loops, item.Created, item.ShortID), selected, selectedBg),
+			renderSessionLine(width, fmt.Sprintf("%s · %s", item.LastUsed, item.ShortID), selected, selectedBg),
 		)
 		if i+1 < end {
 			rows = append(rows, renderSessionLine(width, "", false, selectedBg))

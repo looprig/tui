@@ -535,9 +535,7 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 			Title:    title,
 			State:    session.State,
 			Activity: relativeActivity(now, session.LastActiveAt),
-			Kind:     session.AgentKind,
-			Loops:    session.LoopCount,
-			Created:  session.CreatedAt.Format("2006-01-02"),
+			LastUsed: lastUsedDate(session),
 			ShortID:  shortID,
 		})
 	}
@@ -549,6 +547,17 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 	}
 	m.resize()
 	return m.startTrayGlow()
+}
+
+// lastUsedDate is the picker's second-row date: when the session was actually last used.
+// LastActiveAt stays the zero value for a session that never ran a turn, so it falls back
+// to CreatedAt rather than showing a blank/zero date for a session that was merely opened.
+func lastUsedDate(session SessionSummary) string {
+	at := session.LastActiveAt
+	if at.IsZero() {
+		at = session.CreatedAt
+	}
+	return at.Format("2006-01-02")
 }
 
 func relativeActivity(now, at time.Time) string {
@@ -571,6 +580,15 @@ func relativeActivity(now, at time.Time) string {
 	}
 }
 
+// beginSessionResume closes the current agent and opens the selected one via reopenAgent.
+// A resume can be REJECTED (e.g. harness's RestoreRejectedError on config drift) or
+// otherwise fail after old is already closed and its exclusive workspace lease released —
+// there is no "keep the old session" fallback at that point. Rather than let that surface
+// as a fatal reopen failure (old, already-closed one moment; whole TUI process exiting the
+// next), a failed resume falls back to opening a FRESH session — the same path /clear
+// uses, so the replacement is a real, live agent and every existing status/quit/interaction
+// invariant keeps holding — carrying the original error forward as a non-fatal warning
+// (reopenResultMsg.warning) instead of losing the session and the terminal in one step.
 func (m *Screen) beginSessionResume(id SessionID) tea.Cmd {
 	if m.sessionBrowser == nil || id.IsZero() || m.status == StatusResetting {
 		return nil
@@ -582,9 +600,28 @@ func (m *Screen) beginSessionResume(id SessionID) tea.Cmd {
 		m.sub = nil
 	}
 	m.handoff = newReopenHandoff()
-	return reopenAgent(m.appCtx, m.agent, func(ctx context.Context) (Agent, error) {
-		return m.sessionBrowser.ResumeSession(ctx, id)
+	var resumeErr error
+	cmd := reopenAgent(m.appCtx, m.agent, func(ctx context.Context) (Agent, error) {
+		agent, err := m.sessionBrowser.ResumeSession(ctx, id)
+		if err == nil {
+			return agent, nil
+		}
+		resumeErr = err
+		return m.openAgent(ctx)
 	}, m.handoff)
+	return func() tea.Msg {
+		msg := cmd()
+		result, ok := msg.(reopenResultMsg)
+		if !ok || resumeErr == nil {
+			return msg
+		}
+		if result.err != nil {
+			result.err = fmt.Errorf("resume rejected: %w; fallback to a fresh session also failed: %w", resumeErr, result.err)
+		} else {
+			result.warning = resumeErr
+		}
+		return result
+	}
 }
 
 func isResumeTerminal(ev event.Event) bool {
@@ -1029,6 +1066,9 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	// here: otherwise a successful swap leaves an empty viewport and looks exactly like
 	// the old session merely closed.
 	m.commitStartup()
+	if msg.warning != nil {
+		m.transcript = m.transcript.CommitGlobalNotice(noticeWarn, "couldn't resume that session (\""+msg.warning.Error()+"\") — opened a new session instead")
+	}
 	m.rerender()
 	if m.quitAfterReopen {
 		m.closing = newAgentCloseHandoff(m.agent)
