@@ -660,6 +660,28 @@ func TestModernCompletionTrayStartsBackgroundTransitionWhenOpened(t *testing.T) 
 	}
 }
 
+func TestModernCompletionTrayBackgroundTransitionStopsForStaleOrClosedTray(t *testing.T) {
+	t.Parallel()
+
+	m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 48, 24)
+	m.interaction.slash = components.NewSlashComplete("/")
+	m.startTrayGlow()
+	staleEpoch := m.trayGlowEpoch
+	m.startTrayGlow()
+	currentEpoch := m.trayGlowEpoch
+
+	m, next := updateScreen(t, m, trayGlowMsg{epoch: staleEpoch})
+	if m.trayGlowFrame != 0 || next != nil {
+		t.Fatalf("stale tick = (frame %d, next %v), want frame 0 and no next command", m.trayGlowFrame, next)
+	}
+
+	m.interaction.slash = nil
+	m, next = updateScreen(t, m, trayGlowMsg{epoch: currentEpoch})
+	if m.trayGlowFrame != 0 || next != nil {
+		t.Fatalf("closed-tray tick = (frame %d, next %v), want frame 0 and no next command", m.trayGlowFrame, next)
+	}
+}
+
 func TestModernCompletionTrayAppearsAboveInput(t *testing.T) {
 	t.Parallel()
 

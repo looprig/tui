@@ -1215,10 +1215,16 @@ func (m Screen) routeToEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.runtimeTray != nil || m.sessionTray != nil {
 		return m, nil
 	}
+	beforeKind, _, beforeOpen := m.completionCursor()
 	var cmd tea.Cmd
 	m.interaction, cmd = m.interaction.ForwardToEditor(msg)
 	m.resize()
-	return m, cmd
+	afterKind, _, afterOpen := m.completionCursor()
+	var trayGlow tea.Cmd
+	if completionTrayDidOpen(beforeKind, beforeOpen, afterKind, afterOpen) {
+		trayGlow = m.startTrayGlow()
+	}
+	return m, tea.Batch(cmd, trayGlow)
 }
 
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1404,13 +1410,17 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var trayGlow tea.Cmd
 	afterKind, afterCursor, afterOpen := m.completionCursor()
-	opened := afterOpen && (!beforeOpen || beforeKind != afterKind)
+	opened := completionTrayDidOpen(beforeKind, beforeOpen, afterKind, afterOpen)
 	moved := (msg.String() == "up" || msg.String() == "down") &&
 		beforeOpen && afterOpen && beforeKind == afterKind && beforeCursor != afterCursor
 	if opened || moved {
 		trayGlow = m.startTrayGlow()
 	}
 	return m, tea.Batch(cmd, blink, trayGlow)
+}
+
+func completionTrayDidOpen(beforeKind byte, beforeOpen bool, afterKind byte, afterOpen bool) bool {
+	return afterOpen && (!beforeOpen || beforeKind != afterKind)
 }
 
 func (m Screen) completionCursor() (kind byte, cursor int, open bool) {
