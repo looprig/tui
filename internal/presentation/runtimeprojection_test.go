@@ -4,12 +4,27 @@ import (
 	"testing"
 
 	"github.com/looprig/core/content"
+	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/loop"
 	contextcount "github.com/looprig/inference/contextcount"
 	model "github.com/looprig/inference/model"
 )
+
+func validContextMeasurement(input, limit content.TokenCount, revision event.ContextRevision, throughEventID uuid.UUID) event.ContextMeasurement {
+	return event.ContextMeasurement{
+		Basis: event.ContextBasis{
+			Revision:       revision,
+			ThroughEventID: throughEventID,
+		},
+		Model:              model.ModelKey{Provider: "provider", Model: "model"},
+		RequestFingerprint: [32]byte{0x42},
+		InputTokens:        input,
+		InputLimit:         limit,
+		Quality:            contextcount.CountQualityHeuristicEstimate,
+	}
+}
 
 func TestRuntimeProjectionFoldsAuthoritativeLoopEvents(t *testing.T) {
 	t.Parallel()
@@ -89,6 +104,57 @@ func TestRuntimeProjectionFoldsAuthoritativeLoopEvents(t *testing.T) {
 	state, _ = projection.loop(loopID)
 	if state.mode != loop.ModeName("build") || state.runtime != initial {
 		t.Fatalf("inference-only change = mode %q runtime %+v, want build and %+v", state.mode, state.runtime, initial)
+	}
+}
+
+func TestRuntimeProjectionUsesCommittedPostCompactionContext(t *testing.T) {
+	t.Parallel()
+
+	compactedLoopID := callID(0x21)
+	otherLoopID := callID(0x22)
+	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x23))
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x24))
+	otherContext := validContextMeasurement(content.TokenCount(60), content.TokenCount(100), 1, callID(0x25))
+
+	projection := newRuntimeProjection()
+	for _, loopID := range []uuid.UUID{compactedLoopID, otherLoopID} {
+		projection = projection.ApplyEvent(event.LoopStarted{
+			Header:  hdr(loopID),
+			Runtime: event.ModelRuntime{Key: preContext.Model},
+		})
+	}
+	projection = projection.ApplyEvent(event.ContextMeasured{
+		Header:      hdr(compactedLoopID),
+		Measurement: preContext,
+	})
+	projection = projection.ApplyEvent(event.ContextMeasured{
+		Header:      hdr(otherLoopID),
+		Measurement: otherContext,
+	})
+	projection = projection.ApplyEvent(event.CompactionCommitted{
+		Header:           hdr(compactedLoopID),
+		AttemptID:        event.CompactAttemptID(callID(0x26)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x27)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            postContext.Basis,
+		Summary:          userMsg("compacted"),
+		PostContext:      postContext,
+	})
+
+	compacted, ok := projection.loop(compactedLoopID)
+	if !ok {
+		t.Fatal("compacted loop missing from runtime projection")
+	}
+	if !compacted.hasContext || compacted.context != postContext {
+		t.Fatalf("compacted context = (%+v, %v), want (%+v, true)", compacted.context, compacted.hasContext, postContext)
+	}
+
+	other, ok := projection.loop(otherLoopID)
+	if !ok {
+		t.Fatal("other loop missing from runtime projection")
+	}
+	if !other.hasContext || other.context != otherContext {
+		t.Fatalf("other loop context = (%+v, %v), want (%+v, true)", other.context, other.hasContext, otherContext)
 	}
 }
 

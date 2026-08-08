@@ -51,6 +51,43 @@ func TestModernStatusSeparatesRuntimeMetadata(t *testing.T) {
 	}
 }
 
+func TestStatusLineUsesCommittedPostCompactionContext(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x31)
+	preContext := validContextMeasurement(content.TokenCount(80), content.TokenCount(100), 1, callID(0x32))
+	postContext := validContextMeasurement(content.TokenCount(20), content.TokenCount(100), 2, callID(0x33))
+	m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 24)
+	m = feed(t, m, event.LoopStarted{
+		Header:  hdr(loopID),
+		Runtime: event.ModelRuntime{Key: preContext.Model},
+	})
+	m = feed(t, m, event.ContextMeasured{
+		Header:      hdr(loopID),
+		Measurement: preContext,
+	})
+	if got := stripANSI(m.statusLine()); !strings.Contains(got, "~80% context") {
+		t.Fatalf("pre-compaction statusLine = %q, want ~80%% context", got)
+	}
+
+	m = feed(t, m, event.CompactionCommitted{
+		Header:           hdr(loopID),
+		AttemptID:        event.CompactAttemptID(callID(0x34)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x35)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            postContext.Basis,
+		Summary:          userMsg("compacted"),
+		PostContext:      postContext,
+	})
+	got := stripANSI(m.statusLine())
+	if !strings.Contains(got, "~20% context") {
+		t.Errorf("post-compaction statusLine = %q, want ~20%% context", got)
+	}
+	if strings.Contains(got, "~80% context") {
+		t.Errorf("post-compaction statusLine = %q, still contains stale ~80%% context", got)
+	}
+}
+
 // updateScreen drives m.Update with msg and returns the concrete Screen plus the
 // cmd, failing the test if the model is not a Screen. It mirrors updateScreen.
 func updateScreen(t *testing.T, m Screen, msg tea.Msg) (Screen, tea.Cmd) {
