@@ -82,6 +82,11 @@ func (p runtimeProjection) ApplyEvent(ev event.Event) runtimeProjection {
 		state.context = value.Measurement
 		state.hasContext = true
 		changed = true
+	case event.CompactionCommitted:
+		state.id = loopID
+		state.context = value.PostContext
+		state.hasContext = true
+		changed = true
 	case event.LoopIdle:
 		state.id = loopID
 		state.live = false
