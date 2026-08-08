@@ -3905,9 +3905,9 @@ func TestRemoveEmptyStepGaps(t *testing.T) {
 				{styled: "│", entry: 1},
 				blankSeparator(1, 2),
 				blankSeparator(1, 3),
-				{styled: "○ 1 tool · Bash", plain: "○ 1 tool · Bash", entry: 5},
+				{styled: "○ 1 command executed", plain: "○ 1 command executed", entry: 5},
 			},
-			want: []string{"│ thought for 3s", "│", "○ 1 tool · Bash"},
+			want: []string{"│ thought for 3s", "│", "○ 1 command executed"},
 		},
 		{
 			name:      "expanded tool node follows narration rail",
@@ -4024,9 +4024,9 @@ func TestCommittedStepHasNoEmptyRowsBeforeTools(t *testing.T) {
 		expanded  bool
 		toolLabel string
 	}{
-		{name: "thinking only collapsed", toolLabel: "○ 1 tool · Bash"},
+		{name: "thinking only collapsed", toolLabel: "○ 1 command executed"},
 		{name: "thinking only expanded", expanded: true, toolLabel: "○ Bash"},
-		{name: "narrated collapsed", narration: "Let me explore the repo.", toolLabel: "○ 1 tool · Bash"},
+		{name: "narrated collapsed", narration: "Let me explore the repo.", toolLabel: "○ 1 command executed"},
 		{name: "narrated expanded", narration: "Let me explore the repo.", expanded: true, toolLabel: "○ Bash"},
 	}
 
@@ -4082,7 +4082,7 @@ func TestCommittedStepHasNoEmptyRowsBeforeTools(t *testing.T) {
 }
 
 // TestToolRunCollapsedSummary proves a completed contiguous run of tool entries collapses,
-// under the DEFAULT (collapsed) fold, to exactly ONE "○ N tools · names" summary node whose
+// under the DEFAULT (collapsed) fold, to exactly one semantic activity summary node whose
 // first line carries sub == 0 and entry == runID (so the existing header-click handler
 // toggles the whole run) — and that none of the individual tool nodes render.
 func TestToolRunCollapsedSummary(t *testing.T) {
@@ -4104,7 +4104,7 @@ func TestToolRunCollapsedSummary(t *testing.T) {
 	lines := m.renderFocused()
 	var summaries []renderedLine
 	for _, ln := range lines {
-		if strings.HasPrefix(stripANSI(ln.styled), "○ 3 tools · ") {
+		if strings.HasPrefix(stripANSI(ln.styled), "○ 1 tool used, ") {
 			summaries = append(summaries, ln)
 		}
 		if strings.HasPrefix(stripANSI(ln.styled), "○ Read") ||
@@ -4123,8 +4123,8 @@ func TestToolRunCollapsedSummary(t *testing.T) {
 	if s.entry != runID {
 		t.Errorf("summary first line entry = %d, want runID %d (so a click toggles the run)", s.entry, runID)
 	}
-	if got := stripANSI(s.styled); got != "○ 3 tools · Read, Bash, Grep" {
-		t.Errorf("summary text = %q, want %q", got, "○ 3 tools · Read, Bash, Grep")
+	if got := stripANSI(s.styled); got != "○ 1 tool used, 1 command executed, 1 content search" {
+		t.Errorf("summary text = %q, want semantic activity counts", got)
 	}
 }
 
@@ -4151,7 +4151,7 @@ func TestToolRunExpandedShowsNodes(t *testing.T) {
 	var haveRead, haveBash, haveGrep bool
 	for _, ln := range lines {
 		s := stripANSI(ln.styled)
-		if strings.HasPrefix(s, "○ 3 tools · ") {
+		if strings.HasPrefix(s, "○ 1 tool used, ") {
 			t.Errorf("expanded run still shows the summary node: %q", s)
 		}
 		switch {
@@ -4168,8 +4168,8 @@ func TestToolRunExpandedShowsNodes(t *testing.T) {
 	}
 }
 
-// TestToolRunSummaryFailure proves a run containing a failed tool call marks that name with
-// " ✗" in the collapsed summary line.
+// TestToolRunSummaryFailure proves a run containing a failed tool call marks that activity
+// category with " ✗" in the collapsed summary line.
 func TestToolRunSummaryFailure(t *testing.T) {
 	t.Parallel()
 
@@ -4187,15 +4187,15 @@ func TestToolRunSummaryFailure(t *testing.T) {
 	lines := m.renderFocused()
 	var summary string
 	for _, ln := range lines {
-		if strings.HasPrefix(stripANSI(ln.styled), "○ 2 tools · ") {
+		if strings.HasPrefix(stripANSI(ln.styled), "○ 1 tool used, ") {
 			summary = stripANSI(ln.styled)
 		}
 	}
 	if summary == "" {
 		t.Fatalf("no summary node found; lines=%q", plainAll(lines))
 	}
-	if !strings.Contains(summary, "Bash ✗") {
-		t.Errorf("summary = %q, want it to mark the failed Bash call with ✗", summary)
+	if !strings.Contains(summary, "1 command executed ✗") {
+		t.Errorf("summary = %q, want it to mark the failed command activity with ✗", summary)
 	}
 }
 

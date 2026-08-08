@@ -7,9 +7,9 @@ import (
 
 // FuzzToolRunSummary exercises the collapsed tool-run summary builder for robustness:
 // arbitrary tool names, agent names, call counts, and status selectors must never panic
-// and must always yield a "<n> tool(s) · …" label whose anyFailed flag agrees with the
-// presence of a failed call. It builds the []ToolCallView from fuzzed primitives (the
-// fuzzer can't synthesize a slice directly).
+// and participating calls must yield a semantic label whose anyFailed flag agrees with
+// the presence of a failed participating call. It builds the []ToolCallView from fuzzed
+// primitives (the fuzzer can't synthesize a slice directly).
 func FuzzToolRunSummary(f *testing.F) {
 	f.Add("Read", "", uint8(0), uint8(1))
 	f.Add("Bash", "", uint8(2), uint8(3))
@@ -41,16 +41,17 @@ func FuzzToolRunSummary(f *testing.F) {
 		}
 
 		text, anyFailed := toolRunSummary(calls)
-		if text == "" {
+		hasParticipatingCall := name != structuredOutputToolName
+		if hasParticipatingCall && text == "" {
 			t.Fatalf("toolRunSummary returned empty text for %d calls", n)
 		}
-		if !strings.Contains(text, "tool") {
-			t.Fatalf("summary %q missing the tool count", text)
+		if !hasParticipatingCall && text != "" {
+			t.Fatalf("internal structured-output summary = %q, want empty", text)
 		}
-		// anyFailed must agree with toolCallFailed over the run.
+		// anyFailed must agree with toolCallFailed over the participating run.
 		wantFailed := false
 		for _, c := range calls {
-			if toolCallFailed(c) {
+			if c.ToolName != structuredOutputToolName && toolCallFailed(c) {
 				wantFailed = true
 				break
 			}

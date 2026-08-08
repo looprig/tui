@@ -122,7 +122,7 @@ func TestTraySelectionColor(t *testing.T) {
 }
 
 // TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText locks the approved link spans:
-// reasoning excludes its rail, a collapsed tool run underlines only its count label, and an
+// reasoning excludes its rail, a collapsed tool run underlines its activity list, and an
 // expanded tool node stays colored but does not misrepresent the tool name as the collapse link.
 func TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText(t *testing.T) {
 	t.Parallel()
@@ -138,14 +138,14 @@ func TestBrandBlueTranscriptLabelUnderlinesOnlySemanticLinkText(t *testing.T) {
 			want:  blue.Render("│ ") + link.Render("thought for 3s"),
 		},
 		{
-			name:  "plural tool run excludes names",
-			input: "○ 3 tools · Read, Bash",
-			want:  blue.Render("○ ") + link.Render("3 tools") + blue.Render(" · Read, Bash"),
+			name:  "plural activity run",
+			input: "○ 2 files read, 1 command executed",
+			want:  blue.Render("○ ") + link.Render("2 files read, 1 command executed"),
 		},
 		{
-			name:  "singular tool run",
-			input: "○ 1 tool · Bash",
-			want:  blue.Render("○ ") + link.Render("1 tool") + blue.Render(" · Bash"),
+			name:  "singular activity run",
+			input: "○ 1 command executed",
+			want:  blue.Render("○ ") + link.Render("1 command executed"),
 		},
 		{
 			name:  "expanded tool name is not a link",

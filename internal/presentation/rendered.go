@@ -44,8 +44,8 @@ func renderEntryLines(e entry, width int, collapsed bool) []renderedLine {
 	return out
 }
 
-// toolRunSummaryLines renders a collapsed contiguous run of tool entries as ONE "○ N
-// tools · names" summary node. Its first line carries sub == 0 and entry == the run's
+// toolRunSummaryLines renders a collapsed contiguous run of tool entries as one semantic
+// activity summary node. Its first line carries sub == 0 and entry == the run's
 // first displayID (runID), so a click toggles the whole run's fold via the existing
 // header-click handler; ctrl+t (ToggleAll) flips it with the global default. The node is
 // red-tinted when any call failed.
