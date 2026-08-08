@@ -40,6 +40,37 @@ func TestResponsiveMarkdownTables(t *testing.T) {
 			width:      36,
 			responsive: true,
 		},
+		{
+			name: "header-only table stays a grid",
+			markdown: `| A very long header | Another long header |
+| --- | --- |`,
+			width:      12,
+			responsive: false,
+		},
+		{
+			name: "intrinsic width equal to available stays a grid",
+			markdown: `| A | B |
+| --- | --- |
+| one | two |`,
+			width:      13,
+			responsive: false,
+		},
+		{
+			name: "exactly four words classify narrative",
+			markdown: `| X | Y |
+| --- | --- |
+| one | alpha bravo charlie delta |`,
+			width:      24,
+			responsive: true,
+		},
+		{
+			name: "exactly 28 columns classify narrative",
+			markdown: `| X | Y |
+| --- | --- |
+| one | abcdefghijklmnopqrstuvwxyz12 |`,
+			width:      36,
+			responsive: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -105,6 +136,10 @@ func TestMarkdownTableColumnAllocationStaysWithinWidth(t *testing.T) {
 	}
 	const available = 9
 	allocations := allocateGridColumns(metrics, available)
+	want := []int{3, 3, 3}
+	if !reflect.DeepEqual(allocations, want) {
+		t.Fatalf("allocateGridColumns() = %v, want %v", allocations, want)
+	}
 	total := 0
 	for _, allocation := range allocations {
 		total += allocation

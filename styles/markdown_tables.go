@@ -158,6 +158,9 @@ func tableCellPlainText(cell *tableast.TableCell, source []byte) string {
 }
 
 func tableNeedsResponsiveLayout(table markdownTable, width int) bool {
+	if len(table.rows) == 0 {
+		return false
+	}
 	metrics := tableColumnMetrics(table)
 	if len(metrics) == 0 {
 		return false
