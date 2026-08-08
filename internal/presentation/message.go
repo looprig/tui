@@ -80,4 +80,8 @@ type ToolCallView struct {
 	// the count of deeper StepDones attributed to this depth-1 card. Wired in Task 7;
 	// zero here. Zero for an ordinary card.
 	Nested int
+	// spawn identifies the detached child accumulator backing a reconciled agent card.
+	// It is presentation-internal metadata used to keep a card current when child events
+	// arrive after the parent's StepDone; ordinary cards leave it zero.
+	spawn spawnKey
 }

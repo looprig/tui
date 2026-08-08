@@ -934,7 +934,7 @@ func TestRenderLiveAssistantSuppressesRawSubagentCall(t *testing.T) {
 	// nonSubagentCalls is what renderLiveTail passes for `calls`: the raw Subagent call is
 	// filtered out before reaching renderLiveAssistant.
 	rawCalls := []ToolCallView{{ToolName: "Subagent", Summary: "Subagent", Status: ToolRunning}}
-	filtered := nonSubagentCalls(rawCalls)
+	filtered := nonSubagentCalls(rawCalls, len(rawCalls))
 	if len(filtered) != 0 {
 		t.Fatalf("nonSubagentCalls dropped %d of %d raw Subagent calls, want all filtered", len(rawCalls)-len(filtered), len(rawCalls))
 	}

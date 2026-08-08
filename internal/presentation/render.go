@@ -360,17 +360,17 @@ func plural(n int, unit string) string {
 	return strconv.Itoa(n) + " " + unit + "s"
 }
 
-// nonSubagentCalls returns the calls that are NOT raw Subagent tool cards (ToolName ==
-// subagentToolName). The LIVE tail suppresses the orchestrator's own raw Subagent running
-// card (a generic "Subagent(Subagent)" row) because that activity is shown by the nested
-// pending Subagent card instead (pendingSubagentCards → renderSubagentCard); rendering
-// both would double it. It returns nil when every call is a Subagent call (so a
-// subagent-only step renders no ordinary tool nodes). The result is a
-// fresh slice; the input is not mutated.
-func nonSubagentCalls(calls []ToolCallView) []ToolCallView {
+// nonSubagentCalls returns the calls that are not raw agent-spawn tool cards. The LIVE
+// tail suppresses those because the child accumulator already renders the richer pending
+// agent card; rendering both would double the call. Both the legacy Subagent name and the
+// current StartAgent name are accepted during the migration. At most replacements calls
+// are removed, so parallel starts without child accumulators remain visible. The result is
+// a fresh slice; the input is not mutated.
+func nonSubagentCalls(calls []ToolCallView, replacements int) []ToolCallView {
 	var out []ToolCallView
 	for _, c := range calls {
-		if c.ToolName == subagentToolName {
+		if replacements > 0 && isAgentSpawnTool(c.ToolName) {
+			replacements--
 			continue
 		}
 		out = append(out, c)

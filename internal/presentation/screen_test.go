@@ -1537,6 +1537,46 @@ func TestModernStatusReflectsFocusedLoop(t *testing.T) {
 	}
 }
 
+func TestLiveStartAgentRemainsVisibleUntilChildCardExists(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	m := newScreenSized(t, &fakeAgent{activeLoopID: primary}, 80, 24)
+	lines := m.liveTailLines(liveSeg{
+		active: true,
+		Calls:  []ToolCallView{{ToolName: "StartAgent", Summary: "StartAgent", Status: ToolRunning}},
+	})
+	var plain []string
+	for _, line := range lines {
+		plain = append(plain, line.plain)
+	}
+	if got := strings.Join(plain, "\n"); !strings.Contains(got, "StartAgent") {
+		t.Fatalf("live StartAgent without a child replacement = %q, want the raw call to remain visible", got)
+	}
+
+	key := spawnKey{parentLoopID: primary, toolUseID: "toolu_one"}
+	m.transcript = transcriptModel{
+		accumOrder: []spawnKey{key},
+		subagentAccum: map[spawnKey]*subagentAccumulator{
+			key: {agent: "generic"},
+		},
+	}
+	lines = m.liveTailLines(liveSeg{
+		active: true,
+		Calls: []ToolCallView{
+			{ToolName: "StartAgent", Summary: "StartAgent", Status: ToolRunning},
+			{ToolName: "StartAgent", Summary: "StartAgent", Status: ToolRunning},
+		},
+	})
+	plain = plain[:0]
+	for _, line := range lines {
+		plain = append(plain, line.plain)
+	}
+	if got := strings.Join(plain, "\n"); strings.Count(got, "StartAgent") != 1 {
+		t.Fatalf("two live starts with one child replacement = %q, want one unmatched raw StartAgent", got)
+	}
+}
+
 // TestFocusedStatusReflectsFocusedLoopNotActive pins the corrected §Status-line rule: the
 // status line follows the FOCUSED loop's own turn liveness, independent of which loop is
 // active, while still surfacing session-global Interrupting/Resetting transitions. The

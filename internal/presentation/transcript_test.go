@@ -2053,6 +2053,98 @@ func TestSubagentNestedFromEnduring(t *testing.T) {
 	}
 }
 
+// TestStartAgentReconcilesStreamingAccumulator covers the current AgentTools spawn name.
+// The child accumulator is rendered provisionally while the child runs; once the parent's
+// authoritative StepDone commits StartAgent, that provisional card must be consumed instead
+// of remaining beside the committed tool card as a duplicate.
+func TestStartAgentReconcilesStreamingAccumulator(t *testing.T) {
+	t.Parallel()
+	if got := nonSubagentCalls([]ToolCallView{{ToolName: "StartAgent", Status: ToolRunning}}, 1); len(got) != 0 {
+		t.Fatalf("raw live StartAgent calls after agent-card filtering = %d, want 0", len(got))
+	}
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "inspect the available tools"))
+	m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "inspection complete")))
+	m = m.ApplyEvent(event.TurnDone{Header: hdr(sub)})
+
+	if got := m.pendingSubagentCardsFor(primary); len(got) != 1 {
+		t.Fatalf("pending cards before parent StepDone = %d, want 1", len(got))
+	}
+
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse("toolu_X", "StartAgent", `{"agent_type":"generic","instructions":"inspect the available tools"}`)),
+		toolResult("toolu_X", `{"state":"completed","response":"inspection complete"}`),
+	))
+
+	if got := m.pendingSubagentCardsFor(primary); len(got) != 0 {
+		t.Fatalf("pending cards after parent StepDone = %d, want 0 (streaming card reconciled)", len(got))
+	}
+	var reconciled []ToolCallView
+	for _, e := range m.testCommitted() {
+		for _, call := range e.Calls {
+			if call.Agent != "" {
+				reconciled = append(reconciled, call)
+			}
+		}
+	}
+	if len(reconciled) != 1 {
+		t.Fatalf("reconciled agent cards = %d, want exactly 1; committed=%+v", len(reconciled), m.testCommitted())
+	}
+	if reconciled[0].ToolName != "StartAgent" || reconciled[0].Agent != "generic" {
+		t.Errorf("reconciled card = (%q, %q), want StartAgent(generic)", reconciled[0].ToolName, reconciled[0].Agent)
+	}
+}
+
+func TestStartAgentCommittedBeforeChildTerminalUpdatesInPlace(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	committedTurn := callID(0xE3)
+	committedStep := callID(0xF4)
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, "toolu_X"))
+	m = m.ApplyEvent(childTurnStarted(sub, "background task"))
+	// Deliberately diverge the parent's committed coordinates from LoopStarted.Cause;
+	// reconciliation uses the unique parent-loop + provider-id fallback and must still
+	// bind later child events to the committed card.
+	m = m.ApplyEvent(orchestratorStepDone(primary, committedTurn, committedStep,
+		aiMessage("", "", toolUse("toolu_X", "StartAgent", `{"agent_type":"generic","instructions":"background task","wait_for_response":false}`)),
+		toolResult("toolu_X", `{"state":"running"}`),
+	))
+	if got := m.pendingSubagentCardsFor(primary); len(got) != 0 {
+		t.Fatalf("pending cards after parent StepDone = %d, want 0 (single committed card)", len(got))
+	}
+	m = m.ApplyEvent(event.TurnDone{Header: hdr(primary)})
+	m = m.ApplyEvent(stepDoneFrom(sub, aiMessage("", "child finished")))
+	m = m.ApplyEvent(event.TurnDone{Header: hdr(sub)})
+
+	var cards []ToolCallView
+	committed, _ := m.projectionFor(primary)
+	for _, e := range committed {
+		for _, call := range e.Calls {
+			if call.ToolName == "StartAgent" {
+				cards = append(cards, call)
+			}
+		}
+	}
+	if len(cards) != 1 {
+		t.Fatalf("committed StartAgent cards = %d, want exactly 1; committed=%+v", len(cards), committed)
+	}
+	if cards[0].Agent != "generic" || cards[0].Steps != 1 || cards[0].SubStatus != subDone {
+		t.Fatalf("updated committed card = %+v, want generic done with 1 step", cards[0])
+	}
+}
+
 // TestSubagentMixedBatchSameIndexIsolation (Task 6, test 2 / design test 13): the
 // parent step is Bash(idx0)+Subagent(idx1) and the child's FIRST tool is ALSO Bash
 // with a DIFFERENT result, while the parent's live Bash sits in m.testLive().Calls[0]. The

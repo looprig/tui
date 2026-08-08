@@ -2009,8 +2009,11 @@ func intraTurnSeparator(committed []entry, i int) bool {
 // the blink/spinner phase).
 func (m Screen) liveTailLines(live liveSeg) []renderedLine {
 	width := m.contentWidth()
-	calls := nonSubagentCalls(live.Calls)
 	pending := m.transcript.pendingSubagentCardsFor(m.focusedLoopID)
+	calls := live.Calls
+	if len(pending) > 0 {
+		calls = nonSubagentCalls(calls, len(pending))
+	}
 	if live.empty() && len(pending) == 0 {
 		return nil
 	}

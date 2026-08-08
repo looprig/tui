@@ -424,7 +424,8 @@ type spawnKey struct {
 // assembled PURELY from the child's ENDURING events (LoopStarted→agent, first
 // TurnStarted→task, each StepDone→a child card + steps++, the terminal→status). The
 // orchestrator's StepDone copies these onto the committed Subagent ToolCallView (design
-// §3). It is a pointer in the map so an in-place field bump (steps++, append a child)
+// §3), and later child events refresh that card through committedID. It is a pointer in
+// the map so an in-place field bump (steps++, append a child)
 // is visible without re-storing — but the MAP is cloned on write so a by-value reducer
 // never aliases a prior model's map; a freshly-cloned map's pointers are themselves
 // freshly allocated when first created here (see ensureAccum).
@@ -442,6 +443,9 @@ type subagentAccumulator struct {
 	// skips it (no double render). It is set in-place at reconciliation, consistent with
 	// the rest of the accumulator's in-place fill.
 	reconciled bool
+	// committedID identifies the parent projection entry that owns the reconciled card,
+	// allowing later cross-loop child events to update that single card in place.
+	committedID displayID
 }
 
 // ApplyEvent folds one turn-stream event into the model and returns the next
@@ -1209,6 +1213,7 @@ func (m *transcriptModel) subagentStep(ev event.StepDone) {
 		// Depth ≥ 2: collapse into the depth-1 ancestor's Nested counter, never a card.
 		if d1, ok := m.depth1Key(ev.LoopID); ok {
 			m.ensureAccum(d1).nested++
+			m.updateReconciledSubagent(d1)
 		}
 		return
 	}
@@ -1219,6 +1224,7 @@ func (m *transcriptModel) subagentStep(ev event.StepDone) {
 		acc.children = append(acc.children, storedStepToolCard(uses[i], results))
 	}
 	acc.steps++
+	m.updateReconciledSubagent(key)
 }
 
 // depth1Key walks the spawn-parent chain from loopID up to the DEPTH-1 loop — the one
@@ -1253,6 +1259,10 @@ func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) b
 	}
 	acc := m.ensureAccum(key)
 	acc.status = status
+	m.updateReconciledSubagent(key)
+	if acc.reconciled {
+		m.retireSubagentAccum(loopID, key)
+	}
 	return true
 }
 
@@ -1270,11 +1280,11 @@ func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) b
 // card is returned unchanged — it renders normally with its error result text. A
 // non-Subagent block is returned unchanged.
 func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolUseBlock, results map[string]*content.ToolResultMessage, card ToolCallView) ToolCallView {
-	if use.Name != subagentToolName {
+	if !isAgentSpawnTool(use.Name) {
 		return card
 	}
 	key := spawnKey{ev.LoopID, ev.TurnID, ev.StepID, use.ID}
-	acc, ok := m.matchSubagentAccum(key)
+	acc, matchedKey, ok := m.matchSubagentAccum(key)
 	if !ok {
 		return card // spawn failed before any child loop: render the error result normally
 	}
@@ -1289,6 +1299,7 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 	card.Steps = acc.steps
 	card.SubStatus = acc.status
 	card.Nested = acc.nested
+	card.spawn = matchedKey
 	// The done summary is the hand-back text; suppress the card's own result body so it
 	// is not also shown as the normal result preview (design §4: no doubling).
 	card.Result = splitLines(subagentTruncate(toolResultText(results[use.ID])))
@@ -1305,21 +1316,23 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 // coordinates; in that case a UNIQUE, unreconciled accumulator under the same parent loop and
 // tool-use id is the same call. Multiple matches are malformed and fail closed rather than
 // attaching the wrong child card.
-func (m transcriptModel) matchSubagentAccum(key spawnKey) (*subagentAccumulator, bool) {
+func (m transcriptModel) matchSubagentAccum(key spawnKey) (*subagentAccumulator, spawnKey, bool) {
 	if acc, ok := m.subagentAccum[key]; ok && acc != nil {
-		return acc, true
+		return acc, key, true
 	}
 	var match *subagentAccumulator
+	var matchKey spawnKey
 	for candidate, acc := range m.subagentAccum {
 		if acc == nil || acc.reconciled || candidate.parentLoopID != key.parentLoopID || candidate.toolUseID != key.toolUseID {
 			continue
 		}
 		if match != nil {
-			return nil, false
+			return nil, spawnKey{}, false
 		}
 		match = acc
+		matchKey = candidate
 	}
-	return match, match != nil
+	return match, matchKey, match != nil
 }
 
 // pendingSubagentCards returns, in stable creation order (accumOrder), one ToolCallView
@@ -1377,12 +1390,17 @@ func (m transcriptModel) pendingSubagentCardsFor(parentLoopID uuid.UUID) []ToolC
 	return out
 }
 
-// subagentToolName is the tool name the orchestrator's StepDone matches to promote a
-// tool-use block to a nested Subagent card. It intentionally duplicates the literal in
-// a concrete tool package rather than importing it: that constant is unexported and a
-// TUI dependency on a concrete tool package just for a string match is
-// not worth it. The two MUST stay in sync — if the tool's name changes, change this too.
-const subagentToolName = "Subagent"
+// Agent spawn tool names are duplicated here rather than importing concrete tool packages
+// solely for unexported string constants. Subagent is the legacy synchronous tool name;
+// StartAgent is the current AgentTools name.
+const (
+	subagentToolName   = "Subagent"
+	startAgentToolName = "StartAgent"
+)
+
+func isAgentSpawnTool(name string) bool {
+	return name == subagentToolName || name == startAgentToolName
+}
 
 // ensureAccum returns the accumulator for key, creating it (and cloning the map on
 // write) when absent so a child event can fill it before the parent card exists. The
@@ -1409,10 +1427,10 @@ func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
 }
 
 // clearLoopAccums drops every subagent accumulator spawned BY loopID — called when that
-// loop's turn reaches a terminal (TurnDone/Interrupted/Failed). By the parent's turn end,
-// its Subagent StepDone has already reconciled any MATCHING accumulator (copying a FROZEN
-// snapshot onto the committed card, so dropping the source is safe); an accumulator left
-// UNRECONCILED (a spawn whose turn/step/tool-use coordinates never matched the
+// loop's turn reaches a terminal (TurnDone/Interrupted/Failed). A reconciled accumulator
+// that is still running is retained because cross-loop delivery can place the parent's
+// terminal before the child's terminal; all other matching accumulators are released. An
+// accumulator left UNRECONCILED (a spawn whose turn/step/tool-use coordinates never matched the
 // orchestrator's, or a turn cut short before its StepDone) is now stale and must be
 // released — otherwise pendingSubagentCards keeps exposing it and the live tail renders it
 // perpetually below the committed "turn ran" line, and it leaks into the next turn.
@@ -1421,17 +1439,19 @@ func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
 // defeats reconciliation also makes an accumulator's parentTurnID unreliable, but its
 // parentLoopID is the parent loop (that is how pendingSubagentCards found it under this
 // loop), which equals the terminating turn's LoopID — so loop-scope is the one match that
-// always holds. A loop runs its turns sequentially and every subagent completes before its
-// parent turn ends, so no still-running sibling accumulator is wrongly dropped. Clone-on-
-// write (value-copy contract): a fresh map + accumOrder omitting the keys, never in-place.
+// always holds. Clone-on-write (value-copy contract) uses a fresh map + accumOrder omitting
+// the keys, never in-place.
 // The matching child→spawn relationships are retired at the same boundary. Without that
 // tombstone, an already-published child terminal delivered after the parent's terminal can
 // call subagentTerminal, recreate the deleted accumulator, and make the card reappear below
 // the committed turn notice.
 func (m *transcriptModel) clearLoopAccums(loopID uuid.UUID) {
 	drop := make(map[spawnKey]bool)
-	for k := range m.subagentAccum {
-		if k.parentLoopID == loopID {
+	for k, acc := range m.subagentAccum {
+		// A parent terminal can overtake its child's terminal on the all-loops stream.
+		// Keep an already-bound running accumulator and relationship so the late child
+		// event can refresh the committed card; subagentTerminal retires it afterward.
+		if k.parentLoopID == loopID && !(acc.reconciled && acc.status == subRunning) {
 			drop[k] = true
 		}
 	}
@@ -1459,10 +1479,33 @@ func (m *transcriptModel) clearLoopAccums(loopID uuid.UUID) {
 	// every late child fold a no-op for the detached card instead of resurrecting it.
 	parents := cloneLoopParent(m.loopParent)
 	for child, key := range parents {
-		if key.parentLoopID == loopID {
+		if drop[key] {
 			delete(parents, child)
 		}
 	}
+	m.loopParent = parents
+}
+
+// retireSubagentAccum releases one reconciled accumulator after its terminal state has
+// been copied to the committed card. It also retires the child relationship so a malformed
+// late event cannot recreate a pending card.
+func (m *transcriptModel) retireSubagentAccum(loopID uuid.UUID, key spawnKey) {
+	next := make(map[spawnKey]*subagentAccumulator, len(m.subagentAccum))
+	for k, v := range m.subagentAccum {
+		if k != key {
+			next[k] = v
+		}
+	}
+	order := make([]spawnKey, 0, len(m.accumOrder))
+	for _, k := range m.accumOrder {
+		if k != key {
+			order = append(order, k)
+		}
+	}
+	m.subagentAccum = next
+	m.accumOrder = order
+	parents := cloneLoopParent(m.loopParent)
+	delete(parents, loopID)
 	m.loopParent = parents
 }
 
@@ -1580,6 +1623,40 @@ func (m *transcriptModel) commitCall(call ToolCallView) {
 		Kind:  kindTool,
 		Calls: []ToolCallView{call},
 	})
+	if call.spawn != (spawnKey{}) {
+		if acc := m.subagentAccum[call.spawn]; acc != nil {
+			acc.committedID = m.nextID
+		}
+	}
+}
+
+// updateReconciledSubagent refreshes the one committed parent card from its detached
+// accumulator. Parent and child event order is independent, so child steps and terminals
+// may arrive after the parent's StepDone; updating by the bound display ID keeps a single
+// authoritative card instead of rendering a stale committed card plus a pending duplicate.
+func (m *transcriptModel) updateReconciledSubagent(key spawnKey) {
+	acc := m.subagentAccum[key]
+	if acc == nil || !acc.reconciled || acc.committedID == 0 {
+		return
+	}
+	p := m.projections[key.parentLoopID]
+	if p == nil {
+		return
+	}
+	for i := range p.committed {
+		e := &p.committed[i]
+		if e.ID != acc.committedID || len(e.Calls) != 1 {
+			continue
+		}
+		card := &e.Calls[0]
+		card.Agent = acc.agent
+		card.Task = acc.task
+		card.Children = append([]ToolCallView(nil), acc.children...)
+		card.Steps = acc.steps
+		card.SubStatus = acc.status
+		card.Nested = acc.nested
+		return
+	}
 }
 
 // turnInterrupted is the cancellation terminal: it commits pending prose, marks
