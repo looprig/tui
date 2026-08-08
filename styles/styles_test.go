@@ -75,6 +75,184 @@ func TestNewMarkdownRenderer(t *testing.T) {
 	}
 }
 
+// TestMarkdownTableSeparatesWrappedBodyRows verifies that terminal-width wrapping
+// stays visually grouped inside its logical Markdown row. The first description
+// deliberately wraps; a horizontal separator must follow its continuation before
+// the next source row begins.
+func TestMarkdownTableSeparatesWrappedBodyRows(t *testing.T) {
+	t.Parallel()
+
+	r, err := NewMarkdownRenderer(52)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
+	}
+	out, err := RenderMarkdown(r, `| Harness | Description |
+| --- | --- |
+| looprig | In-process Harness loop using a configured gateway/client |
+| claude-code | Claude Code ACP harness |
+| codex | Codex ACP harness |`)
+	if err != nil {
+		t.Fatalf("Render() error = %v, want nil", err)
+	}
+
+	plain := markdownSGR.ReplaceAllString(out, "")
+	lines := strings.Split(plain, "\n")
+	continuation := lineContaining(lines, "gateway/client")
+	middleRow := lineContaining(lines, "claude-code")
+	nextRow := lineContaining(lines, "codex")
+	if continuation < 0 || middleRow < 0 || nextRow < 0 || continuation >= middleRow || middleRow >= nextRow {
+		t.Fatalf("rendered table lines = %#v, want wrapped looprig row before claude-code and codex rows", lines)
+	}
+	if !linesContainHorizontalRule(lines[continuation+1 : middleRow]) {
+		t.Errorf("rendered table lines = %#v, want a separator after wrapped looprig row", lines)
+	}
+	if !linesContainHorizontalRule(lines[middleRow+1 : nextRow]) {
+		t.Errorf("rendered table lines = %#v, want a separator between claude-code and codex rows", lines)
+	}
+}
+
+func lineContaining(lines []string, substring string) int {
+	for i, line := range lines {
+		if strings.Contains(line, substring) {
+			return i
+		}
+	}
+	return -1
+}
+
+func linesContainHorizontalRule(lines []string) bool {
+	return horizontalRuleLine(lines) != ""
+}
+
+func horizontalRuleLine(lines []string) string {
+	for _, line := range lines {
+		if strings.Contains(line, "─") {
+			return line
+		}
+	}
+	return ""
+}
+
+func TestMarkdownRendererLeavesNonTableMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+
+	r, err := NewMarkdownRenderer(52)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
+	}
+	const markdown = "## Heading\n\n- alpha\n- bravo\n\nA normal paragraph."
+	got, err := RenderMarkdown(r, markdown)
+	if err != nil {
+		t.Fatalf("Render() error = %v, want nil", err)
+	}
+	want, err := r.Render(markdown)
+	if err != nil {
+		t.Fatalf("underlying Render() error = %v, want nil", err)
+	}
+	if got != want {
+		t.Errorf("non-table rendering changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestMarkdownRendererLeavesTableShapedCodeFenceUnchanged(t *testing.T) {
+	t.Parallel()
+
+	r, err := NewMarkdownRenderer(52)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
+	}
+	const markdown = "```markdown\n| Harness | Description |\n| --- | --- |\n| looprig | first |\n| codex | second |\n```"
+	got, err := RenderMarkdown(r, markdown)
+	if err != nil {
+		t.Fatalf("Render() error = %v, want nil", err)
+	}
+	want, err := r.Render(markdown)
+	if err != nil {
+		t.Fatalf("underlying Render() error = %v, want nil", err)
+	}
+	if got != want {
+		t.Errorf("table-shaped code fence changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestMarkdownTableSeparatorsFollowGoldmarkRowBoundaries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		markdown        string
+		before          string
+		after           string
+		final           string
+		separatorPrefix string
+	}{
+		{
+			name: "pipe-less body row",
+			markdown: `| A | B |
+| --- | --- |
+| first | value |
+second
+| third | value |`,
+			before: "first",
+			after:  "second",
+			final:  "third",
+		},
+		{
+			name: "table nested in blockquote",
+			markdown: `> | A | B |
+> | --- | --- |
+> | first | value |
+> | second | value |`,
+			before:          "first",
+			after:           "second",
+			separatorPrefix: "│ ",
+		},
+		{
+			name: "table nested in definition description",
+			markdown: `Term
+:   | A | B |
+    | --- | --- |
+    | first | value |
+    | second | value |`,
+			before: "first",
+			after:  "second",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r, err := NewMarkdownRenderer(52)
+			if err != nil {
+				t.Fatalf("NewMarkdownRenderer error = %v, want nil", err)
+			}
+			out, err := RenderMarkdown(r, tt.markdown)
+			if err != nil {
+				t.Fatalf("RenderMarkdown() error = %v, want nil", err)
+			}
+			lines := strings.Split(markdownSGR.ReplaceAllString(out, ""), "\n")
+			before := lineContaining(lines, tt.before)
+			after := lineContaining(lines, tt.after)
+			if before < 0 || after <= before {
+				t.Fatalf("rendered table lines = %#v, want %q before %q", lines, tt.before, tt.after)
+			}
+			separator := horizontalRuleLine(lines[before+1 : after])
+			if separator == "" {
+				t.Fatalf("rendered table lines = %#v, want a separator between %q and %q", lines, tt.before, tt.after)
+			}
+			if tt.separatorPrefix != "" && !strings.HasPrefix(separator, tt.separatorPrefix) {
+				t.Fatalf("separator = %q, want container prefix %q preserved", separator, tt.separatorPrefix)
+			}
+			if tt.final != "" {
+				final := lineContaining(lines, tt.final)
+				if final <= after || !linesContainHorizontalRule(lines[after+1:final]) {
+					t.Fatalf("rendered table lines = %#v, want a separator between %q and %q", lines, tt.after, tt.final)
+				}
+			}
+		})
+	}
+}
+
 // TestNewMarkdownRendererPalette verifies the Nexus color overrides applied over
 // glamour's DarkStyleConfig: markdown headings render in MarkdownHeadingColor and
 // inline `code` spans in MarkdownInlineCodeColor — both #A2D2FF — instead of

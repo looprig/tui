@@ -6,9 +6,9 @@ Markdown tables rendered in the TUI wrap long cells to the available terminal wi
 
 ## Design
 
-Keep table wrapping enabled so dynamic LLM content remains readable. After Glamour parses Markdown into logical table rows, configure its Lip Gloss table to draw a horizontal border between body rows. Lip Gloss computes the full height of each logical row after wrapping, so the border is emitted only after every wrapped line in that row.
+Keep table wrapping enabled so dynamic LLM content remains readable. A TUI-owned renderer adapter uses Goldmark's GFM AST—the same parser used by Glamour—to locate logical table body rows, then inserts a private, collision-free marker row between adjacent rows before passing the document to Glamour. Glamour therefore parses and wraps the marker as a logical row using its normal table pipeline. After rendering, the adapter replaces each marker row with a horizontal separator of the same rendered width, retaining the existing column junctions.
 
-The change is local to the vendored Glamour table adapter used by this module. The existing header separator and open outer-border style remain unchanged. No Markdown preprocessing or assumptions about table columns, row counts, or LLM content are introduced.
+The change lives entirely in `styles`; no upstream or vendored dependency is patched. Documents without a multi-row Markdown table bypass the adapter and render byte-for-byte through Glamour as before. The marker is selected from Unicode's private-use area and must not occur in the input, preventing LLM content from colliding with the internal row identity.
 
 ## Behavior
 

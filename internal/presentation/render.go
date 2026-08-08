@@ -70,7 +70,7 @@ func renderMDDot(md string, width int, dot string) string {
 	if err != nil {
 		return dot + md
 	}
-	out, err := r.Render(md)
+	out, err := styles.RenderMarkdown(r, md)
 	if err != nil {
 		return dot + md
 	}
@@ -494,7 +494,7 @@ func renderMDRail(md string, width int, bar string) string {
 	if err != nil {
 		return raw()
 	}
-	out, err := r.Render(md)
+	out, err := styles.RenderMarkdown(r, md)
 	if err != nil {
 		return raw()
 	}

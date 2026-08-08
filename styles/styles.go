@@ -4,13 +4,21 @@
 package styles
 
 import (
+	"bytes"
 	"image/color"
+	"sort"
 	"strings"
 
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/yuin/goldmark"
+	goldmarkast "github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	tableast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 // Dot is the leading marker rendered before assistant/markdown blocks — the PLAIN
@@ -415,4 +423,174 @@ func NewMarkdownRenderer(width int) (*glamour.TermRenderer, error) {
 		glamour.WithStyles(cfg),
 		glamour.WithWordWrap(width),
 	)
+}
+
+// RenderMarkdown keeps the TUI's table readability policy outside Glamour. Glamour
+// currently exposes table wrapping but not Lip Gloss's BorderRow switch, so wrapped
+// body rows otherwise run together. The adapter inserts logical marker rows before
+// Glamour parses the document and turns only those rendered rows into separators.
+// Markdown without a multi-row table takes the unmodified Glamour path.
+func RenderMarkdown(r *glamour.TermRenderer, markdown string) (string, error) {
+	marked, marker := markTableBodyBoundaries(markdown)
+	out, err := r.Render(marked)
+	if err != nil || marker == "" {
+		return out, err
+	}
+	return replaceMarkedTableRows(out, marker), nil
+}
+
+// markTableBodyBoundaries inserts a one-cell-per-column marker row between adjacent
+// body rows reported by Goldmark's GFM table parser. Using the same parser as Glamour
+// keeps pipe-less rows, escaped pipes, code fences, and nested tables in lockstep.
+func markTableBodyBoundaries(markdown string) (string, string) {
+	marker := unusedTableMarker(markdown)
+	if marker == "" {
+		return markdown, ""
+	}
+
+	source := []byte(markdown)
+	parser := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser()
+	document := parser.Parse(text.NewReader(source))
+	insertions := tableBoundaryInsertions(document, source, marker)
+	if len(insertions) == 0 {
+		return markdown, ""
+	}
+
+	var marked strings.Builder
+	start := 0
+	for _, insertion := range insertions {
+		marked.Write(source[start:insertion.offset])
+		marked.WriteString(insertion.line)
+		start = insertion.offset
+	}
+	marked.Write(source[start:])
+	return marked.String(), marker
+}
+
+type tableBoundaryInsertion struct {
+	offset int
+	line   string
+}
+
+func tableBoundaryInsertions(document goldmarkast.Node, source []byte, marker string) []tableBoundaryInsertion {
+	var insertions []tableBoundaryInsertion
+	_ = goldmarkast.Walk(document, func(node goldmarkast.Node, entering bool) (goldmarkast.WalkStatus, error) {
+		table, ok := node.(*tableast.Table)
+		if !entering || !ok {
+			return goldmarkast.WalkContinue, nil
+		}
+		bodyRow := 0
+		for child := table.FirstChild(); child != nil; child = child.NextSibling() {
+			row, body := child.(*tableast.TableRow)
+			if !body {
+				continue
+			}
+			if bodyRow > 0 {
+				lineStart := sourceLineStart(source, row.Pos())
+				prefix := string(source[lineStart:row.Pos()]) + sourceLeadingWhitespace(source[row.Pos():])
+				insertions = append(insertions, tableBoundaryInsertion{
+					offset: lineStart,
+					line:   prefix + markerTableRow(len(table.Alignments), marker) + sourceLineEndingAt(source, row.Pos()),
+				})
+			}
+			bodyRow++
+		}
+		return goldmarkast.WalkSkipChildren, nil
+	})
+	sort.Slice(insertions, func(i, j int) bool { return insertions[i].offset < insertions[j].offset })
+	return insertions
+}
+
+func sourceLineStart(source []byte, offset int) int {
+	if offset > len(source) {
+		offset = len(source)
+	}
+	if index := bytes.LastIndexByte(source[:offset], '\n'); index >= 0 {
+		return index + 1
+	}
+	return 0
+}
+
+func sourceLeadingWhitespace(source []byte) string {
+	end := 0
+	for end < len(source) && (source[end] == ' ' || source[end] == '\t') {
+		end++
+	}
+	return string(source[:end])
+}
+
+func sourceLineEndingAt(source []byte, offset int) string {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(source) {
+		offset = len(source)
+	}
+	if newline := bytes.IndexByte(source[offset:], '\n'); newline > 0 && source[offset+newline-1] == '\r' {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func unusedTableMarker(markdown string) string {
+	for marker := rune(0xE000); marker <= 0xF8FF; marker++ {
+		if !strings.ContainsRune(markdown, marker) {
+			return string(marker)
+		}
+	}
+	// A document containing the entire BMP private-use area is pathological, but the
+	// supplementary private-use planes still give the adapter a collision-free token.
+	for marker := rune(0xF0000); marker <= 0xFFFFD; marker++ {
+		if !strings.ContainsRune(markdown, marker) {
+			return string(marker)
+		}
+	}
+	return ""
+}
+
+func markerTableRow(columns int, marker string) string {
+	cells := make([]string, columns)
+	for i := range cells {
+		cells[i] = marker
+	}
+	return "| " + strings.Join(cells, " | ") + " |"
+}
+
+func replaceMarkedTableRows(rendered, marker string) string {
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, marker) {
+			lines[i] = tableRowSeparator(line, marker)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func tableRowSeparator(line, marker string) string {
+	plain := xansi.Strip(line)
+	markerOffset := strings.Index(plain, marker)
+	if markerOffset < 0 {
+		return line
+	}
+	// The marker begins after the first cell's one-column left padding. Everything
+	// before that padding belongs to an enclosing block (for example a blockquote
+	// rail) and must remain intact rather than becoming part of the table rule.
+	tableStart := max(0, xansi.StringWidth(plain[:markerOffset])-1)
+	prefix := xansi.Cut(line, 0, tableStart)
+	table := xansi.Cut(plain, tableStart, xansi.StringWidth(plain))
+
+	var separator strings.Builder
+	separator.WriteString(prefix)
+	for _, char := range table {
+		width := xansi.StringWidth(string(char))
+		if width < 1 {
+			continue
+		}
+		glyph := "─"
+		if char == '│' || char == '|' {
+			glyph = "┼"
+		}
+		separator.WriteString(strings.Repeat(glyph, width))
+	}
+	return separator.String()
 }
