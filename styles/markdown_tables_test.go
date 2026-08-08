@@ -375,6 +375,66 @@ func TestMarkdownTableBlockquotePrefix(t *testing.T) {
 	}
 }
 
+func TestMarkdownTableListNestedFallsBackWithoutPrefixDuplication(t *testing.T) {
+	t.Parallel()
+
+	const width = 44
+	const markdown = `- intro
+
+  | A | Notes |
+  |---|---|
+  | one | This narrative has enough words to require responsive records. |`
+	r, err := NewMarkdownRenderer(width)
+	if err != nil {
+		t.Fatalf("NewMarkdownRenderer(%d): %v", width, err)
+	}
+	direct, err := r.Render(markdown)
+	if err != nil {
+		t.Fatalf("direct Render(): %v", err)
+	}
+	got, err := RenderMarkdown(r, markdown, width)
+	if err != nil {
+		t.Fatalf("RenderMarkdown(): %v", err)
+	}
+	plain := xansi.Strip(got)
+	if count := strings.Count(plain, "intro"); count != 1 {
+		t.Errorf("intro occurs %d times, want once:\n%s", count, plain)
+	}
+	for _, want := range []string{"A", "Notes", "one", "This narrative"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("list-nested table lost %q:\n%s", want, plain)
+		}
+	}
+	if got != direct {
+		t.Errorf("list-nested responsive table did not safely fall back to direct Glamour output")
+	}
+}
+
+func TestStructuralRenderedTablePrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		prefix string
+		want   bool
+	}{
+		{name: "empty", prefix: "", want: true},
+		{name: "whitespace", prefix: "   ", want: true},
+		{name: "blockquote rail", prefix: "\x1b[2m│\x1b[m ", want: true},
+		{name: "nested blockquote rails", prefix: "│ │ ", want: true},
+		{name: "list item content", prefix: "• intro ", want: false},
+		{name: "ordinary text", prefix: "intro ", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isStructuralRenderedTablePrefix(tt.prefix); got != tt.want {
+				t.Errorf("isStructuralRenderedTablePrefix(%q) = %v, want %v", tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMarkdownTableResize(t *testing.T) {
 	t.Parallel()
 

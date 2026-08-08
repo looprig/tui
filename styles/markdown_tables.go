@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"unicode"
 
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
@@ -78,14 +79,7 @@ func renderMarkdownTables(r *glamour.TermRenderer, markdown string, width int) (
 }
 
 func renderOriginalMarkdown(r *glamour.TermRenderer, markdown string) (string, error) {
-	rendered, err := r.Render(markdown)
-	if err != nil {
-		return rendered, err
-	}
-	if strings.TrimSpace(markdown) != "" && strings.TrimSpace(rendered) == "" {
-		return markdown, nil
-	}
-	return rendered, nil
+	return r.Render(markdown)
 }
 
 func markResponsiveTables(markdown string, tables []markdownTable) (string, []responsiveTableReplacement, bool) {
@@ -154,6 +148,9 @@ func replaceResponsiveTable(
 	}
 
 	prefix := lines[markerLine][:markerOffset]
+	if !isStructuralRenderedTablePrefix(prefix) {
+		return rendered, false, nil
+	}
 	contentWidth := width - xansi.StringWidth(prefix)
 	if contentWidth < 1 {
 		return rendered, false, nil
@@ -167,6 +164,16 @@ func replaceResponsiveTable(
 	}
 	lines[markerLine] = strings.Join(records, "\n")
 	return strings.Join(lines, "\n"), true, nil
+}
+
+func isStructuralRenderedTablePrefix(prefix string) bool {
+	for _, char := range xansi.Strip(prefix) {
+		if unicode.IsSpace(char) || char == '│' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func renderResponsiveRecords(r *glamour.TermRenderer, table markdownTable, width int) ([]string, error) {

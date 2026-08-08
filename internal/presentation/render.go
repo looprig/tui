@@ -54,9 +54,9 @@ func renderMD(md string, width int) string {
 }
 
 // renderMDDot renders markdown to ANSI and prefixes it with dot so the narration
-// begins on the SAME line as the bullet. glamour's "dark" style indents every line by
-// a 2-column document margin and brackets the block with blank lines; those are
-// stripped so the text aligns with the dot — first line "<dot>text", continuation
+// begins on the SAME line as the bullet. The shared renderer has a zero-column
+// document margin; its surrounding blank lines are stripped so the text aligns with
+// the dot — first line "<dot>text", continuation
 // lines use the shared rail in the dot's column. On a glamour construction or render error it
 // falls back to the raw text behind the dot, so the UI always gets readable output.
 // dot MUST be dotWidth (2) columns wide so continuation-line alignment holds; callers
@@ -88,15 +88,16 @@ func renderMDDot(md string, width int, dot string) string {
 	return strings.Join(lines, "\n")
 }
 
-// dedentDocument strips glamour's document framing from rendered output: the
-// dotWidth-column left margin on every line and the surrounding blank lines. It
-// returns at least one line.
+// dedentDocument strips Glamour's trailing fill and surrounding blank lines. The
+// renderer's document margin is explicitly zero, so leading spaces are semantic
+// Markdown layout (record indentation, continuation alignment, code, and lists) and
+// must never be removed independently from individual lines. It returns at least one
+// line. The historical name remains because this is the shared document-framing seam.
 func dedentDocument(s string) []string {
-	margin := strings.Repeat(" ", dotWidth)
 	raw := strings.Split(s, "\n")
 	out := make([]string, 0, len(raw))
 	for _, ln := range raw {
-		out = append(out, strings.TrimPrefix(strings.TrimRight(ln, " "), margin))
+		out = append(out, strings.TrimRight(ln, " "))
 	}
 	for len(out) > 0 && out[0] == "" {
 		out = out[1:]
@@ -475,9 +476,9 @@ func renderUser(text string, width int) string {
 }
 
 // renderMDRail renders md to ANSI (glamour) and prefixes EVERY line with bar — a left
-// rail down the whole block. It dedents glamour's document margin first so the content
-// sits flush behind the bar (bar is barWidth == dotWidth columns), and falls back to
-// the raw, width-wrapped text behind the bar on any glamour error.
+// rail down the whole block. It strips Glamour's blank document framing while keeping
+// semantic leading indentation, then places the content behind the bar. It falls back
+// to raw, width-wrapped text on any Glamour error.
 func renderMDRail(md string, width int, bar string) string {
 	if strings.TrimSpace(md) == "" {
 		return ""

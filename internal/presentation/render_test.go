@@ -127,6 +127,93 @@ func TestRenderMDWrappedContinuationUsesRail(t *testing.T) {
 	}
 }
 
+func TestResponsiveMarkdownTableIndentationSurvivesPresentationRails(t *testing.T) {
+	t.Parallel()
+
+	const stackedMarkdown = "| A long label | Notes |\n|---|---|\n| x | a narrative value with enough words to wrap |"
+	const alignedMarkdown = "| Key | Notes |\n|---|---|\n| core | This narrative value has enough words to wrap onto an aligned continuation line. |"
+	tests := []struct {
+		name   string
+		render func(string, int) string
+	}{
+		{
+			name: "assistant dot",
+			render: func(markdown string, width int) string {
+				return renderMDDot(markdown, width, styles.LitDot)
+			},
+		},
+		{
+			name: "user rail",
+			render: func(markdown string, width int) string {
+				return renderMDRail(markdown, width, "▌ ")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" stacked values", func(t *testing.T) {
+			t.Parallel()
+			lines := presentationMarkdownContentLines(tt.render(stackedMarkdown, 24))
+			valueLine := contentLineContaining(lines, "x")
+			if valueLine == "" || !strings.HasPrefix(valueLine, "  x") {
+				t.Fatalf("stacked value line = %q, want two-column semantic indent; lines=%#v", valueLine, lines)
+			}
+		})
+
+		t.Run(tt.name+" aligned continuation", func(t *testing.T) {
+			t.Parallel()
+			lines := presentationMarkdownContentLines(tt.render(alignedMarkdown, 46))
+			first := contentLineContaining(lines, "This narrative")
+			continuation := contentLineContaining(lines, "words to")
+			if first == "" || continuation == "" {
+				t.Fatalf("aligned value did not wrap as expected: %#v", lines)
+			}
+			firstColumn := strings.Index(first, "This narrative")
+			continuationColumn := len(continuation) - len(strings.TrimLeft(continuation, " "))
+			if continuationColumn != firstColumn {
+				t.Fatalf("continuation column = %d, want first value column %d; lines=%#v", continuationColumn, firstColumn, lines)
+			}
+		})
+	}
+}
+
+func TestDedentDocumentPreservesSemanticIndentationWithoutCommonMargin(t *testing.T) {
+	t.Parallel()
+
+	got := dedentDocument("\n label\n  stacked value\n        aligned continuation\n\n")
+	want := []string{" label", "  stacked value", "        aligned continuation"}
+	if len(got) != len(want) {
+		t.Fatalf("dedentDocument() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("dedentDocument() line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func presentationMarkdownContentLines(rendered string) []string {
+	lines := strings.Split(stripANSI(rendered), "\n")
+	for i, line := range lines {
+		for _, prefix := range []string{"● ", "│ ", "▌ "} {
+			if strings.HasPrefix(line, prefix) {
+				lines[i] = strings.TrimPrefix(line, prefix)
+				break
+			}
+		}
+	}
+	return lines
+}
+
+func contentLineContaining(lines []string, value string) string {
+	for _, line := range lines {
+		if strings.Contains(line, value) {
+			return line
+		}
+	}
+	return ""
+}
+
 // TestRenderThinkingUsesSubtleRailStyle ensures thinking's structural rail uses the
 // dedicated quiet color without applying that color to the readable reasoning label.
 func TestRenderThinkingUsesSubtleRailStyle(t *testing.T) {

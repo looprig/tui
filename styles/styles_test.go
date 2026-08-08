@@ -96,6 +96,39 @@ func TestMarkdownRendererLeavesNonTableMarkdownUnchanged(t *testing.T) {
 	}
 }
 
+func TestMarkdownRendererNonTableFastPathMatchesGlamour(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		markdown string
+	}{
+		{name: "HTML comment", markdown: "<!-- comment -->"},
+		{name: "incomplete declaration", markdown: "<!A"},
+		{name: "empty HTML block", markdown: "<div></div>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r, err := NewMarkdownRenderer(52)
+			if err != nil {
+				t.Fatalf("NewMarkdownRenderer(): %v", err)
+			}
+			want, err := r.Render(tt.markdown)
+			if err != nil {
+				t.Fatalf("direct Render(): %v", err)
+			}
+			got, err := RenderMarkdown(r, tt.markdown, 52)
+			if err != nil {
+				t.Fatalf("RenderMarkdown(): %v", err)
+			}
+			if got != want {
+				t.Errorf("non-table fast path changed Glamour output:\ngot  %q\nwant %q", got, want)
+			}
+		})
+	}
+}
+
 func TestMarkdownRendererLeavesTableShapedCodeFenceUnchanged(t *testing.T) {
 	t.Parallel()
 
