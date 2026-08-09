@@ -24,7 +24,7 @@ require (
 )
 
 require (
-	github.com/looprig/inference v0.7.0
+	github.com/looprig/inference v0.8.0
 	github.com/looprig/storage v0.3.0 // indirect
 )
 
