@@ -46,7 +46,7 @@ func TestModernStatusSeparatesRuntimeMetadata(t *testing.T) {
 		},
 	})
 
-	if got, want := stripANSI(m.statusLine()), "○ idle · zai-org/GLM-5.2-TEE · ~40% context"; got != want {
+	if got, want := stripANSI(m.statusLine()), "○ idle · zai-org/GLM-5.2-TEE · none · ~40% context"; got != want {
 		t.Errorf("statusLine = %q, want %q", got, want)
 	}
 }
@@ -1635,8 +1635,8 @@ func TestLiveStartAgentRemainsVisibleUntilChildCardExists(t *testing.T) {
 	for _, line := range lines {
 		plain = append(plain, line.plain)
 	}
-	if got := strings.Join(plain, "\n"); strings.Count(got, "StartAgent") != 1 {
-		t.Fatalf("two live starts with one child replacement = %q, want one unmatched raw StartAgent", got)
+	if got := strings.Join(plain, "\n"); strings.Count(got, "StartAgent") != 2 || strings.Count(got, "StartAgent(generic)") != 1 {
+		t.Fatalf("two live starts with one child replacement = %q, want one raw and one attributed StartAgent", got)
 	}
 }
 

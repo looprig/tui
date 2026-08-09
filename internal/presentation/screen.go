@@ -2223,9 +2223,11 @@ func (m Screen) focusedRuntimeStatus() string {
 	parts := make([]string, 0, 3)
 	if state.runtime.Key.Model != "" {
 		parts = append(parts, state.runtime.Key.Model)
-	}
-	if state.runtime.Effort != "" {
-		parts = append(parts, string(state.runtime.Effort))
+		effort := string(state.runtime.Effort)
+		if effort == "" {
+			effort = "none"
+		}
+		parts = append(parts, effort)
 	}
 	if state.hasContext && state.context.InputLimit > 0 {
 		pct := uint64(state.context.InputTokens) * 100 / uint64(state.context.InputLimit)

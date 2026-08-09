@@ -1171,6 +1171,9 @@ func (m *transcriptModel) loopSpawned(ev event.LoopStarted) {
 	m.loopParent[ev.LoopID] = key
 	acc := m.ensureAccum(key)
 	acc.agent = string(ev.AgentName)
+	if _, nested := m.loopParent[key.parentLoopID]; !nested {
+		m.reconcileCommittedSubagent(key)
+	}
 }
 
 // subagentTask sets a child accumulator's task from the child's FIRST TurnStarted
@@ -1284,6 +1287,9 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 		return card
 	}
 	key := spawnKey{ev.LoopID, ev.TurnID, ev.StepID, use.ID}
+	// Retain the durable parent/tool identity even when the child LoopStarted has not
+	// arrived yet. A later child event can then promote this committed card in place.
+	card.spawn = key
 	acc, matchedKey, ok := m.matchSubagentAccum(key)
 	if !ok {
 		return card // spawn failed before any child loop: render the error result normally
@@ -1308,6 +1314,78 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 	// tail must stop rendering it as a pending in-flight card (pendingSubagentCards).
 	acc.reconciled = true
 	return card
+}
+
+// reconcileCommittedSubagent handles the reverse cross-loop delivery order: the
+// parent's StepDone committed an unresolved spawn card before the child's LoopStarted
+// created its accumulator. It finds the unique parent card by durable tool-use identity,
+// clones the parent projection, and promotes that existing card in place. Exact
+// coordinates win; a unique parent-loop + tool-use-id match tolerates stale turn/step
+// coordinates in the same way matchSubagentAccum does. Ambiguity fails closed.
+func (m *transcriptModel) reconcileCommittedSubagent(key spawnKey) {
+	p := m.projections[key.parentLoopID]
+	acc := m.subagentAccum[key]
+	if p == nil || acc == nil || acc.reconciled {
+		return
+	}
+	type position struct {
+		entry int
+		call  int
+	}
+	var exact *position
+	var fallback *position
+	fallbacks := 0
+	for entryIndex := range p.committed {
+		for callIndex := range p.committed[entryIndex].Calls {
+			card := p.committed[entryIndex].Calls[callIndex]
+			if card.Agent != "" || !isAgentSpawnTool(card.ToolName) {
+				continue
+			}
+			candidate := card.spawn
+			pos := position{entry: entryIndex, call: callIndex}
+			if candidate == key {
+				exact = &pos
+				break
+			}
+			if candidate.parentLoopID != key.parentLoopID || candidate.toolUseID == "" || candidate.toolUseID != key.toolUseID {
+				continue
+			}
+			fallbacks++
+			fallback = &pos
+		}
+		if exact != nil {
+			break
+		}
+	}
+	match := exact
+	if match == nil && fallbacks == 1 {
+		match = fallback
+	}
+	if match == nil {
+		return
+	}
+
+	next := make(map[uuid.UUID]*loopProjection, len(m.projections))
+	for loopID, projection := range m.projections {
+		next[loopID] = projection
+	}
+	cloned := *p
+	cloned.committed = append([]entry(nil), p.committed...)
+	cloned.committed[match.entry].Calls = append([]ToolCallView(nil), p.committed[match.entry].Calls...)
+	next[key.parentLoopID] = &cloned
+	m.projections = next
+
+	entry := &cloned.committed[match.entry]
+	card := &entry.Calls[match.call]
+	card.Agent = acc.agent
+	card.Task = acc.task
+	card.Children = append([]ToolCallView(nil), acc.children...)
+	card.Steps = acc.steps
+	card.SubStatus = acc.status
+	card.Nested = acc.nested
+	card.spawn = key
+	acc.reconciled = true
+	acc.committedID = entry.ID
 }
 
 // matchSubagentAccum returns the accumulator owned by a committed parent Subagent call.
@@ -1359,7 +1437,7 @@ func (m transcriptModel) pendingSubagentCards() []ToolCallView {
 			children = children[len(children)-liveCallCap:]
 		}
 		out = append(out, ToolCallView{
-			ToolName:  subagentToolName,
+			ToolName:  startAgentToolName,
 			Agent:     acc.agent,
 			Task:      acc.task,
 			Children:  append([]ToolCallView(nil), children...),
@@ -1385,7 +1463,7 @@ func (m transcriptModel) pendingSubagentCardsFor(parentLoopID uuid.UUID) []ToolC
 		if len(children) > liveCallCap {
 			children = children[len(children)-liveCallCap:]
 		}
-		out = append(out, ToolCallView{ToolName: subagentToolName, Agent: acc.agent, Task: acc.task, Children: append([]ToolCallView(nil), children...), Steps: acc.steps, SubStatus: acc.status, Nested: acc.nested})
+		out = append(out, ToolCallView{ToolName: startAgentToolName, Agent: acc.agent, Task: acc.task, Children: append([]ToolCallView(nil), children...), Steps: acc.steps, SubStatus: acc.status, Nested: acc.nested})
 	}
 	return out
 }

@@ -2102,6 +2102,35 @@ func TestStartAgentReconcilesStreamingAccumulator(t *testing.T) {
 	}
 }
 
+// Parent and child loops publish on independent streams, so the parent's authoritative
+// StepDone may reach the presentation before the child's LoopStarted. The later child
+// event must promote the already-committed StartAgent card in place instead of adding a
+// second provisional agent card below it.
+func TestStartAgentReconcilesWhenParentStepArrivesBeforeChild(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_parent_first"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic","instructions":"inspect"}`)),
+		toolResult(toolUseID, `{"state":"accepted"}`),
+	))
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+
+	card := findSubagentCard(t, m)
+	if card.ToolName != startAgentToolName || card.Agent != "generic" {
+		t.Errorf("promoted card = (%q, %q), want StartAgent(generic)", card.ToolName, card.Agent)
+	}
+	if got := len(m.pendingSubagentCardsFor(primary)); got != 0 {
+		t.Errorf("pending cards after parent-first reconciliation = %d, want 0", got)
+	}
+}
+
 func TestStartAgentCommittedBeforeChildTerminalUpdatesInPlace(t *testing.T) {
 	t.Parallel()
 
@@ -2931,8 +2960,8 @@ func TestPendingSubagentCards(t *testing.T) {
 		t.Fatalf("pendingSubagentCards() = %d, want 1 in-flight card", len(pending))
 	}
 	c := pending[0]
-	if c.ToolName != subagentToolName {
-		t.Errorf("pending card.ToolName = %q, want %q", c.ToolName, subagentToolName)
+	if c.ToolName != startAgentToolName {
+		t.Errorf("pending card.ToolName = %q, want %q", c.ToolName, startAgentToolName)
 	}
 	if c.Agent != "explorer" {
 		t.Errorf("pending card.Agent = %q, want explorer", c.Agent)
