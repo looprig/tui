@@ -104,15 +104,45 @@ func NewJournalEventAppenderChecked(journal SessionJournal, opts ...AppenderOpti
 // this method's return — the durable append stays strict, the catalog is derivable. On an
 // append failure the catalog is NOT touched (the event did not durably land) and seq 0 is
 // returned alongside the error.
+//
+// When the underlying journal additionally satisfies IdempotentJournal (the optional
+// dedup seam), a redelivered event whose EventID already names a durable record is
+// detected there and reported as AppendResult.Appended=false; this method then
+// returns the ORIGINAL sequence without re-notifying the catalog — a duplicate was
+// already indexed by its first, genuine append, so republishing it a second time
+// would be redundant. A journal that does not implement the optional interface
+// behaves exactly as before (every successful Append notifies the catalog).
 func (a *JournalEventAppender) AppendEvent(ctx context.Context, ev event.Event) (uint64, error) {
-	seq, err := a.journal.Append(ctx, NewEventRecord(ev))
+	seq, _, err := a.AppendEventResult(ctx, ev)
+	return seq, err
+}
+
+// AppendEventResult is the result-preserving event append seam used by the Hub
+// trusted publication path. Appended is true only when this call created a new
+// durable frame; an identical idempotent retry returns the original sequence and
+// Appended=false. The legacy AppendEvent method above deliberately discards only
+// this boolean so existing callers retain their API and error behavior.
+func (a *JournalEventAppender) AppendEventResult(ctx context.Context, ev event.Event) (uint64, bool, error) {
+	rec := NewEventRecord(ev)
+	if idem, ok := a.journal.(IdempotentJournal); ok {
+		result, err := idem.AppendIdempotent(ctx, rec)
+		if err != nil {
+			return 0, false, err
+		}
+		if !result.Appended {
+			return result.Sequence, false, nil
+		}
+		_ = a.catalog.UpdateOnEvent(ctx, ev, result.Sequence)
+		return result.Sequence, true, nil
+	}
+	seq, err := a.journal.Append(ctx, rec)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	// Best-effort, post-success: UpdateOnEvent never returns a non-nil error by
 	// contract, so the catalog can never fail the append. The return is ignored.
 	_ = a.catalog.UpdateOnEvent(ctx, ev, seq)
-	return seq, nil
+	return seq, true, nil
 }
 
 // JournalCommandAppender adapts a SessionJournal to the narrow "append one command"

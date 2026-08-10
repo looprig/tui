@@ -2,6 +2,11 @@ module github.com/looprig/tui
 
 go 1.26.4
 
+// Harness's durable WorkflowActivity event is unreleased on this development
+// branch. Keep the TUI build pinned to the sibling source until the next Harness
+// release; the replace is removed when this module receives that release pin.
+replace github.com/looprig/harness => ../harness
+
 tool (
 	github.com/securego/gosec/v2/cmd/gosec
 	golang.org/x/vuln/cmd/govulncheck
