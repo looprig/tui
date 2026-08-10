@@ -26,7 +26,7 @@ Add assertions that runtime metadata is joined to the lifecycle status with ` ·
 
 Run: `go test -race ./internal/presentation -run 'TestModernStatusSeparatesRuntimeMetadata|TestSessionPresentationFooterShowsFixedProfileAndWorkspace'`
 
-Expected: FAIL because the current status uses two spaces and the current footer renders `Carbon · Profile · /workspace`.
+Expected: FAIL because the current status uses two spaces and the current footer renders `CodeRig · Profile · /workspace`.
 
 **Step 3: Write the minimal implementation**
 

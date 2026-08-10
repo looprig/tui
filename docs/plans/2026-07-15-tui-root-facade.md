@@ -142,10 +142,10 @@ GOWORK=off CGO_ENABLED=0 go build -trimpath ./...
 
 Expected: PASS.
 
-**Step 3: Run the Carbon downstream race suite**
+**Step 3: Run the CodeRig downstream race suite**
 
 ```sh
-cd ../carbon
+cd ../coderig
 go test -race ./...
 ```
 

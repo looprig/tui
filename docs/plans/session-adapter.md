@@ -2,13 +2,13 @@
 
 ## Purpose
 
-The TUI needs a reusable adapter between a Harness `session.SessionController` and the `tui.Agent` interface. Today that adapter lives in Carbon, even though none of its behavior is specific to software engineering.
+The TUI needs a reusable adapter between a Harness `session.SessionController` and the `tui.Agent` interface. Today that adapter lives in CodeRig, even though none of its behavior is specific to software engineering.
 
-The adapter belongs in `github.com/looprig/tui/sessionadapter`. Carbon and future terminal applications should only assemble a Rig, open a Session, and hand the controller to this adapter.
+The adapter belongs in `github.com/looprig/tui/sessionadapter`. CodeRig and future terminal applications should only assemble a Rig, open a Session, and hand the controller to this adapter.
 
 ## Current problem
 
-The current Carbon adapter owns generic behavior:
+The current CodeRig adapter owns generic behavior:
 
 - forwarding input to the active or selected Loop
 - interruption and compaction
@@ -20,7 +20,7 @@ The current Carbon adapter owns generic behavior:
 - bounded cleanup after failed restore initialization
 - idempotent session shutdown
 
-This is presentation infrastructure. Keeping it in Carbon makes every consumer reimplement persistence replay, gate correlation, and lifecycle behavior.
+This is presentation infrastructure. Keeping it in CodeRig makes every consumer reimplement persistence replay, gate correlation, and lifecycle behavior.
 
 ## Public package
 
@@ -77,7 +77,7 @@ The TUI addresses a pending interaction by `(LoopID, ToolExecutionID)`. The harn
 
 `GateOpened` adds both forward and reverse entries. `GateResolved` removes both. The index must be safe for concurrent cold replay, live subscription forwarding, and user responses.
 
-An unmatched response fails closed with a typed error owned by `sessionadapter`, not by Carbon.
+An unmatched response fails closed with a typed error owned by `sessionadapter`, not by CodeRig.
 
 ## Lifecycle
 
@@ -95,11 +95,11 @@ Closing a wrapped subscription must stop its forwarding goroutine and close the 
 - harness session, event, gate, journal, sessionstore, and tool contracts
 - core content and UUID contracts
 
-It must not import Carbon, fsstore, sandbox, the optional tools module, or a model provider.
+It must not import CodeRig, fsstore, sandbox, the optional tools module, or a model provider.
 
 ## Migration
 
-Carbon deletes its local session adapter and uses:
+CodeRig deletes its local session adapter and uses:
 
 ```go
 controller, err := assembly.NewSession(ctx)
@@ -113,7 +113,7 @@ controller, err := assembly.RestoreSession(ctx, sessionID)
 adapter, err := sessionadapter.Restore(ctx, controller, stores.Session)
 ```
 
-The Carbon TUI entry point continues to receive a `tui.Agent`. No product-specific adapter remains.
+The CodeRig TUI entry point continues to receive a `tui.Agent`. No product-specific adapter remains.
 
 ## Verification
 

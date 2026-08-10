@@ -4,15 +4,15 @@
 
 **Goal:** Show authoritative focused-loop runtime state and topology, expose optional typed controls, and resume previous sessions through a two-line TUI tray.
 
-**Architecture:** Harness adds only a read-only mode catalog. TUI keeps its required `Agent` contract stable, folds current values from enduring events, detects optional runtime capabilities, and receives a process-scoped optional session browser. Carbon maps its validated model, effort, access, and session catalogs into those generic contracts. Delivery is split into an independently releasable visibility phase and a controls/navigation phase.
+**Architecture:** Harness adds only a read-only mode catalog. TUI keeps its required `Agent` contract stable, folds current values from enduring events, detects optional runtime capabilities, and receives a process-scoped optional session browser. CodeRig maps its validated model, effort, access, and session catalogs into those generic contracts. Delivery is split into an independently releasable visibility phase and a controls/navigation phase.
 
-**Tech Stack:** Go, Bubble Tea, Lip Gloss, Harness enduring events, Harness session catalog, Carbon session store, race-enabled Go tests.
+**Tech Stack:** Go, Bubble Tea, Lip Gloss, Harness enduring events, Harness session catalog, CodeRig session store, race-enabled Go tests.
 
 ---
 
 Reference design: `docs/plans/2026-07-15-tui-runtime-context-and-loop-footer-design.md`.
 
-Use the current module names and package boundaries: `harness`, `tui`, and `carbon`. Presentation
+Use the current module names and package boundaries: `harness`, `tui`, and `coderig`. Presentation
 lives in `tui/internal/presentation`. Commit steps are checkpoints for later execution and must not
 be run until the repository owner authorizes commits.
 
@@ -183,9 +183,9 @@ git -C tui commit -m "feat(tui): project authoritative runtime state"
 - Modify: `tui/sessionadapter/adapter.go`
 - Test: `tui/sessionadapter/adapter_test.go`
 - Test: `tui/sessionadapter/api_test.go`
-- Modify: `carbon/swarm.go`
-- Test: `carbon/sessionadapter_test.go`
-- Test: `carbon/persistence_integration_test.go`
+- Modify: `coderig/swarm.go`
+- Test: `coderig/sessionadapter_test.go`
+- Test: `coderig/persistence_integration_test.go`
 
 **Step 1: Write failing boundary tests**
 
@@ -204,16 +204,16 @@ Expected: FAIL because the constructor does not exist.
 
 **Step 3: Implement the shared cold-replay path**
 
-Add conceptually `NewWithReplay(ctx, sess, store)` and share initialization with `Restore`. Carbon
+Add conceptually `NewWithReplay(ctx, sess, store)` and share initialization with `Restore`. CodeRig
 uses the replay-aware constructor for new TUI sessions while headless/simple callers may retain
 `New`.
 
-**Step 4: Verify TUI and Carbon**
+**Step 4: Verify TUI and CodeRig**
 
 ```bash
 cd tui
 go test -race ./sessionadapter
-cd ../carbon
+cd ../coderig
 go test -race ./... -run 'SessionAdapter|FreshSession|ReplayBacklog'
 ```
 
@@ -224,8 +224,8 @@ Expected: PASS with equivalent fresh/restored topology projections.
 ```bash
 git -C tui add sessionadapter/adapter.go sessionadapter/adapter_test.go sessionadapter/api_test.go
 git -C tui commit -m "feat(sessionadapter): replay fresh session bootstrap"
-git -C carbon add swarm.go sessionadapter_test.go persistence_integration_test.go
-git -C carbon commit -m "feat(carbon): bootstrap fresh TUI sessions"
+git -C coderig add swarm.go sessionadapter_test.go persistence_integration_test.go
+git -C coderig commit -m "feat(coderig): bootstrap fresh TUI sessions"
 ```
 
 ### Task 5: Render model, effort, and context in the status line
@@ -366,7 +366,7 @@ cd harness
 go test -race ./...
 cd ../tui
 go test -race ./...
-cd ../carbon
+cd ../coderig
 go test -race ./...
 ```
 
@@ -465,17 +465,17 @@ git -C tui add internal/presentation/action.go internal/presentation/commands.go
 git -C tui commit -m "feat(tui): control optional loop runtime"
 ```
 
-### Task 10: Implement Carbon runtime catalogs and controllers
+### Task 10: Implement CodeRig runtime catalogs and controllers
 
 **Files:**
 
-- Create: `carbon/runtime_controls.go`
-- Create: `carbon/runtime_controls_test.go`
-- Modify: `carbon/models.go`
-- Test: `carbon/models_test.go`
-- Modify: `carbon/persistence.go`
-- Modify: `carbon/swarm.go`
-- Test: `carbon/rig_restore_integration_test.go`
+- Create: `coderig/runtime_controls.go`
+- Create: `coderig/runtime_controls_test.go`
+- Modify: `coderig/models.go`
+- Test: `coderig/models_test.go`
+- Modify: `coderig/persistence.go`
+- Modify: `coderig/swarm.go`
+- Test: `coderig/rig_restore_integration_test.go`
 
 **Step 1: Write failing catalog tests**
 
@@ -490,17 +490,17 @@ Cover typed ID resolution, stale/unknown IDs, loop exit, model descriptor lookup
 **Step 3: Verify failure**
 
 ```bash
-cd carbon
+cd coderig
 go test -race ./... -run 'RuntimeCatalog|RuntimeMutation|AccessOptions' -v
 ```
 
 **Step 4: Implement and verify**
 
-Keep provider and policy knowledge in Carbon. Map ordinals to `Untrusted`, `Read Only`,
+Keep provider and policy knowledge in CodeRig. Map ordinals to `Untrusted`, `Read Only`,
 `Writable`, `Trusted`, and `Unconfined`. Do not use the existing `runtime_context.go` filename.
 
 ```bash
-cd carbon
+cd coderig
 go test -race ./... -run 'RuntimeCatalog|RuntimeMutation|AccessOptions|Restore' -v
 ```
 
@@ -509,8 +509,8 @@ Expected: PASS.
 **Step 5: Commit when authorized**
 
 ```bash
-git -C carbon add runtime_controls.go runtime_controls_test.go models.go models_test.go persistence.go swarm.go rig_restore_integration_test.go
-git -C carbon commit -m "feat(carbon): expose runtime controls to TUI"
+git -C coderig add runtime_controls.go runtime_controls_test.go models.go models_test.go persistence.go swarm.go rig_restore_integration_test.go
+git -C coderig commit -m "feat(coderig): expose runtime controls to TUI"
 ```
 
 ### Task 11: Add the optional session browser and clean two-line tray
@@ -621,16 +621,16 @@ git -C tui add internal/presentation/handoff.go internal/presentation/handoff_te
 git -C tui commit -m "feat(tui): resume sessions through safe handoff"
 ```
 
-### Task 13: Wire Carbon session browsing
+### Task 13: Wire CodeRig session browsing
 
 **Files:**
 
-- Create: `carbon/session_browser.go`
-- Create: `carbon/session_browser_test.go`
-- Modify: `carbon/persistence.go`
-- Test: `carbon/persistence_test.go`
-- Modify: `carbon/cmd/carbon/main.go`
-- Test: `carbon/cmd/carbon/main_test.go`
+- Create: `coderig/session_browser.go`
+- Create: `coderig/session_browser_test.go`
+- Modify: `coderig/persistence.go`
+- Test: `coderig/persistence_test.go`
+- Modify: `coderig/cmd/coderig/main.go`
+- Test: `coderig/cmd/coderig/main_test.go`
 
 **Step 1: Write failing mapping and wiring tests**
 
@@ -641,19 +641,19 @@ while `/sessions` resumes the selected ID.
 **Step 2: Verify failure**
 
 ```bash
-cd carbon
+cd coderig
 go test -race ./... -run 'SessionBrowser|ResumeFromTUI' -v
 ```
 
 **Step 3: Implement over `SessionStoreFactory`**
 
-Map `sessionstore.SessionMeta` without replay. Capture Carbon config in the resume opener but never
+Map `sessionstore.SessionMeta` without replay. Capture CodeRig config in the resume opener but never
 silently set `AllowConfigMismatch`. Keep the shared store open across agent handoffs.
 
 **Step 4: Verify**
 
 ```bash
-cd carbon
+cd coderig
 go test -race ./... -run 'SessionBrowser|ResumeFromTUI|Persistence|Command' -v
 ```
 
@@ -662,8 +662,8 @@ Expected: PASS.
 **Step 5: Commit when authorized**
 
 ```bash
-git -C carbon add session_browser.go session_browser_test.go persistence.go persistence_test.go cmd/carbon/main.go cmd/carbon/main_test.go
-git -C carbon commit -m "feat(carbon): browse and resume stored sessions"
+git -C coderig add session_browser.go session_browser_test.go persistence.go persistence_test.go cmd/coderig/main.go cmd/coderig/main_test.go
+git -C coderig commit -m "feat(coderig): browse and resume stored sessions"
 ```
 
 ### Task 14: Final verification and dependency delivery
@@ -673,7 +673,7 @@ git -C carbon commit -m "feat(carbon): browse and resume stored sessions"
 ```bash
 gofmt -w harness/pkg/loop harness/internal/sessionruntime
 gofmt -w tui/api.go tui/components tui/internal/presentation tui/sessionadapter
-gofmt -w carbon
+gofmt -w coderig
 ```
 
 Expected: a second run produces no diff.
@@ -685,7 +685,7 @@ cd harness
 go test -race ./...
 cd ../tui
 go test -race ./...
-cd ../carbon
+cd ../coderig
 go test -race ./...
 ```
 
@@ -696,7 +696,7 @@ Expected: PASS in all three modules.
 ```bash
 make -C harness fmt lint test security
 make -C tui fmt lint test security
-make -C carbon fmt lint test security
+make -C coderig fmt lint test security
 ```
 
 If a repository exposes different targets, use the equivalent targets from its current
@@ -710,16 +710,16 @@ running/gated work, and narrow-width render/hit-test alignment.
 
 **Step 5: Publish only when authorized**
 
-Release in dependency order: Harness, TUI against the Harness release, then Carbon against both.
+Release in dependency order: Harness, TUI against the Harness release, then CodeRig against both.
 Re-vendor with the module toolchain; never edit vendor files by hand. Repeat race and policy suites
-against the released versions before tagging Carbon.
+against the released versions before tagging CodeRig.
 
 **Step 6: Verify intended Git state**
 
 ```bash
 git -C harness status --short
 git -C tui status --short
-git -C carbon status --short
+git -C coderig status --short
 ```
 
 Expected: only intended changes before authorized commits, then clean worktrees after delivery.
