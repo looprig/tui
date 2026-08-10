@@ -105,8 +105,10 @@ func (h *fakeHandle) Model() model.Model  { return h.model }
 
 // fakeSub is a controllable event.Subscription: the test feeds deliveries on ch.
 type fakeSub struct {
-	ch   chan event.Delivery
-	once sync.Once
+	ch    chan event.Delivery
+	once  sync.Once
+	errMu sync.Mutex
+	err   error
 }
 
 func newFakeSub() *fakeSub { return &fakeSub{ch: make(chan event.Delivery, 8)} }
@@ -116,7 +118,17 @@ func (s *fakeSub) Close() error {
 	s.once.Do(func() { close(s.ch) })
 	return nil
 }
-func (s *fakeSub) Err() error { return nil }
+func (s *fakeSub) Err() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.err
+}
+func (s *fakeSub) fail(err error) {
+	s.errMu.Lock()
+	s.err = err
+	s.errMu.Unlock()
+	s.once.Do(func() { close(s.ch) })
+}
 
 // fakeController is a fake session.SessionController for the adapter tests: it records gate
 // responses + shutdowns and returns configured loops. The methods the adapter never exercises
@@ -137,6 +149,9 @@ type fakeController struct {
 	shutdownCtxErr      error
 	shutdownDeadline    time.Time
 	shutdownHasDeadline bool
+	subscribeQueue      []event.Subscription
+	subscribeErrors     []error
+	subscribeCalls      int
 }
 
 func (f *fakeController) SessionID() uuid.UUID    { return f.sessionID }
@@ -164,6 +179,16 @@ func (f *fakeController) CompactToLoop(_ context.Context, loopID uuid.UUID) (uui
 	return f.compactResult, f.compactErr
 }
 func (f *fakeController) SubscribeEvents(event.EventFilter) (event.Subscription, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	index := f.subscribeCalls
+	f.subscribeCalls++
+	if index < len(f.subscribeErrors) && f.subscribeErrors[index] != nil {
+		return nil, f.subscribeErrors[index]
+	}
+	if index < len(f.subscribeQueue) {
+		return f.subscribeQueue[index], nil
+	}
 	return f.sub, nil
 }
 func (f *fakeController) RespondGate(_ context.Context, r gate.GateResponse) error {
@@ -210,6 +235,12 @@ func (f *fakeController) shutdownState() (int, time.Time, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.shutdowns, f.shutdownDeadline, f.shutdownHasDeadline, f.shutdownCtxErr
+}
+
+func (f *fakeController) subscriptionCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subscribeCalls
 }
 
 // mustUUID mints a uuid or fails the test.

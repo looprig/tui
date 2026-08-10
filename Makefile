@@ -1,4 +1,4 @@
-.PHONY: test test-integration fmt fmt-check vendor vendor-scrub vendor-check lint vuln secure fuzz
+.PHONY: test test-integration check fmt fmt-check vendor vendor-scrub vendor-check lint vuln secure fuzz
 
 # Module's own package dirs, excluding vendor/ and the nested .worktrees/ modules
 # (go list ./... stops at nested module boundaries and skips vendor).
@@ -29,6 +29,8 @@ LOCAL_REPLACE_VENDOR_DIRS := \
 
 test:
 	go test -race ./...
+
+check: test vendor-check
 
 # Run the integration-tagged tests (process-boundary seams excluded from the
 # default run): scoped to this module's package dirs, same GO_DIRS idiom as above.
