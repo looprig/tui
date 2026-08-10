@@ -100,7 +100,7 @@ func TestSessionResumeRejectionStaysAliveWithWarningNotice(t *testing.T) {
 	fresh := &fakeAgent{activeLoopID: callID(2)}
 	resumeErr := errors.New("session: restore rejected by policy: 1 warn category (runtime); 0 info changes")
 	browser := &sessionBrowserFake{resumeErr: resumeErr}
-	m := New(context.Background(), old, func(context.Context) (Agent, error) { return fresh, nil }, AgentBanner{Name: "CodeRig"}, WithSessionBrowser(browser))
+	m := New(context.Background(), old, func(context.Context) (Agent, error) { return fresh, nil }, AgentBanner{Name: "Carbon"}, WithSessionBrowser(browser))
 	m.restoring = false
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
@@ -173,7 +173,7 @@ var _ SessionBrowser = (*sessionBrowserFake)(nil)
 
 // presenterAgent is a fakeAgent that ALSO implements SessionPresenter, so a resumed
 // session supplies its own security-context presentation (fixed profile, workspace,
-// pre-gate diagnostics) — the additive contract CodeRig Phase 5 fills on its agent.
+// pre-gate diagnostics) — the additive contract Carbon Phase 5 fills on its agent.
 type presenterAgent struct {
 	*fakeAgent
 	pres SessionPresentation
@@ -211,7 +211,7 @@ func TestBrowserResumeRefreshesSecurityPresentation(t *testing.T) {
 		},
 	}
 	browser := &sessionBrowserFake{fresh: fresh}
-	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "CodeRig"},
+	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "Carbon"},
 		WithSessionBrowser(browser),
 		WithSessionPresentation(SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/prior/root", PermissionDiagnostics: []string{"prior diag"}}))
 	m.restoring = false
@@ -241,7 +241,7 @@ func TestBrowserResumeClearsPresentationWhenAgentSuppliesNone(t *testing.T) {
 	old := &fakeAgent{activeLoopID: callID(1)}
 	fresh := &fakeAgent{activeLoopID: callID(2)} // no SessionPresenter
 	browser := &sessionBrowserFake{fresh: fresh}
-	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "CodeRig"},
+	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "Carbon"},
 		WithSessionBrowser(browser),
 		WithSessionPresentation(SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/prior/root", PermissionDiagnostics: []string{"prior diag"}}))
 	m.restoring = false
@@ -266,7 +266,7 @@ func TestBrowserResumeClearsPresentationWhenAgentSuppliesNone(t *testing.T) {
 func TestClearRetainsPresentationWhenAgentSuppliesNone(t *testing.T) {
 	old := &fakeAgent{activeLoopID: callID(1)}
 	fresh := &fakeAgent{activeLoopID: callID(2)} // no SessionPresenter
-	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "CodeRig"},
+	m := New(context.Background(), old, fakeOpen(old), AgentBanner{Name: "Carbon"},
 		WithSessionPresentation(SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/prior/root"}))
 	m.restoring = false
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})

@@ -129,7 +129,7 @@ func TestRunWaitsForInFlightHandoffBeforeReturn(t *testing.T) {
 	go func() {
 		runDone <- Run(context.Background(), func(context.Context) (tui.Agent, error) {
 			return &fakeAgent{loopID: newLoopID(t)}, nil
-		}, Banner{Name: "CodeRig"})
+		}, Banner{Name: "Carbon"})
 	}()
 
 	select {
@@ -159,7 +159,7 @@ func TestRunReportsHandoffFinalizationError(t *testing.T) {
 	})
 	if exit := Run(context.Background(), func(context.Context) (tui.Agent, error) {
 		return &fakeAgent{loopID: newLoopID(t)}, nil
-	}, Banner{Name: "CodeRig"}); exit != exitAgentError {
+	}, Banner{Name: "Carbon"}); exit != exitAgentError {
 		t.Fatalf("Run exit = %d, want %d", exit, exitAgentError)
 	}
 }
@@ -182,8 +182,8 @@ func TestBannerAgentBanner(t *testing.T) {
 		banner Banner
 		want   tui.AgentBanner
 	}{
-		{name: "name and description", banner: Banner{Name: "CodeRig", Description: "swarm"}, want: tui.AgentBanner{Name: "CodeRig", Description: "swarm"}},
-		{name: "name only", banner: Banner{Name: "CodeRig"}, want: tui.AgentBanner{Name: "CodeRig"}},
+		{name: "name and description", banner: Banner{Name: "Carbon", Description: "swarm"}, want: tui.AgentBanner{Name: "Carbon", Description: "swarm"}},
+		{name: "name only", banner: Banner{Name: "Carbon"}, want: tui.AgentBanner{Name: "Carbon"}},
 		{name: "empty banner", banner: Banner{}, want: tui.AgentBanner{}},
 	}
 	for _, tt := range tests {
@@ -309,7 +309,7 @@ func TestRunClearsTerminalBeforeProgramRun(t *testing.T) {
 				return &fakeAgent{loopID: newLoopID(t), closed: &closed}, nil
 			}
 
-			got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+			got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 			if got != exitOK {
 				t.Errorf("Run() exit = %d, want %d", got, exitOK)
 			}
@@ -335,7 +335,7 @@ func TestRunConstructionError(t *testing.T) {
 	boom := errors.New("construct failed")
 	newAgent := func(context.Context) (tui.Agent, error) { return nil, boom }
 
-	got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+	got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 	if got != exitAgentError {
 		t.Errorf("Run() exit = %d, want %d", got, exitAgentError)
 	}
@@ -359,7 +359,7 @@ func TestRunHappyPath(t *testing.T) {
 		return &fakeAgent{loopID: newLoopID(t), closed: &closed}, nil
 	}
 
-	got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+	got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 	if got != exitOK {
 		t.Errorf("Run() exit = %d, want %d", got, exitOK)
 	}
@@ -383,7 +383,7 @@ func TestRunProgramError(t *testing.T) {
 		return &fakeAgent{loopID: newLoopID(t), closed: &closed}, nil
 	}
 
-	got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+	got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 	if got != exitAgentError {
 		t.Errorf("Run() exit = %d, want %d", got, exitAgentError)
 	}
@@ -411,7 +411,7 @@ func TestRunBuildsModernScreen(t *testing.T) {
 		return &fakeAgent{loopID: newLoopID(t), closed: &closed}, nil
 	}
 
-	got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+	got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 	if got != exitOK {
 		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
 	}
@@ -439,7 +439,7 @@ func TestRunTeardownViaAgentHolder(t *testing.T) {
 		return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
 	}
 
-	got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"})
+	got := Run(context.Background(), newAgent, Banner{Name: "Carbon"})
 	if got != exitOK {
 		t.Fatalf("Run() exit = %d, want %d", got, exitOK)
 	}
@@ -472,7 +472,7 @@ func TestRunTeardownWithNoLiveAgent(t *testing.T) {
 				return &fakeAgent{loopID: newLoopID(t), closed: &initialClosed}, nil
 			}
 
-			if got := Run(context.Background(), newAgent, Banner{Name: "CodeRig"}); got != exitAgentError {
+			if got := Run(context.Background(), newAgent, Banner{Name: "Carbon"}); got != exitAgentError {
 				t.Fatalf("Run() exit = %d, want %d for terminal handoff error", got, exitAgentError)
 			}
 			if initialClosed {

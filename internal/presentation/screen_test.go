@@ -1923,7 +1923,7 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 
 	primary := callID(0xAA)
 	agent := &fakeAgent{activeLoopID: primary, backlog: nil}
-	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "CodeRig", Description: "test agent"})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "Carbon", Description: "test agent"})
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner into the transcript
 
@@ -1933,7 +1933,7 @@ func TestModernRestoreEmptyBacklogPreservesBanner(t *testing.T) {
 	bannerLen := len(m.transcript.testCommitted())
 	bannerID := m.transcript.testCommitted()[0].ID
 	bannerText := committedText(m.transcript.testCommitted()[0])
-	if !strings.Contains(bannerText, "CodeRig") {
+	if !strings.Contains(bannerText, "Carbon") {
 		t.Fatalf("precondition: banner entry = %q, want the agent banner text", bannerText)
 	}
 
@@ -1971,7 +1971,7 @@ func TestModernRestoreLifecycleOnlyBacklogInstallsMetadata(t *testing.T) {
 		event.LoopIdle{Header: hdr(loopID)},
 	}
 	agent := &fakeAgent{activeLoopID: loopID, backlog: backlog}
-	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "CodeRig", Description: "test agent"})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "Carbon", Description: "test agent"})
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{})
 	banner := m.transcript.global[0]
@@ -2337,7 +2337,7 @@ func TestModernRestoreStartupOrderingCommitsBannerOnce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			agent := &fakeAgent{activeLoopID: loopID, backlog: tt.backlog}
-			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "CodeRig", Description: "test agent"})
+			m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "Carbon", Description: "test agent"})
 			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
 			if tt.systemReadyFirst {
 				m, _ = updateScreen(t, m, systemReadyMsg{})
@@ -2348,7 +2348,7 @@ func TestModernRestoreStartupOrderingCommitsBannerOnce(t *testing.T) {
 				m, _ = updateScreen(t, m, systemReadyMsg{})
 				m = feedRestored(t, m, msg)
 			}
-			if len(m.transcript.global) != 1 || !strings.Contains(committedText(m.transcript.global[0]), "CodeRig") {
+			if len(m.transcript.global) != 1 || !strings.Contains(committedText(m.transcript.global[0]), "Carbon") {
 				t.Fatalf("startup globals = %+v, want one banner", m.transcript.global)
 			}
 			if !m.startupCommitted || m.startupPending {
@@ -2696,7 +2696,7 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 	old := &fakeAgent{sessionID: callID(0xA1), activeLoopID: callID(1)}
 	fresh := &fakeAgent{sessionID: callID(0xA2), activeLoopID: callID(2)}
 	m := newScreenSized(t, old, 80, 24)
-	m.banner = AgentBanner{Name: "CodeRig"}
+	m.banner = AgentBanner{Name: "Carbon"}
 	m.openAgent = fakeOpen(fresh)
 	m = feed(t, m, event.TurnStarted{Header: hdr(callID(1)), Message: userMsg("q")})
 	m = feed(t, m, stepDoneFrom(callID(1), aiMessage("", "old answer")))
@@ -2723,13 +2723,13 @@ func TestModernClearReopensAndResubscribes(t *testing.T) {
 		t.Errorf("focusedLoopID = %v, want the fresh primary %v (view must reset)", m.focusedLoopID, fresh.ActiveLoopID())
 	}
 	committed := m.transcript.testCommitted()
-	if len(committed) != 1 || !strings.Contains(committedText(committed[0]), "CodeRig") || !strings.Contains(committedText(committed[0]), "Session: #"+fresh.SessionID().String()) {
-		t.Errorf("committed after clear = %+v, want exactly the fresh-session CodeRig banner with session %s", committed, fresh.SessionID())
+	if len(committed) != 1 || !strings.Contains(committedText(committed[0]), "Carbon") || !strings.Contains(committedText(committed[0]), "Session: #"+fresh.SessionID().String()) {
+		t.Errorf("committed after clear = %+v, want exactly the fresh-session Carbon banner with session %s", committed, fresh.SessionID())
 	}
 	if strings.Contains(committedText(committed[0]), old.SessionID().String()) {
 		t.Errorf("committed after clear contains replaced session %s: %+v", old.SessionID(), committed)
 	}
-	if got := plainAll(m.viewport.lines); !strings.Contains(got, "CodeRig") {
+	if got := plainAll(m.viewport.lines); !strings.Contains(got, "Carbon") {
 		t.Errorf("viewport after clear = %q, want fresh-session banner (replacement must not look blank)", got)
 	}
 	if cmd == nil {
@@ -4806,7 +4806,7 @@ func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
 
 	primary := callID(1)
 	agent := &fakeAgent{activeLoopID: primary}
-	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "CodeRig", Description: "test agent"})
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "Carbon", Description: "test agent"})
 	m.restoring = false // this renderer test starts after initial replay
 	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening banner as the head entry
@@ -4863,7 +4863,7 @@ func TestModernBlankSeparatorBetweenEntries(t *testing.T) {
 
 	// The banner (head entry) is set off from the first user message by exactly its trailing blank:
 	// run[0] is the banner and ends in a blank; run[1] begins the first user row.
-	if !runHasPlain(runs[0], "CodeRig") {
+	if !runHasPlain(runs[0], "Carbon") {
 		t.Errorf("first run is not the banner; got %q", plainAll(runs[0]))
 	}
 	if !runHasPlain(runs[1], "hello there") {

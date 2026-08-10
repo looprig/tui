@@ -10,7 +10,7 @@ import (
 func TestLoopFooterWrapsAtSegmentsAndHitTestsRenderedRows(t *testing.T) {
 	first, second := callID(1), callID(2)
 	footer := loopFooter{
-		header: "CodeRig · Writable · /workspace",
+		header: "Carbon · Writable · /workspace",
 		bar: loopBar{entries: []loopBarEntry{
 			{id: first, name: "operator-primary", live: true},
 			{id: second, name: "operator", live: true},
@@ -39,7 +39,7 @@ func TestLoopFooterStartsAgentsBelowApplicationHeader(t *testing.T) {
 	t.Parallel()
 
 	footer := loopFooter{
-		header: "CodeRig · Writable · /workspace",
+		header: "Carbon · Writable · /workspace",
 		bar: loopBar{entries: []loopBarEntry{
 			{id: callID(1), name: "operator", live: true},
 		}, focused: callID(1)},

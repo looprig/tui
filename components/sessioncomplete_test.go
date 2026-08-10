@@ -10,8 +10,8 @@ import (
 
 // TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly pins the picker's second row to
 // exactly the two things worth showing to pick a session to resume: when it was last used
-// and its short id. CodeRig's picker only ever lists CodeRig's own sessions, so an agent
-// kind like "coderig:builder" is identical on every row and carries no information: showing
+// and its short id. Carbon's picker only ever lists Carbon's own sessions, so an agent
+// kind like "carbon:builder" is identical on every row and carries no information: showing
 // it is pure noise. A loop count is likewise not a useful signal for choosing which session
 // to resume.
 func TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly(t *testing.T) {

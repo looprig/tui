@@ -342,7 +342,7 @@ func TestNewMarkdownRendererCodeBlockNoRedSymbols(t *testing.T) {
 		},
 		{
 			name: "diff add/remove markers",
-			md:   "```diff\n- removed cmd/coderig/ line\n+ added line\n```\n",
+			md:   "```diff\n- removed cmd/carbon/ line\n+ added line\n```\n",
 		},
 		{
 			name: "sql arithmetic operators",

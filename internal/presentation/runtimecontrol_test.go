@@ -18,7 +18,7 @@ func TestSessionPresentationFooterShowsFixedProfileAndWorkspace(t *testing.T) {
 
 	base := &fakeAgent{activeLoopID: callID(1)}
 	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil },
-		AgentBanner{Name: "CodeRig"},
+		AgentBanner{Name: "Carbon"},
 		WithSessionPresentation(SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/workspace"}))
 	m.width = 80
 
@@ -34,7 +34,7 @@ func TestSessionPresentationOmitsEmptyMetadata(t *testing.T) {
 	t.Parallel()
 
 	base := &fakeAgent{activeLoopID: callID(1)}
-	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "CodeRig"})
+	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil }, AgentBanner{Name: "Carbon"})
 	m.width = 80
 
 	footer := stripANSI(m.footerView())
@@ -61,7 +61,7 @@ func TestSessionPresentationUsesAgentSessionPresenterAtConstruction(t *testing.T
 			PermissionDiagnostics: []string{"initial diag"},
 		},
 	}
-	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil }, AgentBanner{Name: "CodeRig"})
+	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil }, AgentBanner{Name: "Carbon"})
 	m.width = 80
 
 	if !reflect.DeepEqual(m.presentation, agent.pres) {
@@ -86,7 +86,7 @@ func TestSessionPresentationOptionOverridesAgentSessionPresenterAtConstruction(t
 	}
 	option := SessionPresentation{ProfileName: "FromOption", WorkspaceRoot: "/from-option"}
 	m := New(context.Background(), agent, func(context.Context) (Agent, error) { return agent, nil },
-		AgentBanner{Name: "CodeRig"}, WithSessionPresentation(option))
+		AgentBanner{Name: "Carbon"}, WithSessionPresentation(option))
 	m.width = 80
 
 	if !reflect.DeepEqual(m.presentation, option) {
@@ -109,7 +109,7 @@ func TestPermissionDiagnosticsRenderBeforeFirstGate(t *testing.T) {
 	diagnostics := []string{"allow family 'net.*' is not in the catalogue", "allow family 'exec.*' is manual"}
 	base := &fakeAgent{activeLoopID: callID(1)}
 	m := New(context.Background(), base, func(context.Context) (Agent, error) { return base, nil },
-		AgentBanner{Name: "CodeRig"},
+		AgentBanner{Name: "Carbon"},
 		WithSessionPresentation(SessionPresentation{PermissionDiagnostics: diagnostics}))
 	m.width, m.height, m.ready = 80, 24, true
 	m, _ = updateScreen(t, m, systemReadyMsg{}) // commit the opening metadata block
@@ -118,7 +118,7 @@ func TestPermissionDiagnosticsRenderBeforeFirstGate(t *testing.T) {
 	if len(committed) < 3 {
 		t.Fatalf("committed startup entries = %d, want banner + 2 diagnostics", len(committed))
 	}
-	if banner := committedText(committed[0]); !strings.Contains(banner, "CodeRig") {
+	if banner := committedText(committed[0]); !strings.Contains(banner, "Carbon") {
 		t.Errorf("committed[0] = %q, want the identity/session banner first", banner)
 	}
 	for i, want := range diagnostics {

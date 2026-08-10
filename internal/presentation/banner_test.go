@@ -14,8 +14,8 @@ func TestAgentBannerTextIncludesSessionID(t *testing.T) {
 		banner AgentBanner
 		want   string
 	}{
-		{name: "name and description", banner: AgentBanner{Name: "CodeRig", Description: "coding rig"}, want: "CodeRig — coding rig\nSession: #" + sessionID.String()},
-		{name: "name only", banner: AgentBanner{Name: "CodeRig"}, want: "CodeRig\nSession: #" + sessionID.String()},
+		{name: "name and description", banner: AgentBanner{Name: "Carbon", Description: "coding rig"}, want: "Carbon — coding rig\nSession: #" + sessionID.String()},
+		{name: "name only", banner: AgentBanner{Name: "Carbon"}, want: "Carbon\nSession: #" + sessionID.String()},
 		{name: "description only", banner: AgentBanner{Description: "coding rig"}, want: "coding rig\nSession: #" + sessionID.String()},
 		{name: "fallback", banner: AgentBanner{}, want: "session ready\nSession: #" + sessionID.String()},
 	}
