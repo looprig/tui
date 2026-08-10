@@ -2,7 +2,7 @@
 
 Date: 2026-07-15  
 Status: approved design  
-Scope: `harness` + `tui` + `coderig`; no `confinement`, `sandbox`, or `inference` API change
+Scope: `harness` + `tui` + `carbon`; no `confinement`, `sandbox`, or `inference` API change
 
 ## Goal
 
@@ -10,7 +10,7 @@ Show the runtime that actually governs the focused loop, keep every primer and r
 discoverable, let users change the choices their rig exposes, and let them resume previous sessions
 without leaving the TUI.
 
-The design remains useful for rigs other than CodeRig. The TUI does not hard-code CodeRig topology,
+The design remains useful for rigs other than Carbon. The TUI does not hard-code Carbon topology,
 model names, access ordinals, or the assumption that every rig supports runtime mutation or session
 history.
 
@@ -26,7 +26,7 @@ The surface is organized by ownership:
 - Presentation focus belongs to the TUI. It never changes the Harness active loop merely because a
   user views another loop.
 
-The name "runtime status" is used instead of "runtime context" where practical because CodeRig
+The name "runtime status" is used instead of "runtime context" where practical because Carbon
 already uses runtime context to mean prompt material such as the date, working directory, and Git
 state.
 
@@ -39,7 +39,7 @@ state.
 │  Fix the flaky session reset test
 │                                                               Plan/Build
 
-│  CodeRig · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
+│  Carbon · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
 ```
 
 The composer has a three-row minimum: one top padding row, a one-row editor, and one bottom
@@ -50,7 +50,7 @@ The footer wraps at loop-segment boundaries. Continuation rows retain the accent
 with the first loop instead of repeating the rig, access, and workspace:
 
 ```text
-│  CodeRig · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
+│  Carbon · Trusted · ~/code/looprig · ● planner (a1b2) · ○ builder (c3d4)
 │                                          ○ reviewer (e5f6) · ○ operator (g7h8)
 ```
 
@@ -80,7 +80,7 @@ the draft after apply or Escape.
 The user-facing concept is **access**, not environment. The selectable value changes the
 session's security limit; it does not change the workspace, host, or execution provider.
 
-CodeRig maps its confinement ladder as follows:
+Carbon maps its confinement ladder as follows:
 
 | Internal value | User-facing label |
 |---|---|
@@ -93,7 +93,7 @@ CodeRig maps its confinement ladder as follows:
 The existing internal `Write` name remains unchanged. Configuration parsing may accept both
 `write` and `writable`; the TUI always renders `Writable`.
 
-Access is session-scoped. CodeRig's launch-time security limit is the maximum runtime value. The
+Access is session-scoped. Carbon's launch-time security limit is the maximum runtime value. The
 adapter exposes every permitted rung at or below that cap. A session capped at `Writable` offers
 `Untrusted`, `Read Only`, and `Writable`, but not `Trusted`. `Unconfined` is returned only when the
 composition root explicitly permits it. Per-role and parent clamps may remain more restrictive;
@@ -154,23 +154,23 @@ boundary, and update the TUI only when the committed event arrives.
 
 ### Models
 
-CodeRig derives selectable normal-turn models from its validated model catalog in stable order.
+Carbon derives selectable normal-turn models from its validated model catalog in stable order.
 Title-generation-only models are excluded. Duplicate model keys collapse to their first
 occurrence, and incompatible models are removed.
 
-The TUI returns only the selected typed model ID. CodeRig resolves it to a trusted, secret-free
+The TUI returns only the selected typed model ID. Carbon resolves it to a trusted, secret-free
 descriptor before calling `loop.ChangeModel`; the Harness remains the final validator. The TUI
 never manufactures a descriptor from typed text.
 
 ### Effort
 
-Effort choices come from the adapter for the focused loop's current model. CodeRig maps thinking
+Effort choices come from the adapter for the focused loop's current model. Carbon maps thinking
 capability and provider format to the effort values the provider actually supports. The TUI does
 not assume every dialect-neutral enum value is meaningful.
 
 ### Access
 
-CodeRig builds access choices from the configured session cap. Selection calls
+Carbon builds access choices from the configured session cap. Selection calls
 `SessionController.SetSecurityLimit`, is journaled as `SecurityLimitChanged`, and restores with
 the session. The generic TUI receives adapter-defined `AccessID` values and does not import
 sandbox or confinement policy types.
@@ -266,13 +266,13 @@ Primers are `LoopStarted` roots with no spawning-loop cause and no parent tool-u
 primer remains visible for the session. Delegates follow primers in creation order and remain
 visible while running or gated. A focused idle delegate remains visible until focus moves away.
 
-Fresh CodeRig sessions create their primers before the TUI subscribes, while
+Fresh Carbon sessions create their primers before the TUI subscribes, while
 `sessionadapter.New` intentionally has no replay backlog. Add a generic replay-aware constructor,
 conceptually `sessionadapter.NewWithReplay`, that cold-replays already-durable public enduring
 events for a newly created session. `New` may retain its no-backlog behavior for simple/headless
-consumers. CodeRig uses the replay-aware constructor for both new and restored TUI sessions.
+consumers. Carbon uses the replay-aware constructor for both new and restored TUI sessions.
 
-This supplies topology and runtime state without CodeRig-specific behavior in presentation. Live
+This supplies topology and runtime state without Carbon-specific behavior in presentation. Live
 events continue through the single all-loops subscription. Cold replay completes before live
 attachment, and boundary tests prove no event is lost or folded twice.
 
@@ -295,7 +295,7 @@ type SessionBrowser interface {
 The exact API may keep new-session opening separate through the existing `OpenAgent`. A backwards-
 compatible TUI option supplies `SessionBrowser`; it is not embedded in `Agent`.
 
-CodeRig implements the browser over `SessionStoreFactory`. It maps Harness `SessionMeta` into a
+Carbon implements the browser over `SessionStoreFactory`. It maps Harness `SessionMeta` into a
 generic summary containing session ID, title, lifecycle state, created time, last-active time,
 agent kind, loop count, and configuration compatibility. Listing reads the replay-free catalog
 and remains most-recently-active-first.
@@ -308,13 +308,13 @@ session uses two content rows with one blank padding row between records:
 ```text
 │
 │  Fix persistence race                            idle · 12m ago
-│  CodeRig · 3 loops · created Jul 15 · 8f2a1c3d
+│  Carbon · 3 loops · created Jul 15 · 8f2a1c3d
 │
 │  Build ACP foreign-loop support                 failed · 2h ago
-│  CodeRig · 5 loops · created Jul 14 · 31c90e72
+│  Carbon · 5 loops · created Jul 14 · 31c90e72
 │
 │  Document runtime access controls              stopped · 1d ago
-│  CodeRig · 3 loops · created Jul 13 · a82db146
+│  Carbon · 3 loops · created Jul 13 · a82db146
 │
 ```
 
@@ -381,16 +381,16 @@ current state; catalogs own only available choices.
 
 ### Hard-code choices in the TUI — rejected
 
-It would make the generic TUI know CodeRig models, access ordinals, and provider effort quirks.
+It would make the generic TUI know Carbon models, access ordinals, and provider effort quirks.
 
 ### Mutate Harness active loop on footer focus — rejected
 
 Focused submission already targets a loop explicitly. A viewing action should not change the
 session-wide default used by other clients.
 
-### Put session browsing on CodeRig alone — rejected
+### Put session browsing on Carbon alone — rejected
 
-The store implementation belongs to CodeRig, but the interaction is a reusable optional TUI
+The store implementation belongs to Carbon, but the interaction is a reusable optional TUI
 capability that other rigs can implement.
 
 ### Box every session record — rejected
@@ -417,7 +417,7 @@ Phase 1 is independently releasable and validates the read model before mutation
 ### Phase 2: controls and navigation
 
 1. Dynamic command and value trays.
-2. CodeRig runtime catalogs and typed mutations for mode, model, effort, and access.
+2. Carbon runtime catalogs and typed mutations for mode, model, effort, and access.
 3. Runtime clicks, hover, draft preservation, and stale-choice handling.
 4. Optional session browser, two-line session tray, and interrupt-then-resume handoff.
 
@@ -451,7 +451,7 @@ never edited by hand.
   close failure, restore failure, stale results, and shutdown during handoff.
 - Fuzz arbitrary widths and catalog labels to prevent implicit wrapping or hit-test drift.
 
-### CodeRig
+### Carbon
 
 - Model ordering, deduplication, filtering, and trusted ID-to-descriptor resolution.
 - Effort choices by capability and provider format.

@@ -4,7 +4,7 @@ import "strings"
 
 // SessionPresentation is the synchronous, consumer-supplied session metadata the TUI
 // displays. The TUI never queries it asynchronously and never infers it from events:
-// the composition root (CodeRig) fills it at screen construction (WithSessionPresentation)
+// the product composition root fills it at screen construction (WithSessionPresentation)
 // and, on a reopen, the TUI refreshes it from the replacement Agent via SessionPresenter,
 // because the workspace, the fixed access profile, and the permission diagnostics are known
 // before the session runs a single turn. A cross-session browser resume therefore displays
@@ -56,7 +56,7 @@ func (p SessionPresentation) diagnostics() []string {
 // the prior session's. It mirrors the RuntimeCatalog/RuntimeController optional-interface
 // pattern: the Screen detects it on the swapped Agent by type assertion.
 //
-// CONTRACT (CodeRig Phase 5 fills this): the composition root's agent implements
+// CONTRACT (the product composition root fills this): the composition root's agent implements
 // SessionPresentation() returning the session's fixed access profile name, workspace root,
 // and any manual out-of-catalog permission diagnostics — the same values it would pass to
 // WithSessionPresentation at construction, but read from the RESUMED session. A cross-session

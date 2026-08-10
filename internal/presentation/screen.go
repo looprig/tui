@@ -1051,7 +1051,7 @@ func (m *Screen) handleReopenResult(msg reopenResultMsg) tea.Cmd {
 	// a DIFFERENT workspace root and DIFFERENT fixed access profile, so the footer and the
 	// diagnostics commitStartup re-commits below MUST reflect the RESUMED session, never the
 	// prior one. The replacement Agent is the authority: if it implements SessionPresenter it
-	// supplies its own presentation (the CodeRig Phase 5 contract). If it does not, fail safe
+	// supplies its own presentation (the product composition root's contract). If it does not, fail safe
 	// per path — clear on a cross-session resume (show nothing, never a different session's
 	// context) but retain on a /clear reopen, which is the same session family (same
 	// workspace + fixed profile) and whose construction-time value is still correct.

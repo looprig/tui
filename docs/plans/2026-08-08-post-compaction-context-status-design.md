@@ -9,7 +9,7 @@ of retaining the pre-compaction value.
 ## Ownership
 
 Context counting remains outside the TUI. The inference `contextcount` package supplies the
-counter implementation, CodeRig injects that counter into the loop, and the harness measures
+counter implementation, Carbon injects that counter into the loop, and the harness measures
 the complete inference request and publishes durable authoritative measurements. The TUI only
 folds those public events into display state and renders the resulting percentage.
 
