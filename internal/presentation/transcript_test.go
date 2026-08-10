@@ -11,6 +11,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/tool"
+	"github.com/looprig/tui/styles"
 )
 
 // callID is defined in screen_test.go (same package): it builds a deterministic,
@@ -98,6 +99,111 @@ func textChunk(s string) event.Event {
 
 func loopHdr(loopID uuid.UUID) event.Header {
 	return event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}
+}
+
+func workflowActivityEvent(eventID, runID uuid.UUID, kind event.WorkflowActivityKind, status event.WorkflowRunStatus, label string) event.Event {
+	return event.WorkflowActivity{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{SessionID: callID(0xF1)},
+			EventID:     eventID,
+		},
+		RunID:             runID,
+		WorkflowName:      "source_document_extract",
+		WorkflowVersion:   "v1",
+		Kind:              kind,
+		Status:            status,
+		VertexID:          callID(0xF2),
+		VertexLabel:       label,
+		CompletedVertices: 1,
+		TotalVertices:     2,
+		OccurredAt:        time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestWorkflowActivityTranscriptEntriesAreGlobalAndUngrouped(t *testing.T) {
+	t.Parallel()
+
+	runA, runB := callID(0xA1), callID(0xB1)
+	events := []event.Event{
+		workflowActivityEvent(callID(0x01), runA, event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Extract"),
+		workflowActivityEvent(callID(0x02), runA, event.WorkflowActivityVertexCompleted, event.WorkflowRunStatusRunning, "Parse"),
+		workflowActivityEvent(callID(0x03), runB, event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Map"),
+		workflowActivityEvent(callID(0x04), runA, event.WorkflowActivityRunCompleted, event.WorkflowRunStatusCompleted, "Done"),
+		workflowActivityEvent(callID(0x05), runA, event.WorkflowActivityRunResumed, event.WorkflowRunStatusRunning, "Resume"),
+	}
+
+	m := transcriptModel{}
+	for _, ev := range events {
+		m = m.ApplyEvent(ev)
+	}
+
+	if len(m.global) != len(events) {
+		t.Fatalf("global workflow entries = %d, want %d", len(m.global), len(events))
+	}
+	if len(m.projections) != 0 {
+		t.Fatalf("workflow entries created loop projections: %d", len(m.projections))
+	}
+	wantContinuation := []bool{false, true, false, true, false}
+	for i, entry := range m.global {
+		if entry.Kind != kindWorkflowActivity {
+			t.Errorf("entry[%d].Kind = %d, want workflow activity", i, entry.Kind)
+		}
+		if entry.Workflow == nil {
+			t.Fatalf("entry[%d].Workflow = nil", i)
+		}
+		if entry.Workflow.Continuation != wantContinuation[i] {
+			t.Errorf("entry[%d].Continuation = %v, want %v", i, entry.Workflow.Continuation, wantContinuation[i])
+		}
+		text := committedText(entry)
+		if strings.Contains(text, entry.Workflow.EventID.String()) || strings.Contains(text, entry.Workflow.RunID.String()) {
+			t.Errorf("entry[%d] leaks an identifier: %q", i, text)
+		}
+		if !strings.Contains(text, "source_document_extract") || !strings.Contains(text, "running") && !strings.Contains(text, "completed") {
+			t.Errorf("entry[%d] omits safe workflow metadata: %q", i, text)
+		}
+	}
+}
+
+func TestWorkflowActivityDuplicateEventIDDoesNotAppend(t *testing.T) {
+	t.Parallel()
+
+	activity := workflowActivityEvent(callID(0x11), callID(0x21), event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Extract")
+	m := transcriptModel{}.ApplyEvent(activity).ApplyEvent(activity)
+	if got := len(m.global); got != 1 {
+		t.Fatalf("duplicate workflow activity entries = %d, want 1", got)
+	}
+}
+
+func TestRenderWorkflowActivityUsesBlueIndependentMarkers(t *testing.T) {
+	t.Parallel()
+
+	runID := callID(0x81)
+	m := transcriptModel{}
+	m = m.ApplyEvent(workflowActivityEvent(callID(0x82), runID, event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Extract"))
+	m = m.ApplyEvent(workflowActivityEvent(callID(0x83), runID, event.WorkflowActivityVertexCompleted, event.WorkflowRunStatusRunning, "Parse"))
+	if len(m.global) != 2 {
+		t.Fatalf("workflow entries = %d, want 2", len(m.global))
+	}
+
+	first, second := renderEntry(m.global[0], false, 120), renderEntry(m.global[1], false, 120)
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("rendered workflow rows = (%d, %d), want one row each", len(first), len(second))
+	}
+	if got := plainFromStyled(first[0]); !strings.HasPrefix(got, "● ") {
+		t.Errorf("first workflow row = %q, want solid marker", got)
+	}
+	if got := plainFromStyled(second[0]); !strings.HasPrefix(got, "| ") {
+		t.Errorf("continuation workflow row = %q, want continuation marker", got)
+	}
+	if !strings.HasPrefix(first[0], styles.WorkflowActivityStyle.Render(styles.WorkflowActivityMarker)+" ") {
+		t.Errorf("first marker does not use workflow blue style: %q", first[0])
+	}
+	if !strings.HasPrefix(second[0], styles.WorkflowActivityStyle.Render(styles.WorkflowActivityContinuationMarker)+" ") {
+		t.Errorf("continuation marker does not use workflow blue style: %q", second[0])
+	}
+	if strings.Contains(plainFromStyled(first[0]), runID.String()) || strings.Contains(plainFromStyled(first[0]), m.global[0].Workflow.EventID.String()) {
+		t.Error("workflow row leaked a raw identifier")
+	}
 }
 
 func findLoop(loops []loopInfo, id uuid.UUID) (loopInfo, bool) {

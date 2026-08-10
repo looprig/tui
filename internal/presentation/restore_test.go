@@ -3,6 +3,7 @@ package presentation
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -184,6 +185,32 @@ func TestRestoredMsgRepaintCorrectness(t *testing.T) {
 	// The pending permission gate from the backlog is reflected in the interaction model.
 	if got, want := msg.interaction.PendingCount(), wantIn.PendingCount(); got != want {
 		t.Errorf("pending prompts = %d, want %d (backlog gate must repaint as pending)", got, want)
+	}
+}
+
+func TestRestoreWorkflowActivityUsesTheSameGlobalProjection(t *testing.T) {
+	t.Parallel()
+
+	backlog := []event.Event{
+		workflowActivityEvent(callID(0x31), callID(0x41), event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Extract"),
+		workflowActivityEvent(callID(0x32), callID(0x41), event.WorkflowActivityVertexCompleted, event.WorkflowRunStatusRunning, "Parse"),
+		workflowActivityEvent(callID(0x33), callID(0x51), event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Map"),
+	}
+	agent := &fakeAgent{activeLoopID: callID(0xAA), backlog: backlog}
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+	if msg.err != nil {
+		t.Fatalf("restore workflow fold error = %v", msg.err)
+	}
+
+	live := transcriptModel{}
+	for _, ev := range backlog {
+		live = live.ApplyEvent(ev)
+	}
+	if !reflect.DeepEqual(msg.transcript.global, live.global) {
+		t.Fatalf("restored workflow projection differs from live projection")
+	}
+	if got := len(msg.transcript.global); got != len(backlog) {
+		t.Fatalf("restored workflow entries = %d, want %d", got, len(backlog))
 	}
 }
 

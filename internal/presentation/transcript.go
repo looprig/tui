@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -120,6 +121,10 @@ const (
 	// out-of-focus status tone (renderHarnessLine), distinct from a leveled kindNotice
 	// (no "▌ " accent bar).
 	kindHarness
+	// kindWorkflowActivity is one durable, session-global workflow notification. Each
+	// activity is its own entry; continuation is represented by the entry's marker rather
+	// than by a collapsible/grouped container.
+	kindWorkflowActivity
 )
 
 // noticeLevel grades a kindNotice's severity, selecting its accent-bar color. The
@@ -177,6 +182,10 @@ type entry struct {
 	// Verb is the activity word of a kindSubagent line ("done" for a committed StepDone).
 	// Meaningful ONLY for kindSubagent; empty for every other kind.
 	Verb string
+	// Workflow carries the safe metadata and marker state for a kindWorkflowActivity
+	// entry. It is nil for every other kind. Workflow activities are session-global, so
+	// their entries live in transcriptModel.global and appear in every loop projection.
+	Workflow *workflowActivityEntry
 	// thinkDur is the measured span of a kindAssistant entry's thinking block, captured from
 	// the TokenDelta timestamps at commit (liveSeg.thinkDuration) and rendered as the
 	// "│ thought for Nsec" header (formatThought). The harness never stamps Ephemeral
@@ -189,6 +198,22 @@ type entry struct {
 	// normalized OUT of the restore-equivalence comparison (EqualTranscript). Zero for every
 	// non-assistant entry and for an assistant entry with no thinking block.
 	thinkDur time.Duration
+}
+
+// workflowActivityEntry is the presentation-safe subset of event.WorkflowActivity. Raw
+// event/run identifiers are retained only for reducer idempotency and marker state; the
+// renderer never includes them in visible text.
+type workflowActivityEntry struct {
+	EventID           uuid.UUID
+	RunID             uuid.UUID
+	WorkflowName      string
+	WorkflowVersion   string
+	Kind              event.WorkflowActivityKind
+	Status            event.WorkflowRunStatus
+	VertexLabel       string
+	CompletedVertices uint32
+	TotalVertices     uint32
+	Continuation      bool
 }
 
 // liveSeg is the in-progress assistant segment for the current turn: the streamed
@@ -405,6 +430,14 @@ type transcriptModel struct {
 	// Event IDs are session-global and the map is cloned on write so replay, live delivery,
 	// and restore folding all share one value-safe deduplication rule.
 	compactionCompletions map[uuid.UUID]struct{}
+	// workflowActivityIDs deduplicates durable workflow notifications by their stable event
+	// identity. It is deliberately separate from the Screen restore barrier's event-ID set:
+	// direct reducer folds and live/restore handoff both need the same idempotency behavior.
+	workflowActivityIDs map[uuid.UUID]struct{}
+	// workflowRuns tracks whether the latest activity for a run left that run active. A
+	// false/missing value starts a new blue solid marker; an active value produces the blue
+	// continuation rail until a terminal activity closes it.
+	workflowRuns map[uuid.UUID]bool
 }
 
 // spawnKey identifies one Subagent tool call's spawn: the parent loop/turn/step
@@ -492,6 +525,16 @@ type subagentAccumulator struct {
 // uiAction; prompt clearing on terminals and active-surface control are the
 // interactionModel's job, not the transcript's.
 func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
+	switch ev := ev.(type) {
+	case event.WorkflowActivity:
+		return m.applyWorkflowActivity(ev)
+	case *event.WorkflowActivity:
+		if ev == nil {
+			return m
+		}
+		return m.applyWorkflowActivity(*ev)
+	}
+
 	loopID := ev.EventHeader().LoopID
 	switch ev := ev.(type) {
 	case event.LoopStarted:
@@ -549,6 +592,95 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	}
 	m.fold = nil
 	return m
+}
+
+// applyWorkflowActivity appends one session-global activity row. The durable EventID is
+// the reducer's idempotency key, so a duplicate replay cannot create a second visible row.
+// The run-state map is updated only after the row is materialized: a terminal activity may
+// itself use the continuation marker, but the next activity for that run starts a new rail.
+func (m transcriptModel) applyWorkflowActivity(ev event.WorkflowActivity) transcriptModel {
+	if id := ev.EventID; !id.IsZero() {
+		if _, duplicate := m.workflowActivityIDs[id]; duplicate {
+			return m
+		}
+		ids := cloneWorkflowActivityIDs(m.workflowActivityIDs)
+		ids[id] = struct{}{}
+		m.workflowActivityIDs = ids
+	}
+
+	continuation := m.workflowRuns[ev.RunID]
+	activity := &workflowActivityEntry{
+		EventID:           ev.EventID,
+		RunID:             ev.RunID,
+		WorkflowName:      ev.WorkflowName,
+		WorkflowVersion:   ev.WorkflowVersion,
+		Kind:              ev.Kind,
+		Status:            ev.Status,
+		VertexLabel:       ev.VertexLabel,
+		CompletedVertices: ev.CompletedVertices,
+		TotalVertices:     ev.TotalVertices,
+		Continuation:      continuation,
+	}
+	m.nextID++
+	e := entry{
+		ID:       m.nextID,
+		Kind:     kindWorkflowActivity,
+		Blocks:   []content.Block{&content.TextBlock{Text: workflowActivityText(*activity)}},
+		Workflow: activity,
+	}
+	m.global = append(append([]entry(nil), m.global...), e)
+
+	runs := cloneWorkflowRunStates(m.workflowRuns)
+	if workflowActivityTerminal(ev) {
+		delete(runs, ev.RunID)
+	} else {
+		runs[ev.RunID] = true
+	}
+	m.workflowRuns = runs
+	return m
+}
+
+func cloneWorkflowActivityIDs(src map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
+	dst := make(map[uuid.UUID]struct{}, len(src)+1)
+	for id := range src {
+		dst[id] = struct{}{}
+	}
+	return dst
+}
+
+func cloneWorkflowRunStates(src map[uuid.UUID]bool) map[uuid.UUID]bool {
+	dst := make(map[uuid.UUID]bool, len(src)+1)
+	for id, active := range src {
+		dst[id] = active
+	}
+	return dst
+}
+
+func workflowActivityTerminal(ev event.WorkflowActivity) bool {
+	switch ev.Kind {
+	case event.WorkflowActivityRunInterrupted,
+		event.WorkflowActivityRunCompleted,
+		event.WorkflowActivityRunCancelled,
+		event.WorkflowActivityRunFailed:
+		return true
+	default:
+		return ev.Status != event.WorkflowRunStatusRunning
+	}
+}
+
+func workflowActivityText(a workflowActivityEntry) string {
+	name := a.WorkflowName
+	if a.WorkflowVersion != "" {
+		name += "@" + a.WorkflowVersion
+	}
+	parts := []string{name, string(a.Kind), string(a.Status)}
+	if a.VertexLabel != "" {
+		parts = append(parts, a.VertexLabel)
+	}
+	if a.TotalVertices > 0 {
+		parts = append(parts, fmt.Sprintf("%d/%d", a.CompletedVertices, a.TotalVertices))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m transcriptModel) commitCompactionCompletion(ev event.CompactionCommitted) transcriptModel {

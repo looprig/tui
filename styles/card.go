@@ -31,6 +31,11 @@ var TraySelectedBg = lipgloss.Color("#3A526B")
 // gray rail but tinted — the continuous accent edge down the padded blue panel.
 var CardRailStyle = lipgloss.NewStyle().Foreground(CardBorderColor)
 
+// WorkflowActivityStyle is the shared TUI blue used for durable workflow markers. It
+// intentionally reuses CardBorderColor so notifications and action cards have one semantic
+// blue token rather than drifting shades.
+var WorkflowActivityStyle = lipgloss.NewStyle().Foreground(CardBorderColor)
+
 // CardTitleStyle renders the bold card title row — "Approve Bash?", the AskUser
 // question, or the "answer" label — so the required action reads at a glance above the
 // card body.
