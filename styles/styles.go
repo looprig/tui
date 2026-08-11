@@ -149,6 +149,10 @@ func ToolNode(s NodeStatus) string {
 const (
 	AccentBar       = "▌"
 	AccentBarPrompt = AccentBar + " "
+	// WorkflowActivityMarker starts a new workflow-run notification rail.
+	WorkflowActivityMarker = "●"
+	// WorkflowActivityContinuationMarker continues an already-active workflow-run rail.
+	WorkflowActivityContinuationMarker = "|"
 )
 
 // ThinkingHeader labels the model's reasoning block.

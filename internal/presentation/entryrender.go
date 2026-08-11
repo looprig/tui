@@ -46,9 +46,26 @@ func renderEntry(e entry, expand bool, width int) []string {
 		return renderSubagentLine(e.Agent, e.Verb, width)
 	case kindHarness:
 		return renderHarnessLine(firstText(e.Blocks), width)
+	case kindWorkflowActivity:
+		return renderWorkflowActivity(e.Workflow, width)
 	default:
 		return nil
 	}
+}
+
+// renderWorkflowActivity renders one durable session notification as an independent
+// blue-marker row. The marker is the only colored chrome; safe workflow metadata remains
+// ordinary text, and the raw event/run IDs held by the reducer never reach the terminal.
+func renderWorkflowActivity(a *workflowActivityEntry, width int) []string {
+	if a == nil {
+		return nil
+	}
+	marker := styles.WorkflowActivityMarker
+	if a.Continuation {
+		marker = styles.WorkflowActivityContinuationMarker
+	}
+	prefix := styles.WorkflowActivityStyle.Render(marker) + " "
+	return []string{prefix + truncate(workflowActivityText(*a), width-2)}
 }
 
 // harnessMark is the hollow-circle glyph (plus its trailing space) prefixing a kindHarness

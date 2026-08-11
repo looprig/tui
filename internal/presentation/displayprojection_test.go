@@ -100,6 +100,22 @@ func TestDisplayProjectionCommittedLenSurvivesSessionEventTail(t *testing.T) {
 	}
 }
 
+func TestFoldDisplayKeepsWorkflowActivitiesIndividualAndDeduplicated(t *testing.T) {
+	t.Parallel()
+
+	activity := workflowActivityEvent(callID(0x61), callID(0x71), event.WorkflowActivityRunStarted, event.WorkflowRunStatusRunning, "Extract")
+	second := workflowActivityEvent(callID(0x62), callID(0x71), event.WorkflowActivityVertexCompleted, event.WorkflowRunStatusRunning, "Parse")
+	projection := FoldDisplay([]event.Event{activity, second, activity})
+	if got := projection.CommittedLen(); got != 2 {
+		t.Fatalf("workflow committed entries = %d, want 2", got)
+	}
+
+	restored := FoldDisplay([]event.Event{activity, second})
+	if !projection.EqualTranscript(restored) {
+		t.Fatal("live and restored workflow projections differ")
+	}
+}
+
 func TestDisplayProjectionTracksLifecycleOnlyHistoryPresence(t *testing.T) {
 	loopID := callID(0x44)
 	events := []event.Event{

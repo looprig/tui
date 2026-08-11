@@ -28,8 +28,8 @@ func shouldExposeEvent(filter event.EventFilter, ev event.Event) bool {
 }
 
 // sessionAdapter adapts a Rig session.SessionController to the tui.Agent surface. It
-// owns three things and nothing else: the live session controller, a replay dependency used
-// for the one cold restore replay, and a concurrency-safe gate index that folds
+// owns three things and nothing else: the live session controller, replay dependencies used
+// for cold restore and durable gap repair, and a concurrency-safe gate index that folds
 // GateOpened/GateResolved events into a (loopID, toolExecutionID)→GateID map so the TUI's
 // per-loop Approve/Deny/ProvideAnswer calls can resolve the harness-minted gate id. It holds
 // no root context or GC ticker — the rig owns the session lifetime, workspace snapshots, and
@@ -37,6 +37,14 @@ func shouldExposeEvent(filter event.EventFilter, ev event.Event) bool {
 type sessionAdapter struct {
 	sess     session.SessionController
 	replayer journal.EventReplayer // nil for a new/headless session with no replay
+	// openReplay reopens the product event replayer at an inclusive journal sequence.
+	// sessionstore binds FromSeq when OpenEventReplayer is constructed, so recovery must
+	// retain this factory rather than trying to reposition the already-used cold cursor.
+	openReplay func(uint64) (journal.EventReplayer, error)
+	// replayedThrough is the highest durable sequence consumed by coldReplay. A reconnecting
+	// subscription starts after it so events that happened between cold replay and Subscribe
+	// are recovered instead of being silently skipped.
+	replayedThrough uint64
 
 	isRestore bool
 	backlog   []event.Event // restored public all-loop Enduring history; nil for new/headless
@@ -56,7 +64,9 @@ type sessionAdapter struct {
 // Agent is the reusable harness-session adapter consumed by terminal applications.
 type Adapter = sessionAdapter
 
-// New wraps a newly created session. Fresh sessions have no replay backlog.
+// New wraps a newly created session. Fresh sessions have no replay backlog. It is the
+// plain test/explicitly-ephemeral constructor; production clients that promise enduring
+// delivery must use NewWithReplay or Restore.
 func New(sess session.SessionController) *Adapter {
 	return &sessionAdapter{
 		sess:    sess,
@@ -111,8 +121,13 @@ func newSessionAdapter(ctx context.Context, sess session.SessionController, stor
 	if store == nil {
 		return nil, a.failInitialization(errors.New("sessionadapter: restored session requires replay store"))
 	}
-	if replayer, err := store.OpenEventReplayer(sess.SessionID(), sessionstore.ReplayRequest{}); err != nil {
+	a.openReplay = func(fromSeq uint64) (journal.EventReplayer, error) {
+		return store.OpenEventReplayer(sess.SessionID(), sessionstore.ReplayRequest{FromSeq: fromSeq})
+	}
+	if replayer, err := a.openReplay(0); err != nil {
 		return nil, a.failInitialization(err)
+	} else if replayer == nil {
+		return nil, a.failInitialization(errDurableReplayUnavailable)
 	} else {
 		a.replayer = replayer
 	}
@@ -144,7 +159,7 @@ func (a *sessionAdapter) coldReplay(ctx context.Context) error {
 	defer func() { _ = cursor.Close() }()
 
 	for {
-		ev, _, err := cursor.Next(ctx)
+		ev, seq, err := cursor.Next(ctx)
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -152,7 +167,13 @@ func (a *sessionAdapter) coldReplay(ctx context.Context) error {
 			return err // typed fail-secure error (object missing/corrupt) — surfaced unchanged
 		}
 		if !shouldExposeEvent(event.EventFilter{Enduring: event.LoopScope{All: true}}, ev) {
+			if seq > a.replayedThrough {
+				a.replayedThrough = seq
+			}
 			continue
+		}
+		if seq > a.replayedThrough {
+			a.replayedThrough = seq
 		}
 		a.foldGate(ev)
 		if ev.Class() == event.Enduring {
@@ -209,11 +230,23 @@ func (a *sessionAdapter) AcceptsImages(loopID uuid.UUID) bool {
 	return handle.Model().Caps.AcceptsImages
 }
 
-// Subscribe returns ONE wrapping subscription over the session fan-in. It applies the
-// caller's product filter before folding GateOpened/GateResolved into the adapter index and
-// forwarding, so a live gate is answerable the instant the TUI observes its request. It
-// never opens a second subscription.
+// Subscribe returns a filtered wrapping subscription over the session fan-in. Restored and
+// durable-bootstrap adapters apply the caller's product filter before folding
+// GateOpened/GateResolved into the adapter index and forwarding, so a live gate is answerable
+// the instant the TUI observes its request; a hub loss is repaired from the journal before
+// live forwarding resumes. New's explicitly-ephemeral path retains the lightweight wrapper.
 func (a *sessionAdapter) Subscribe(filter event.EventFilter) (event.Subscription, error) {
+	if a.openReplay != nil {
+		return newReplayingSubscription(replayingSubscriptionConfig{
+			ctx:        context.Background(),
+			sessionID:  a.sess.SessionID(),
+			filter:     filter,
+			initialSeq: a.replayedThrough,
+			subscribe:  a.sess.SubscribeEvents,
+			openReplay: a.openReplay,
+			foldGate:   a.foldGate,
+		})
+	}
 	inner, err := a.sess.SubscribeEvents(filter)
 	if err != nil {
 		return nil, err
@@ -367,7 +400,7 @@ func (a *sessionAdapter) CompactToLoop(ctx context.Context, loopID uuid.UUID) (u
 	return a.sess.CompactToLoop(ctx, loopID)
 }
 
-// gateFoldingSubscription is the single wrapping event.Subscription Subscribe returns. Its
+// gateFoldingSubscription is the lightweight wrapper used for plain New sessions. Its
 // forwarding goroutine filters before folding each visible gate transition into the adapter
 // index and handing the event to the consumer channel; Close tears down both the inner
 // subscription and the forwarder so a consumer that stops reading cannot leak the goroutine.

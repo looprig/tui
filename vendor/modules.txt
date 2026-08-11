@@ -221,6 +221,7 @@ github.com/looprig/harness/pkg/command
 github.com/looprig/harness/pkg/event
 github.com/looprig/harness/pkg/gate
 github.com/looprig/harness/pkg/hook
+github.com/looprig/harness/pkg/hub
 github.com/looprig/harness/pkg/hustle
 github.com/looprig/harness/pkg/identity
 github.com/looprig/harness/pkg/journal
@@ -247,7 +248,7 @@ github.com/looprig/inference/usage
 github.com/looprig/inference/wire/jsonbody
 github.com/looprig/inference/wire/sse
 # github.com/looprig/storage v0.3.1
-## explicit; go 1.25.8
+## explicit; go 1.25.0
 github.com/looprig/storage
 # github.com/lucasb-eyer/go-colorful v1.4.1
 ## explicit; go 1.12
