@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "repository": "tui",
+  "proofSources": [
+    {
+      "id": "example-tui-session-adapter-fixture",
+      "type": "executable-fixture",
+      "path": "examples/sessionadapter/example_test.go",
+      "symbol": "Example_adapterOwnsOnlySessionPresentation"
+    },
+    {
+      "id": "example-tui-restore-decider-fixture",
+      "type": "executable-fixture",
+      "path": "examples/restore/example_test.go",
+      "symbol": "Example_restoreDecision"
+    },
+    {
+      "id": "example-tui-runtime-host-fixture",
+      "type": "executable-fixture",
+      "path": "examples/runtimehost/example_test.go",
+      "symbol": "Example_runtimeHost"
+    },
+    {
+      "id": "example-tui-session-adapter-source",
+      "type": "source",
+      "path": "sessionadapter/adapter.go",
+      "symbol": "New"
+    },
+    {
+      "id": "example-tui-restore-decider-source",
+      "type": "source",
+      "path": "restore/decider.go",
+      "symbol": "Decider.DecideRestore"
+    },
+    {
+      "id": "example-tui-runtime-host-source",
+      "type": "source",
+      "path": "runtime/run.go",
+      "symbol": "Run"
+    },
+    {
+      "id": "example-tui-session-lifecycle-test",
+      "type": "test",
+      "path": "sessionadapter/adapter_test.go",
+      "symbol": "TestCloseShutsDownOnce"
+    },
+    {
+      "id": "example-tui-runtime-lifecycle-test",
+      "type": "test",
+      "path": "runtime/run_test.go",
+      "symbol": "TestRunTeardownViaAgentHolder"
+    },
+    {
+      "id": "example-tui-manifest-contract-test",
+      "type": "test",
+      "path": "tests/example_test.go",
+      "symbol": "TestDocsExamplesArtifacts"
+    }
+  ],
+  "examples": [
+    {
+      "id": "example-tui-session-adapter",
+      "ecosystem": "go",
+      "owner": "tui",
+      "sourcePath": "examples/sessionadapter/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/tui": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-tui-docs-gocache go test ./examples/...",
+      "assertion": "The composition root supplies a harness session controller; the TUI adapter exposes presentation capabilities, forwards visible session events, and shuts that session down exactly once without constructing a Rig.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "The example closes both the event subscription and the session adapter; all fakes are in-memory.",
+      "liveGate": null,
+      "proofIds": [
+        "example-tui-session-adapter-fixture",
+        "example-tui-session-adapter-source",
+        "example-tui-session-lifecycle-test",
+        "example-tui-manifest-contract-test"
+      ]
+    },
+    {
+      "id": "example-tui-restore-decider",
+      "ecosystem": "go",
+      "owner": "tui",
+      "sourcePath": "examples/restore/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/tui": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-tui-docs-gocache go test ./examples/...",
+      "assertion": "The restore decider accepts informational drift, surfaces it through a UI seam, and requires an explicit confirmation before accepting warn-level workspace drift.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "No cleanup required; restore decisions and the UI fake are process-local values.",
+      "liveGate": null,
+      "proofIds": [
+        "example-tui-restore-decider-fixture",
+        "example-tui-restore-decider-source",
+        "example-tui-manifest-contract-test"
+      ]
+    },
+    {
+      "id": "example-tui-runtime-host",
+      "ecosystem": "go",
+      "owner": "tui",
+      "sourcePath": "examples/runtimehost/example_test.go",
+      "availability": "source-workspace",
+      "versions": {
+        "github.com/looprig/tui": "source-workspace"
+      },
+      "offlineCommand": "GOWORK=off GOCACHE=/tmp/looprig-tui-docs-gocache go test ./examples/...",
+      "assertion": "The product supplies an agent constructor and banner to the runtime host; constructor failure returns an exit code without opening an interactive terminal, while the runtime lifecycle test proves successful teardown closes the final live agent.",
+      "workflowPath": ".github/workflows/docs-examples.yml",
+      "jobId": "docs-examples",
+      "cleanup": "The deterministic run removes its temporary HOME and runtime log directory before returning.",
+      "liveGate": null,
+      "proofIds": [
+        "example-tui-runtime-host-fixture",
+        "example-tui-runtime-host-source",
+        "example-tui-runtime-lifecycle-test",
+        "example-tui-manifest-contract-test"
+      ]
+    }
+  ]
+}
