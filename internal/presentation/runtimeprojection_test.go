@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"testing"
+	"time"
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/core/uuid"
@@ -168,6 +169,69 @@ func TestRuntimeProjectionUsesCommittedPostCompactionContextWithoutPriorMeasurem
 	}
 	if !state.hasContext || state.context != postContext {
 		t.Fatalf("first context-bearing event produced (%+v, %v), want (%+v, true)", state.context, state.hasContext, postContext)
+	}
+}
+
+func TestRuntimeProjectionAndStatusIgnoreCompactionRetained(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x2d)
+	sessionID := callID(0x2e)
+	preContext := validContextMeasurement(content.TokenCount(82), content.TokenCount(100), 1, callID(0x2f), 0x82)
+	postContext := validContextMeasurement(content.TokenCount(17), content.TokenCount(100), 2, callID(0x30), 0x17)
+
+	compactionHeader := hdr(loopID)
+	compactionHeader.Coordinates.SessionID = sessionID
+	compactionHeader.EventID = callID(0x31)
+	compaction := event.CompactionCommitted{
+		Header:           compactionHeader,
+		AttemptID:        event.CompactAttemptID(callID(0x32)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x33)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            preContext.Basis,
+		Summary:          userMsg("retained summary"),
+		Retained: content.AgenticMessages{
+			userMsg("retained user turn"),
+			aiMessage("thinking", "retained assistant", toolUse("retained-tool", "Bash", `{"command":"true"}`)),
+			toolResult("retained-tool", "retained tool result"),
+		},
+		PostContext: postContext,
+		Duration:    7 * time.Second,
+	}
+	if err := event.ValidateEvent(compaction); err != nil {
+		t.Fatalf("retained compaction fixture is invalid: %v", err)
+	}
+
+	projection := newRuntimeProjection().ApplyEvent(event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{SessionID: sessionID, LoopID: loopID},
+			EventID:     callID(0x34),
+		},
+		Runtime: event.ModelRuntime{Key: postContext.Model},
+	})
+	projection = projection.ApplyEvent(compaction)
+	state, ok := projection.loop(loopID)
+	if !ok {
+		t.Fatal("retained compaction omitted loop runtime state")
+	}
+	if !state.hasContext || state.context != postContext {
+		t.Fatalf("runtime context = (%+v, %v), want exact PostContext %+v", state.context, state.hasContext, postContext)
+	}
+
+	// The status metadata is another consumer of the same runtime projection. Its
+	// percentage must come from PostContext (17/100), not from the three retained
+	// messages or their content.
+	screen := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 100, 30)
+	screen = feed(t, screen, event.LoopStarted{
+		Header: event.Header{
+			Coordinates: identity.Coordinates{SessionID: sessionID, LoopID: loopID},
+			EventID:     callID(0x35),
+		},
+		Runtime: event.ModelRuntime{Key: postContext.Model},
+	})
+	screen = feed(t, screen, compaction)
+	if got, want := screen.focusedRuntimeStatus(), "model · none · ~17% context"; got != want {
+		t.Fatalf("focused runtime status = %q, want %q", got, want)
 	}
 }
 

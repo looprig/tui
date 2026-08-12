@@ -3865,6 +3865,56 @@ func TestTranscriptCompactionCompletion(t *testing.T) {
 	}
 }
 
+func TestTranscriptCompactionCompletionIgnoresRetainedHistory(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0x96)
+	sessionID := callID(0x97)
+	preContext := validContextMeasurement(content.TokenCount(82), content.TokenCount(100), 1, callID(0x98), 0x82)
+	postContext := validContextMeasurement(content.TokenCount(17), content.TokenCount(100), 2, callID(0x99), 0x17)
+	header := hdr(loopID)
+	header.Coordinates.SessionID = sessionID
+	header.EventID = callID(0x9a)
+	compaction := event.CompactionCommitted{
+		Header:           header,
+		AttemptID:        event.CompactAttemptID(callID(0x9b)),
+		WaiterCommandIDs: []uuid.UUID{callID(0x9c)},
+		Reason:           event.CompactionReasonManual,
+		Basis:            preContext.Basis,
+		Summary:          userMsg("retained summary"),
+		Retained: content.AgenticMessages{
+			userMsg("retained user turn"),
+			aiMessage("thinking", "retained assistant", toolUse("retained-tool", "Bash", `{"command":"true"}`)),
+			toolResult("retained-tool", "retained tool result"),
+		},
+		PostContext: postContext,
+		Duration:    7 * time.Second,
+	}
+	if err := event.ValidateEvent(compaction); err != nil {
+		t.Fatalf("retained compaction fixture is invalid: %v", err)
+	}
+
+	withRetained := FoldDisplay([]event.Event{compaction})
+	summaryOnly := compaction
+	summaryOnly.Retained = nil
+	withoutRetained := FoldDisplay([]event.Event{summaryOnly})
+
+	// FoldDisplay is the public live/restore projection seam. Retained is provider
+	// history, not TUI scrollback: adding it must not change the displayed transcript.
+	if !withRetained.EqualTranscript(withoutRetained) {
+		t.Fatal("retained history changed the displayed transcript")
+	}
+	if got, want := withRetained.CommittedLen(), 1; got != want {
+		t.Fatalf("retained compaction committed length = %d, want one completion row", got)
+	}
+	if got, want := harnessTexts(withRetained.transcript, loopID), []string{"conversation compacted in 7s"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("compaction harness rows = %q, want exactly %q", got, want)
+	}
+	if got := kindUserCount(withRetained.transcript); got != 0 {
+		t.Fatalf("retained compaction added %d user rows, want none", got)
+	}
+}
+
 func TestTranscriptCompactionCompletionDetachesTargetProjection(t *testing.T) {
 	t.Parallel()
 
