@@ -145,10 +145,12 @@ func TestDocsExamplesArtifacts(t *testing.T) {
 		"docs-examples:",
 		offlineExamplesCommand,
 		"GOWORK=off GOCACHE=/tmp/looprig-tui-docs-gocache make check",
-		"GOWORK=off GOCACHE=/tmp/looprig-tui-docs-gocache go test -race ./...",
 	} {
 		if !strings.Contains(string(workflow), literal) {
 			t.Errorf("workflow does not contain %q", literal)
 		}
+	}
+	if strings.Contains(string(workflow), "go test -race ./...") {
+		t.Error("workflow redundantly invokes the full race suite outside make check")
 	}
 }
