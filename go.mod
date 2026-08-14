@@ -1,6 +1,6 @@
 module github.com/looprig/tui
 
-go 1.26.4
+go 1.26.6
 
 tool (
 	github.com/securego/gosec/v2/cmd/gosec
@@ -12,7 +12,7 @@ require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/glamour/v2 v2.0.1
-	charm.land/lipgloss/v2 v2.0.5
+	charm.land/lipgloss/v2 v2.0.6
 	github.com/looprig/harness v0.25.0
 	github.com/yuin/goldmark v1.8.5
 )
@@ -42,8 +42,8 @@ require (
 	github.com/ccojocar/zxcvbn-go v1.0.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260810092200-402eeaa30986 // indirect
-	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260803091719-3755ebad01b1 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect

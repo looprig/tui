@@ -50,39 +50,32 @@ repository.
 
 ## Build, test, and secure
 
-This module **vendors** its dependency tree (`vendor/`) and also
-participates in the parent `../go.work` workspace for local
-multi-module editing. Those two facts pull in opposite directions:
-`-mod=vendor` (which the build needs for a reproducible, auditable
-dependency tree) is incompatible with an active `go.work`. The Makefile
-handles the build side of this for you by exporting `GOFLAGS=-mod=vendor`,
-but that only wins once the workspace itself is out of the way — so run
-every target with the workspace disabled:
+**Dependencies are pinned, not vendored.** `go.mod` pins exact versions and
+`go.sum` verifies their content hashes, which is what makes a build
+reproducible. This module deliberately has no `vendor/`: a vendor tree is
+ignored under a `go.work` but silently satisfies a `GOWORK=off` build, so a
+stale one lets standalone verification pass against the vendored copy rather
+than the version `go.mod` actually pins — defeating the purpose of verifying
+standalone.
+
+This module participates in the parent `../go.work` workspace for local
+multi-module editing, so the Make targets resolve sibling modules from your
+local checkouts by default. Add `GOWORK=off` to check the module against its
+real pinned dependencies instead:
 
 ```sh
-GOWORK=off make secure
+make fmt                # gofmt the whole module in place
+make test               # go test -race ./...
+make test-integration   # go test -tags integration -race, scoped to this module
+make lint               # fmt-check + vet + staticcheck + gosec
+make vuln               # go mod verify + govulncheck
+make secure             # lint + vuln — run this before every commit
+GOWORK=off go test ./... # verify against the pinned dependency versions
 ```
 
-The Makefile is otherwise self-contained:
-
-```sh
-GOWORK=off make fmt             # gofmt the whole module in place
-GOWORK=off make test            # go test -race ./...
-GOWORK=off make test-integration # go test -tags integration -race, scoped to this module
-GOWORK=off make lint            # fmt-check + vendor-check + vet + staticcheck + gosec
-GOWORK=off make vuln            # go mod verify + govulncheck
-GOWORK=off make secure          # lint + vuln — run this before every commit
-GOWORK=off make vendor          # go mod vendor, then scrub + verify no VCS metadata leaked in
-```
-
-One more wrinkle: Go 1.26 can't resolve `go tool`-declared binaries (
-staticcheck, gosec, govulncheck) from a vendor tree, so the Makefile
-resolves those specific analysis tools via `TOOL_GOFLAGS := -mod=mod`
-while everything else — the actual application build and tests — stays on
-`-mod=vendor`. You don't need to set this yourself; it's baked into the
-`lint`/`vuln` targets. `gosec` is additionally scoped to this module's own
-package directories (not a plain `./...`) so it doesn't descend into the
-nested `.worktrees/` checkouts, which are separate modules.
+`gosec` is scoped to this module's own package directories (not a plain
+`./...`) so it doesn't descend into the nested `.worktrees/` checkouts, which
+are separate modules.
 
 Build binaries with `CGO_ENABLED=0 go build -trimpath` so they never leak
 local paths. Fuzz any parser of external input:

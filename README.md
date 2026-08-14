@@ -53,8 +53,8 @@ first permission gate.
 
 ## Building & testing
 
-This module vendors its dependencies. Use the Make targets for the vendored,
-reproducible verification path:
+Dependencies are pinned by `go.mod`/`go.sum`, not vendored. Use the Make
+targets for the standard verification path:
 
 ```sh
 make secure
