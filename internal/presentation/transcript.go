@@ -75,6 +75,20 @@ func textOnly(blocks []content.Block) string {
 	return strings.Join(parts, "\n")
 }
 
+// refusalBlocks returns copies of every RefusalBlock in blocks, in order. A
+// refusal is not narration, so it is never folded into textOnly's join; it
+// travels as its own block so the committed entry (and renderBlock) can label
+// the turn as declined instead of reporting it as an ordinary answer.
+func refusalBlocks(blocks []content.Block) []content.Block {
+	var out []content.Block
+	for _, b := range blocks {
+		if rb, ok := b.(*content.RefusalBlock); ok {
+			out = append(out, &content.RefusalBlock{Text: rb.Text})
+		}
+	}
+	return out
+}
+
 // toolResultText flattens a ToolResultMessage's TextBlocks into one display string.
 // The loop builds a ToolResultMessage carrying a single flattened TextBlock, so this
 // concatenates every TextBlock; non-text blocks are skipped (they have no display
@@ -225,8 +239,12 @@ type workflowActivityEntry struct {
 type liveSeg struct {
 	Thinking string
 	Text     string
-	Calls    []ToolCallView
-	active   bool
+	// Refusal accumulates streamed RefusalChunks. It is kept apart from Text
+	// because a refusal is the model declining, not narration: concatenating
+	// the two would report a declined turn as an answered one.
+	Refusal string
+	Calls   []ToolCallView
+	active  bool
 	// gateDecisions records, by gate ToolExecutionID, how each PERMISSION gate of the current
 	// step was resolved: gatePending on PermissionRequested, then gateApproved/
 	// gateDenied once Screen calls ResolveGate from the user's keypress. toolStarted
@@ -305,16 +323,22 @@ func (s liveSeg) thinkDuration() time.Duration {
 }
 
 // applyChunk routes one streamed chunk into this segment: text accumulates into Text,
-// thinking into Thinking, and the event's CreatedAt (at) folds into the thinking span
-// (recordThinking / recordNonThinking) so a committed thinking entry can show its "Thought
-// for Ns" duration. Any other chunk variant (e.g. a tool-use chunk) is skipped — tool-call
-// reconstruction is a later task. It is the SINGLE chunk-fold implementation shared by the
-// loop projection (m.fold.live.applyChunk) and every per-loop projection (p.live.applyChunk), so a
-// focused subagent view can never drift from the root.
+// a refusal into Refusal, thinking into Thinking, and the event's CreatedAt (at) folds
+// into the thinking span (recordThinking / recordNonThinking) so a committed thinking
+// entry can show its "Thought for Ns" duration. A refusal counts as non-thinking output,
+// so it seals the thinking span exactly as narration does. A tool-use chunk is skipped —
+// tool-call reconstruction is a later task — and so is an image chunk: an ImageChunk is a
+// byte FRAGMENT of one image (see core/content), which has no partial display form here;
+// the step's completed ImageBlock is the display path. It is the SINGLE chunk-fold
+// implementation shared by the loop projection (m.fold.live.applyChunk) and every per-loop
+// projection (p.live.applyChunk), so a focused subagent view can never drift from the root.
 func (s *liveSeg) applyChunk(c content.Chunk, at time.Time) {
 	switch chunk := c.(type) {
 	case *content.TextChunk:
 		s.Text += chunk.Text
+		s.recordNonThinking(at)
+	case *content.RefusalChunk:
+		s.Refusal += chunk.Text
 		s.recordNonThinking(at)
 	case *content.ThinkingChunk:
 		s.Thinking += chunk.Thinking
@@ -327,7 +351,7 @@ func (s *liveSeg) applyChunk(c content.Chunk, at time.Time) {
 // active is intentionally not consulted: an active-but-content-less segment is
 // still empty and must not commit.
 func (s liveSeg) empty() bool {
-	return s.Thinking == "" && s.Text == "" && len(s.Calls) == 0
+	return s.Thinking == "" && s.Text == "" && s.Refusal == "" && len(s.Calls) == 0
 }
 
 // queuedInput is a transient affordance for one submitted-but-not-yet-committed
@@ -1192,7 +1216,7 @@ func (m *transcriptModel) flushCalls(transform func(ToolCallView) ToolCallView) 
 // finalized prose path is stepDone → commitStepAssistant (which renders the AIMessage,
 // not the accumulated provisional text).
 func (m *transcriptModel) commitProse() {
-	if m.fold.live.Thinking == "" && m.fold.live.Text == "" {
+	if m.fold.live.Thinking == "" && m.fold.live.Text == "" && m.fold.live.Refusal == "" {
 		return
 	}
 	var blocks []content.Block
@@ -1208,9 +1232,14 @@ func (m *transcriptModel) commitProse() {
 	if m.fold.live.Text != "" {
 		blocks = append(blocks, &content.TextBlock{Text: m.fold.live.Text})
 	}
+	// The refusal keeps its own block, after the narration it terminates, so the
+	// committed entry still says the model declined.
+	if m.fold.live.Refusal != "" {
+		blocks = append(blocks, &content.RefusalBlock{Text: m.fold.live.Refusal})
+	}
 	m.nextID++
 	m.fold.committed = append(m.fold.committed, entry{ID: m.nextID, Kind: kindAssistant, Blocks: blocks, thinkDur: thinkDur})
-	m.fold.live.Thinking, m.fold.live.Text = "", ""
+	m.fold.live.Thinking, m.fold.live.Text, m.fold.live.Refusal = "", "", ""
 }
 
 // toolStarted records a freshly started tool call as a running card in live.Calls.
@@ -1767,6 +1796,12 @@ func (m *transcriptModel) commitStepAssistant(ai *content.AIMessage) {
 	if text := textOnly(ai.Blocks); text != "" {
 		blocks = append(blocks, &content.TextBlock{Text: text})
 	}
+	// Refusals are carried through as their own blocks rather than merged into
+	// the narration above: textOnly deliberately sees only TextBlocks, so a
+	// step whose message is nothing but a refusal would otherwise produce no
+	// blocks at all and be dropped as a "pure-tool step" — the transcript would
+	// show a turn the model declined as a turn with no answer.
+	blocks = append(blocks, refusalBlocks(ai.Blocks)...)
 	if len(blocks) == 0 {
 		return // pure-tool step: no thinking, no text — the tool nodes stand alone
 	}

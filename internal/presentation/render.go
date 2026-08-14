@@ -644,6 +644,15 @@ func renderBlock(blk content.Block) string {
 		return b.Thinking
 	case *content.ImageBlock:
 		return fmt.Sprintf("[image: %s, %d bytes]", string(b.MediaType), len(b.Source.Data))
+	case *content.RefusalBlock:
+		// A refusal is the model DECLINING, not narration, so it is labeled
+		// rather than rendered as ordinary assistant prose: an unlabeled
+		// refusal reads as an answer. An empty Text is meaningful — a provider
+		// may decline without explanation — so the label alone still shows.
+		if b.Text == "" {
+			return "[refused]"
+		}
+		return "[refused] " + b.Text
 	default:
 		return "[unsupported block]"
 	}

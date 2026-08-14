@@ -2174,8 +2174,9 @@ func (m Screen) focusedStatus() Status {
 func (m Screen) statusInputs() statusInputs {
 	_, live := m.transcript.projectionFor(m.focusedLoopID)
 	in := statusInputs{
-		streaming:        live.Text != "",
-		thinking:         live.Text == "" && live.Thinking != "",
+		// A refusal is output, not reasoning, so it counts as streaming here.
+		streaming:        live.Text != "" || live.Refusal != "",
+		thinking:         live.Text == "" && live.Refusal == "" && live.Thinking != "",
 		compactionActive: m.compaction.IsActive(m.focusedLoopID),
 	}
 	if p := m.activePrompt(); p != nil {

@@ -1160,6 +1160,76 @@ func TestTranscriptMultiStepSeparateEntries(t *testing.T) {
 	}
 }
 
+// refusalChunk builds a real *content.RefusalChunk TokenDelta event carrying s.
+func refusalChunk(s string) event.Event {
+	return event.TokenDelta{Chunk: &content.RefusalChunk{Text: s}}
+}
+
+// TestTranscriptRefusalIsVisibleAndNotNarration locks the refusal path end to end.
+// A refusal is the model DECLINING, so it must (a) reach the transcript at all —
+// a refusal-only step has no TextBlock and would otherwise be dropped as a
+// pure-tool step — and (b) stay labeled rather than read as an ordinary answer.
+func TestTranscriptRefusalIsVisibleAndNotNarration(t *testing.T) {
+	t.Parallel()
+	refusal := &content.AIMessage{Message: content.Message{Role: content.RoleAssistant, Blocks: []content.Block{
+		&content.RefusalBlock{Text: "I will not do that."},
+	}}}
+
+	var m transcriptModel
+	for _, ev := range []event.Event{event.TurnStarted{}, refusalChunk("I will not"), stepDone(refusal), event.TurnDone{}} {
+		m = m.ApplyEvent(ev)
+	}
+
+	if len(m.testCommitted()) != 1 {
+		t.Fatalf("committed = %d, want 1 (the refusal), entries %+v", len(m.testCommitted()), m.testCommitted())
+	}
+	e := m.testCommitted()[0]
+	if e.Kind != kindAssistant {
+		t.Fatalf("committed[0].Kind = %v, want kindAssistant", e.Kind)
+	}
+	if _, ok := e.Blocks[0].(*content.RefusalBlock); !ok {
+		t.Fatalf("committed block = %T, want *content.RefusalBlock (never folded into text)", e.Blocks[0])
+	}
+	got := assistantText(e.Blocks)
+	if got == "I will not do that." {
+		t.Fatal("refusal rendered as bare narration; it must be labeled as a decline")
+	}
+	if !strings.Contains(got, "I will not do that.") || !strings.Contains(got, "refused") {
+		t.Errorf("rendered refusal = %q, want the labeled refusal text", got)
+	}
+}
+
+// TestLiveSegAppliesRefusalChunks locks the streaming fold: refusal deltas
+// accumulate apart from narration, count as non-thinking output, and survive an
+// interrupted turn's provisional commit as their own block.
+func TestLiveSegAppliesRefusalChunks(t *testing.T) {
+	t.Parallel()
+	var s liveSeg
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.applyChunk(&content.ThinkingChunk{Thinking: "hmm"}, at)
+	s.applyChunk(&content.RefusalChunk{Text: "I will "}, at.Add(time.Second))
+	s.applyChunk(&content.RefusalChunk{Text: "not."}, at.Add(2*time.Second))
+
+	if s.Refusal != "I will not." {
+		t.Errorf("Refusal = %q, want the concatenated deltas", s.Refusal)
+	}
+	if s.Text != "" {
+		t.Errorf("Text = %q, want empty — a refusal is not narration", s.Text)
+	}
+	if s.thinkEnd.IsZero() {
+		t.Error("a refusal did not seal the thinking span; it is output, not reasoning")
+	}
+	if s.empty() {
+		t.Error("a segment carrying only a refusal reported empty and would never commit")
+	}
+
+	// An image chunk is a byte fragment with no partial display form.
+	s.applyChunk(&content.ImageChunk{MediaType: content.MediaTypeImagePNG, Source: content.ImageSource{Data: []byte{1}}}, at)
+	if s.Text != "" || s.Refusal != "I will not." {
+		t.Errorf("image chunk leaked into prose: Text=%q Refusal=%q", s.Text, s.Refusal)
+	}
+}
+
 // errBoom is a typed test error whose message is "boom".
 type errBoom struct{}
 
