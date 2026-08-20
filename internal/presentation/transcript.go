@@ -492,6 +492,7 @@ type subagentAccumulator struct {
 	children []ToolCallView // nested tool cards from the child's StepDone groups
 	steps    int            // count of the child's StepDone events
 	status   subStatus      // the child terminal state (running until a terminal arrives)
+	failure  string         // the child TurnFailed error; empty for other terminals
 	nested   int            // depth-2 collapsed counter (Task 7; zero here)
 	// reconciled marks that the orchestrator's StepDone has copied this accumulator onto
 	// its committed Subagent card (reconcileSubagent). Until then the accumulator is
@@ -602,15 +603,19 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 	case event.UserInputRequested:
 		m.userInputRequested(ev)
 	case event.TurnDone:
-		m.subagentTerminal(ev.LoopID, subDone)
+		m.subagentTerminal(ev.LoopID, subDone, "")
 		m.clearLoopAccums(ev.LoopID)
 		m.commitLive()
 	case event.TurnInterrupted:
-		m.subagentTerminal(ev.LoopID, subInterrupted)
+		m.subagentTerminal(ev.LoopID, subInterrupted, "")
 		m.clearLoopAccums(ev.LoopID)
 		m.turnInterrupted()
 	case event.TurnFailed:
-		m.subagentTerminal(ev.LoopID, subFailed)
+		failure := ""
+		if ev.Err != nil {
+			failure = ev.Err.Error()
+		}
+		m.subagentTerminal(ev.LoopID, subFailed, failure)
 		m.clearLoopAccums(ev.LoopID)
 		m.turnFailed(ev)
 	}
@@ -1416,13 +1421,14 @@ func (m transcriptModel) depth1Key(loopID uuid.UUID) (spawnKey, bool) {
 // subagentTerminal records a child loop's terminal status on its accumulator and
 // reports whether loopID was a recorded subagent child. Each terminal still finalizes that
 // loop's own projection; this hook only updates the detached parent-card accumulator.
-func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus) bool {
+func (m *transcriptModel) subagentTerminal(loopID uuid.UUID, status subStatus, failure string) bool {
 	key, ok := m.loopParent[loopID]
 	if !ok {
 		return false
 	}
 	acc := m.ensureAccum(key)
 	acc.status = status
+	acc.failure = failure
 	m.updateReconciledSubagent(key)
 	if acc.reconciled {
 		m.retireSubagentAccum(loopID, key)
@@ -1470,6 +1476,7 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 	// The done summary is the hand-back text; suppress the card's own result body so it
 	// is not also shown as the normal result preview (design §4: no doubling).
 	card.Result = splitLines(subagentTruncate(toolResultText(results[use.ID])))
+	card.Result = subagentResult(acc, card.Result)
 	// Mark the accumulator reconciled (in-place, consistent with the rest of the
 	// accumulator's fill): the card now lives in the committed transcript, so the live
 	// tail must stop rendering it as a pending in-flight card (pendingSubagentCards).
@@ -1544,6 +1551,7 @@ func (m *transcriptModel) reconcileCommittedSubagent(key spawnKey) {
 	card.Steps = acc.steps
 	card.SubStatus = acc.status
 	card.Nested = acc.nested
+	card.Result = subagentResult(acc, card.Result)
 	card.spawn = key
 	acc.reconciled = true
 	acc.committedID = entry.ID
@@ -1574,6 +1582,17 @@ func (m transcriptModel) matchSubagentAccum(key spawnKey) (*subagentAccumulator,
 	return match, matchKey, match != nil
 }
 
+// subagentResult preserves the parent tool-result/handback summary for every child state
+// except failure. A failed child's terminal error is authoritative: unlike the parent's
+// generic or stale tool result, it identifies the exact runtime failure that ended the
+// child loop.
+func subagentResult(acc *subagentAccumulator, fallback []string) []string {
+	if acc.status == subFailed {
+		return splitLines(subagentTruncate(acc.failure))
+	}
+	return fallback
+}
+
 // pendingSubagentCards returns, in stable creation order (accumOrder), one ToolCallView
 // per NOT-YET-reconciled accumulator — the in-flight subagent cards the LIVE tail renders
 // WHILE the subagent streams (its ENDURING child events fill the accumulator before the
@@ -1597,7 +1616,7 @@ func (m transcriptModel) pendingSubagentCards() []ToolCallView {
 		if len(children) > liveCallCap {
 			children = children[len(children)-liveCallCap:]
 		}
-		out = append(out, ToolCallView{
+		card := ToolCallView{
 			ToolName:  startAgentToolName,
 			Agent:     acc.agent,
 			Task:      acc.task,
@@ -1605,7 +1624,9 @@ func (m transcriptModel) pendingSubagentCards() []ToolCallView {
 			Steps:     acc.steps,
 			SubStatus: acc.status,
 			Nested:    acc.nested,
-		})
+		}
+		card.Result = subagentResult(acc, card.Result)
+		out = append(out, card)
 	}
 	return out
 }
@@ -1624,7 +1645,9 @@ func (m transcriptModel) pendingSubagentCardsFor(parentLoopID uuid.UUID) []ToolC
 		if len(children) > liveCallCap {
 			children = children[len(children)-liveCallCap:]
 		}
-		out = append(out, ToolCallView{ToolName: startAgentToolName, Agent: acc.agent, Task: acc.task, Children: append([]ToolCallView(nil), children...), Steps: acc.steps, SubStatus: acc.status, Nested: acc.nested})
+		card := ToolCallView{ToolName: startAgentToolName, Agent: acc.agent, Task: acc.task, Children: append([]ToolCallView(nil), children...), Steps: acc.steps, SubStatus: acc.status, Nested: acc.nested}
+		card.Result = subagentResult(acc, card.Result)
+		out = append(out, card)
 	}
 	return out
 }
@@ -1900,6 +1923,7 @@ func (m *transcriptModel) updateReconciledSubagent(key spawnKey) {
 		card.Steps = acc.steps
 		card.SubStatus = acc.status
 		card.Nested = acc.nested
+		card.Result = subagentResult(acc, card.Result)
 		return
 	}
 }

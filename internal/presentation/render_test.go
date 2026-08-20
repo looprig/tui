@@ -1464,6 +1464,21 @@ func TestRenderEntrySubagentCardTerminals(t *testing.T) {
 	}
 }
 
+func TestRenderSubagentFailedCardShowsExactReason(t *testing.T) {
+	t.Parallel()
+
+	card := ToolCallView{
+		ToolName:  startAgentToolName,
+		Agent:     "generic",
+		SubStatus: subFailed,
+		Result:    []string{"model unavailable"},
+	}
+	got := stripANSI(renderSubagentCard(card, false, 120))
+	if !strings.Contains(got, `failed · 0 steps — "model unavailable"`) {
+		t.Fatalf("renderSubagentCard() = %q, want exact failure reason", got)
+	}
+}
+
 // TestSubagentNodeStatus covers the child-loop terminal status → rail-node tint mapping:
 // subDone is the hollow OK node, subFailed and subInterrupted are the failed (red) node,
 // and subRunning is the pulsing node. stripANSI cannot distinguish the node colors, so

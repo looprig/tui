@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -2347,6 +2348,134 @@ func TestStartAgentCommittedBeforeChildTerminalUpdatesInPlace(t *testing.T) {
 	}
 	if cards[0].Agent != "generic" || cards[0].Steps != 1 || cards[0].SubStatus != subDone {
 		t.Fatalf("updated committed card = %+v, want generic done with 1 step", cards[0])
+	}
+}
+
+func TestStartAgentFailureBeforeParentStepOverridesToolResult(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_failed_before_parent"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	m = m.ApplyEvent(childTurnStarted(sub, "inspect the runtime"))
+	m = m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New("model unavailable"),
+	})
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic","instructions":"inspect the runtime"}`)),
+		toolResult(toolUseID, `{"state":"failed","error":"agent failed"}`),
+	))
+
+	card := findSubagentCard(t, m)
+	if card.SubStatus != subFailed {
+		t.Fatalf("card.SubStatus = %v, want subFailed", card.SubStatus)
+	}
+	if !reflect.DeepEqual(card.Result, []string{"model unavailable"}) {
+		t.Fatalf("card.Result = %#v, want exact child failure", card.Result)
+	}
+	if got := renderSubagentCard(card, false, 120); !strings.Contains(stripANSI(got), `failed · 0 steps — "model unavailable"`) {
+		t.Fatalf("rendered failed card = %q, want exact terminal failure", stripANSI(got))
+	}
+}
+
+func TestStartAgentFailureAfterParentCommitUpdatesInPlace(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_failed_after_parent"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	m = m.ApplyEvent(childTurnStarted(sub, "inspect the runtime"))
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic","instructions":"inspect the runtime","wait_for_response":false}`)),
+		toolResult(toolUseID, `{"state":"running"}`),
+	))
+	m = m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New("harness unavailable"),
+	})
+
+	var cards []ToolCallView
+	committed, _ := m.projectionFor(primary)
+	for _, e := range committed {
+		for _, card := range e.Calls {
+			if card.ToolName == startAgentToolName {
+				cards = append(cards, card)
+			}
+		}
+	}
+	if len(cards) != 1 {
+		t.Fatalf("committed StartAgent cards = %d, want exactly 1; committed=%+v", len(cards), committed)
+	}
+	if cards[0].SubStatus != subFailed {
+		t.Fatalf("card.SubStatus = %v, want subFailed", cards[0].SubStatus)
+	}
+	if !reflect.DeepEqual(cards[0].Result, []string{"harness unavailable"}) {
+		t.Fatalf("card.Result = %#v, want exact child failure", cards[0].Result)
+	}
+}
+
+func TestStartAgentFailureAfterParentFirstReconciliationUpdatesInPlace(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_parent_before_child"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic"}`)),
+		toolResult(toolUseID, `{"state":"running"}`),
+	))
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	m = m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New("runtime unavailable"),
+	})
+
+	card := findSubagentCard(t, m)
+	if card.SubStatus != subFailed || !reflect.DeepEqual(card.Result, []string{"runtime unavailable"}) {
+		t.Fatalf("parent-first reconciled card = %+v, want one failed card with exact reason", card)
+	}
+}
+
+func TestPendingSubagentCardsShowCappedFailureReason(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_pending_failure"
+	failure := strings.Repeat("x", subagentLineCap+5) + "\nsecond line"
+	want := []string{strings.Repeat("x", subagentLineCap-1) + "…"}
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	m = m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New(failure),
+	})
+
+	all := m.pendingSubagentCards()
+	if len(all) != 1 || !reflect.DeepEqual(all[0].Result, want) {
+		t.Fatalf("pendingSubagentCards() = %+v, want capped failure %#v", all, want)
+	}
+	forParent := m.pendingSubagentCardsFor(primary)
+	if len(forParent) != 1 || !reflect.DeepEqual(forParent[0].Result, want) {
+		t.Fatalf("pendingSubagentCardsFor() = %+v, want capped failure %#v", forParent, want)
 	}
 }
 
