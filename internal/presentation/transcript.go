@@ -611,10 +611,7 @@ func (m transcriptModel) ApplyEvent(ev event.Event) transcriptModel {
 		m.clearLoopAccums(ev.LoopID)
 		m.turnInterrupted()
 	case event.TurnFailed:
-		failure := ""
-		if ev.Err != nil {
-			failure = ev.Err.Error()
-		}
+		failure := turnFailureMessage(ev.Err)
 		m.subagentTerminal(ev.LoopID, subFailed, failure)
 		m.clearLoopAccums(ev.LoopID)
 		m.turnFailed(ev)
@@ -1587,8 +1584,8 @@ func (m transcriptModel) matchSubagentAccum(key spawnKey) (*subagentAccumulator,
 // generic or stale tool result, it identifies the exact runtime failure that ended the
 // child loop.
 func subagentResult(acc *subagentAccumulator, fallback []string) []string {
-	if acc.status == subFailed {
-		return splitLines(subagentTruncate(acc.failure))
+	if failure := subagentTruncate(acc.failure); acc.status == subFailed && failure != "" {
+		return splitLines(failure)
 	}
 	return fallback
 }
@@ -1787,7 +1784,7 @@ func cloneLoopParent(p map[uuid.UUID]spawnKey) map[uuid.UUID]spawnKey {
 // (truncate). The full text remains in the durable journal. An empty/whitespace string
 // yields "".
 func subagentTruncate(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(s)
 	s = strings.TrimSpace(s)
 	return truncate(s, subagentLineCap)
 }
@@ -1951,10 +1948,7 @@ func (m *transcriptModel) turnInterrupted() {
 // live. The error-notice commit reuses the same noticeError path as CommitError.
 func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 	m.commitProse()
-	msg := ""
-	if ev.Err != nil {
-		msg = ev.Err.Error()
-	}
+	msg := turnFailureMessage(ev.Err)
 	m.nextID++
 	m.fold.committed = append(m.fold.committed, entry{
 		ID:     m.nextID,
@@ -1963,6 +1957,28 @@ func (m *transcriptModel) turnFailed(ev event.TurnFailed) {
 		Blocks: []content.Block{&content.TextBlock{Text: msg}},
 	})
 	m.fold.live = liveSeg{}
+}
+
+// turnFailureMessage projects a live or restored TurnFailed cause into the original
+// human-readable message. Durable restore errors expose their stable classification via
+// Error(), but Message is the original live Error() text; using it keeps live and replayed
+// transcript rows identical without mutating the event or changing harness semantics.
+func turnFailureMessage(err error) string {
+	switch err := err.(type) {
+	case *event.RestoredError:
+		if err != nil {
+			return err.Message
+		}
+	case *event.RestoredModelFacingError:
+		if err != nil {
+			return err.Message
+		}
+	default:
+		if err != nil {
+			return err.Error()
+		}
+	}
+	return ""
 }
 
 // projectionFor returns the global rows plus the requested loop's committed and live

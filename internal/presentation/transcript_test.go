@@ -1236,6 +1236,14 @@ type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
 
+type modelFacingPresentationError struct {
+	message string
+	detail  string
+}
+
+func (e modelFacingPresentationError) Error() string            { return e.message }
+func (e modelFacingPresentationError) ModelFacingError() string { return e.detail }
+
 // TestCommitUser locks the user-message commit: CommitUser appends exactly one
 // kindUser entry carrying the submitted blocks with a fresh, nonzero, stable ID;
 // a second CommitUser allocates a distinct ID; and empty blocks still commit one
@@ -2476,6 +2484,124 @@ func TestPendingSubagentCardsShowCappedFailureReason(t *testing.T) {
 	forParent := m.pendingSubagentCardsFor(primary)
 	if len(forParent) != 1 || !reflect.DeepEqual(forParent[0].Result, want) {
 		t.Fatalf("pendingSubagentCardsFor() = %+v, want capped failure %#v", forParent, want)
+	}
+}
+
+func TestStartAgentFailureReasonMatchesAfterDurableRestore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "ordinary restored error", err: errors.New("model unavailable")},
+		{name: "model-facing restored error", err: modelFacingPresentationError{message: "provider failure: model unavailable", detail: "model unavailable"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			primary := callID(0xA1)
+			sub := callID(0xB2)
+			parentTurn := callID(0xC3)
+			parentStep := callID(0xD4)
+			const toolUseID = "toolu_durable_failure"
+			setup := func() transcriptModel {
+				m := transcriptModel{}
+				m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, parentTurn, parentStep, toolUseID))
+				m = m.ApplyEvent(childTurnStarted(sub, "inspect the runtime"))
+				return m
+			}
+			parentDone := orchestratorStepDone(primary, parentTurn, parentStep,
+				aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic"}`)),
+				toolResult(toolUseID, "parent failure fallback"),
+			)
+			liveFailure := event.TurnFailed{
+				Header: event.Header{
+					Coordinates: identity.Coordinates{
+						SessionID: callID(0x11),
+						LoopID:    sub,
+						TurnID:    callID(0x33),
+					},
+					EventID:   callID(0x55),
+					CreatedAt: time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC),
+				},
+				TurnIndex: 1,
+				Err:       tt.err,
+			}
+			data, err := event.MarshalEvent(liveFailure)
+			if err != nil {
+				t.Fatalf("MarshalEvent() error = %v", err)
+			}
+			restoredEvent, err := event.UnmarshalEvent(data)
+			if err != nil {
+				t.Fatalf("UnmarshalEvent() error = %v", err)
+			}
+
+			live := setup().ApplyEvent(liveFailure).ApplyEvent(parentDone)
+			restored := setup().ApplyEvent(restoredEvent).ApplyEvent(parentDone)
+			liveCard := findSubagentCard(t, live)
+			restoredCard := findSubagentCard(t, restored)
+			if !reflect.DeepEqual(restoredCard.Result, liveCard.Result) {
+				t.Fatalf("restored failure = %#v, live failure = %#v", restoredCard.Result, liveCard.Result)
+			}
+			if !reflect.DeepEqual(liveCard.Result, []string{tt.err.Error()}) {
+				t.Fatalf("live failure = %#v, want original error %q", liveCard.Result, tt.err.Error())
+			}
+		})
+	}
+}
+
+func TestStartAgentNilFailurePreservesParentResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		parentBefore bool
+	}{
+		{name: "terminal before reconciliation"},
+		{name: "terminal after parent commit", parentBefore: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			primary := callID(0xA1)
+			sub := callID(0xB2)
+			turn := callID(0xC3)
+			step := callID(0xD4)
+			const toolUseID = "toolu_nil_failure"
+			const parentResult = "parent failure detail"
+			parentDone := orchestratorStepDone(primary, turn, step,
+				aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic"}`)),
+				toolResult(toolUseID, parentResult),
+			)
+
+			m := transcriptModel{}
+			m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+			if tt.parentBefore {
+				m = m.ApplyEvent(parentDone)
+			}
+			m = m.ApplyEvent(event.TurnFailed{Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}}})
+			if !tt.parentBefore {
+				m = m.ApplyEvent(parentDone)
+			}
+
+			card := findSubagentCard(t, m)
+			if card.SubStatus != subFailed {
+				t.Fatalf("card.SubStatus = %v, want subFailed", card.SubStatus)
+			}
+			if !reflect.DeepEqual(card.Result, []string{parentResult}) {
+				t.Fatalf("card.Result = %#v, want parent fallback %q", card.Result, parentResult)
+			}
+		})
+	}
+}
+
+func TestSubagentTruncateNormalizesAllLineEndings(t *testing.T) {
+	t.Parallel()
+
+	if got, want := subagentTruncate("one\r\ntwo\rthree\nfour"), "one two three four"; got != want {
+		t.Fatalf("subagentTruncate() = %q, want %q", got, want)
 	}
 }
 
