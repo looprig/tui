@@ -13,7 +13,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/looprig/harness v0.26.0
+	github.com/looprig/harness v0.27.1
 	github.com/yuin/goldmark v1.8.5
 )
 
