@@ -435,7 +435,8 @@ type transcriptModel struct {
 	// status. It is DETACHED (not state on a card) because the child's events precede the
 	// parent's StepDone (the parent card does not exist yet) and a cold restore rebuilds
 	// it from scratch. The orchestrator's StepDone reconciles each Subagent block against
-	// it by spawn key. It is cloned on write (value-copy contract).
+	// it by spawn key. The map and the target accumulator are cloned on every write
+	// (value-copy contract).
 	subagentAccum map[spawnKey]*subagentAccumulator
 	// accumOrder is the stable creation order of the subagentAccum keys (appended when an
 	// accumulator is first created in ensureAccum), so pendingSubagentCards renders the
@@ -482,10 +483,8 @@ type spawnKey struct {
 // TurnStarted→task, each StepDone→a child card + steps++, the terminal→status). The
 // orchestrator's StepDone copies these onto the committed Subagent ToolCallView (design
 // §3), and later child events refresh that card through committedID. It is a pointer in
-// the map so an in-place field bump (steps++, append a child)
-// is visible without re-storing — but the MAP is cloned on write so a by-value reducer
-// never aliases a prior model's map; a freshly-cloned map's pointers are themselves
-// freshly allocated when first created here (see ensureAccum).
+// the map, but every write goes through ensureAccum, which clones both the map and target
+// accumulator so prior reducer values remain immutable.
 type subagentAccumulator struct {
 	agent    string         // the child LoopStarted.AgentName
 	task     string         // the child's first TurnStarted.Message, truncated
@@ -498,11 +497,11 @@ type subagentAccumulator struct {
 	// its committed Subagent card (reconcileSubagent). Until then the accumulator is
 	// PENDING — pendingSubagentCards exposes it so the LIVE tail renders the in-flight
 	// nested card; once reconciled the card lives in scrollback and pendingSubagentCards
-	// skips it (no double render). It is set in-place at reconciliation, consistent with
-	// the rest of the accumulator's in-place fill.
+	// skips it (no double render).
 	reconciled bool
 	// committedID identifies the parent projection entry that owns the reconciled card,
-	// allowing later cross-loop child events to update that single card in place.
+	// allowing later cross-loop child events to update that single card in the next model
+	// snapshot.
 	committedID displayID
 }
 
@@ -1474,10 +1473,10 @@ func (m *transcriptModel) reconcileSubagent(ev event.StepDone, use content.ToolU
 	// is not also shown as the normal result preview (design §4: no doubling).
 	card.Result = splitLines(subagentTruncate(toolResultText(results[use.ID])))
 	card.Result = subagentResult(acc, card.Result)
-	// Mark the accumulator reconciled (in-place, consistent with the rest of the
-	// accumulator's fill): the card now lives in the committed transcript, so the live
-	// tail must stop rendering it as a pending in-flight card (pendingSubagentCards).
-	acc.reconciled = true
+	// Mark the accumulator reconciled through the copy-on-write boundary: the card now
+	// lives in the committed transcript, so the live tail must stop rendering it as a
+	// pending in-flight card (pendingSubagentCards).
+	m.ensureAccum(matchedKey).reconciled = true
 	return card
 }
 
@@ -1530,18 +1529,10 @@ func (m *transcriptModel) reconcileCommittedSubagent(key spawnKey) {
 		return
 	}
 
-	next := make(map[uuid.UUID]*loopProjection, len(m.projections))
-	for loopID, projection := range m.projections {
-		next[loopID] = projection
+	entry, card := m.writableCommittedCall(key.parentLoopID, match.entry, match.call)
+	if card == nil {
+		return
 	}
-	cloned := *p
-	cloned.committed = append([]entry(nil), p.committed...)
-	cloned.committed[match.entry].Calls = append([]ToolCallView(nil), p.committed[match.entry].Calls...)
-	next[key.parentLoopID] = &cloned
-	m.projections = next
-
-	entry := &cloned.committed[match.entry]
-	card := &entry.Calls[match.call]
 	card.Agent = acc.agent
 	card.Task = acc.task
 	card.Children = append([]ToolCallView(nil), acc.children...)
@@ -1550,8 +1541,9 @@ func (m *transcriptModel) reconcileCommittedSubagent(key spawnKey) {
 	card.Nested = acc.nested
 	card.Result = subagentResult(acc, card.Result)
 	card.spawn = key
-	acc.reconciled = true
-	acc.committedID = entry.ID
+	writable := m.ensureAccum(key)
+	writable.reconciled = true
+	writable.committedID = entry.ID
 }
 
 // matchSubagentAccum returns the accumulator owned by a committed parent Subagent call.
@@ -1661,19 +1653,25 @@ func isAgentSpawnTool(name string) bool {
 	return name == subagentToolName || name == startAgentToolName
 }
 
-// ensureAccum returns the accumulator for key, creating it (and cloning the map on
-// write) when absent so a child event can fill it before the parent card exists. The
-// returned pointer is owned by the (possibly freshly cloned) map, so in-place mutation
-// of its fields is the intended write path — the MAP clone, not a per-accumulator
-// clone, is what upholds the value-copy reducer contract (a child's events are folded
-// in document order into the one accumulator the parent later reads).
+// ensureAccum returns a writable accumulator for key. It always clones the map and, when
+// the key exists, the accumulator struct and children slice before returning. ApplyEvent is
+// a by-value reducer, so cloning only the map would leave its accumulator pointers shared
+// with prior model snapshots and make later child events mutate history retroactively.
+// When absent it creates the accumulator and records its stable display order.
 func (m *transcriptModel) ensureAccum(key spawnKey) *subagentAccumulator {
-	if acc, ok := m.subagentAccum[key]; ok {
-		return acc
-	}
 	next := make(map[spawnKey]*subagentAccumulator, len(m.subagentAccum)+1)
 	for k, v := range m.subagentAccum {
 		next[k] = v
+	}
+	if existing, ok := m.subagentAccum[key]; ok {
+		cloned := subagentAccumulator{}
+		if existing != nil {
+			cloned = *existing
+			cloned.children = append([]ToolCallView(nil), existing.children...)
+		}
+		next[key] = &cloned
+		m.subagentAccum = next
+		return &cloned
 	}
 	acc := &subagentAccumulator{}
 	next[key] = acc
@@ -1890,9 +1888,30 @@ func (m *transcriptModel) commitCall(call ToolCallView) {
 	})
 	if call.spawn != (spawnKey{}) {
 		if acc := m.subagentAccum[call.spawn]; acc != nil {
-			acc.committedID = m.nextID
+			m.ensureAccum(call.spawn).committedID = m.nextID
 		}
 	}
+}
+
+// writableCommittedCall clones the projection map, target projection, committed entries,
+// and target Calls slice before returning the requested card. This is the copy-on-write
+// boundary for cross-loop child updates to an already committed parent card.
+func (m *transcriptModel) writableCommittedCall(loopID uuid.UUID, entryIndex, callIndex int) (*entry, *ToolCallView) {
+	p := m.projections[loopID]
+	if p == nil || entryIndex < 0 || entryIndex >= len(p.committed) || callIndex < 0 || callIndex >= len(p.committed[entryIndex].Calls) {
+		return nil, nil
+	}
+	next := make(map[uuid.UUID]*loopProjection, len(m.projections))
+	for id, projection := range m.projections {
+		next[id] = projection
+	}
+	cloned := *p
+	cloned.committed = append([]entry(nil), p.committed...)
+	cloned.committed[entryIndex].Calls = append([]ToolCallView(nil), p.committed[entryIndex].Calls...)
+	next[loopID] = &cloned
+	m.projections = next
+	entry := &cloned.committed[entryIndex]
+	return entry, &entry.Calls[callIndex]
 }
 
 // updateReconciledSubagent refreshes the one committed parent card from its detached
@@ -1913,7 +1932,10 @@ func (m *transcriptModel) updateReconciledSubagent(key spawnKey) {
 		if e.ID != acc.committedID || len(e.Calls) != 1 {
 			continue
 		}
-		card := &e.Calls[0]
+		_, card := m.writableCommittedCall(key.parentLoopID, i, 0)
+		if card == nil {
+			return
+		}
 		card.Agent = acc.agent
 		card.Task = acc.task
 		card.Children = append([]ToolCallView(nil), acc.children...)

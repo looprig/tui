@@ -2433,6 +2433,126 @@ func TestStartAgentFailureAfterParentCommitUpdatesInPlace(t *testing.T) {
 	}
 }
 
+func TestStartAgentLateFailureDoesNotMutatePriorCommittedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_snapshot_failure"
+	const parentResult = `{"state":"running"}`
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	m = m.ApplyEvent(childTurnStarted(sub, "inspect the runtime"))
+	m = m.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic"}`)),
+		toolResult(toolUseID, parentResult),
+	))
+
+	before := m
+	after := m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New("model unavailable"),
+	})
+	countCards := func(model transcriptModel) int {
+		committed, _ := model.projectionFor(primary)
+		count := 0
+		for _, e := range committed {
+			for _, card := range e.Calls {
+				if card.ToolName == startAgentToolName {
+					count++
+				}
+			}
+		}
+		return count
+	}
+	if got := countCards(before); got != 1 {
+		t.Fatalf("prior committed StartAgent cards = %d, want exactly 1", got)
+	}
+	if got := countCards(after); got != 1 {
+		t.Fatalf("next committed StartAgent cards = %d, want exactly 1", got)
+	}
+
+	beforeCard := findSubagentCard(t, before)
+	if beforeCard.SubStatus != subRunning || !reflect.DeepEqual(beforeCard.Result, []string{parentResult}) {
+		t.Fatalf("prior committed snapshot mutated = %+v, want running with parent result", beforeCard)
+	}
+	afterCard := findSubagentCard(t, after)
+	if afterCard.SubStatus != subFailed || !reflect.DeepEqual(afterCard.Result, []string{"model unavailable"}) {
+		t.Fatalf("next committed snapshot = %+v, want failed with exact reason", afterCard)
+	}
+}
+
+func TestStartAgentLateFailureDoesNotMutatePriorPendingSnapshot(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_pending_snapshot_failure"
+
+	m := transcriptModel{}
+	m = m.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	before := m
+	after := m.ApplyEvent(event.TurnFailed{
+		Header: event.Header{Coordinates: identity.Coordinates{LoopID: sub}},
+		Err:    errors.New("model unavailable"),
+	})
+
+	beforeCards := before.pendingSubagentCardsFor(primary)
+	if len(beforeCards) != 1 || beforeCards[0].SubStatus != subRunning || len(beforeCards[0].Result) != 0 {
+		t.Fatalf("prior pending snapshot mutated = %+v, want one running card without result", beforeCards)
+	}
+	afterCards := after.pendingSubagentCardsFor(primary)
+	if len(afterCards) != 1 || afterCards[0].SubStatus != subFailed || !reflect.DeepEqual(afterCards[0].Result, []string{"model unavailable"}) {
+		t.Fatalf("next pending snapshot = %+v, want one failed card with exact reason", afterCards)
+	}
+}
+
+func TestStartAgentAccumulatorWritesDoNotMutatePriorSnapshots(t *testing.T) {
+	t.Parallel()
+
+	primary := callID(0xA1)
+	sub := callID(0xB2)
+	turn := callID(0xC3)
+	step := callID(0xD4)
+	const toolUseID = "toolu_accumulator_snapshots"
+
+	spawned := transcriptModel{}.ApplyEvent(childLoopStarted(sub, "generic", primary, turn, step, toolUseID))
+	withTask := spawned.ApplyEvent(childTurnStarted(sub, "inspect the runtime"))
+	if got := spawned.pendingSubagentCardsFor(primary); len(got) != 1 || got[0].Task != "" {
+		t.Fatalf("spawn snapshot after task write = %+v, want empty task", got)
+	}
+	if got := withTask.pendingSubagentCardsFor(primary); len(got) != 1 || got[0].Task != "inspect the runtime" {
+		t.Fatalf("task snapshot = %+v, want task text", got)
+	}
+
+	withStep := withTask.ApplyEvent(stepDoneFrom(sub,
+		aiMessage("", "", toolUse("child-read", "Read", `{"path":"README.md"}`)),
+		toolResult("child-read", "contents"),
+	))
+	if got := withTask.pendingSubagentCardsFor(primary); len(got) != 1 || got[0].Steps != 0 || len(got[0].Children) != 0 {
+		t.Fatalf("task snapshot after step write = %+v, want zero steps and children", got)
+	}
+	if got := withStep.pendingSubagentCardsFor(primary); len(got) != 1 || got[0].Steps != 1 || len(got[0].Children) != 1 {
+		t.Fatalf("step snapshot = %+v, want one step and child", got)
+	}
+
+	reconciled := withStep.ApplyEvent(orchestratorStepDone(primary, turn, step,
+		aiMessage("", "", toolUse(toolUseID, "StartAgent", `{"agent_type":"generic"}`)),
+		toolResult(toolUseID, `{"state":"running"}`),
+	))
+	if got := withStep.pendingSubagentCardsFor(primary); len(got) != 1 {
+		t.Fatalf("step snapshot after reconciliation = %+v, want pending card retained", got)
+	}
+	if got := reconciled.pendingSubagentCardsFor(primary); len(got) != 0 {
+		t.Fatalf("reconciled snapshot pending cards = %+v, want none", got)
+	}
+}
+
 func TestStartAgentFailureAfterParentFirstReconciliationUpdatesInPlace(t *testing.T) {
 	t.Parallel()
 
