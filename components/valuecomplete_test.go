@@ -39,3 +39,94 @@ func TestValueCompleteNavigationWrapsAndViewClamps(t *testing.T) {
 		t.Fatalf("mouse row selection = %q, want b", tray.Selected().ID)
 	}
 }
+
+// valueModels is the tray's real subject: a model list whose names are long, hyphenated and
+// near-identical, which is precisely why nobody types them in full.
+var valueModels = []ValueItem{
+	{ID: "opus-5", Label: "claude-opus-5", Description: "deepest reasoning", Aliases: []string{"opus"}},
+	{ID: "sonnet-4-5", Label: "claude-sonnet-4-5", Description: "balanced", Aliases: []string{"sonnet"}},
+	{ID: "haiku-4-5", Label: "claude-haiku-4-5", Description: "cheap and quick", Aliases: []string{"fast"}},
+}
+
+// TestValueCompleteMatchesSubsequences pins the fuzzy matcher. "sn45" is not a substring of
+// anything -- the matcher it replaced found nothing for it -- but it is how someone reaches
+// for claude-sonnet-4-5 without typing seventeen characters, and it must land on that one
+// model rather than on the whole catalog.
+func TestValueCompleteMatchesSubsequences(t *testing.T) {
+	t.Parallel()
+
+	tray := NewValueComplete(valueModels, "sn45")
+	if tray == nil {
+		t.Fatal("sn45 matched nothing, want claude-sonnet-4-5")
+	}
+	if got := tray.Len(); got != 1 {
+		t.Fatalf("sn45 matched %d choices, want just claude-sonnet-4-5", got)
+	}
+	if got := tray.Selected().ID; got != "sonnet-4-5" {
+		t.Errorf("sn45 selected %q, want the sonnet-4-5 payload", got)
+	}
+
+	// The description is no longer searched, and that is deliberate: fuzzy is a
+	// subsequence test, so matching prose would put most of the catalog behind any short
+	// query with nothing underlined to explain why. See valueFilter.
+	if NewValueComplete(valueModels, "deepest reasoning") != nil {
+		t.Error("a term found only in a description matched, want the description ignored")
+	}
+}
+
+// TestValueCompleteMatchesAliasesWithoutUnderlining pins both halves of the alias decision:
+// an alias still finds its model, and an alias match contributes NO rune indices, so it can
+// never underline a rune of the label that the user did not type.
+//
+// Two models match here so the assertion lands on an UNSELECTED row: styles.SelectedRow
+// strips inner styling on its light fill, so the selected row never carries an underline and
+// asserting there would test the band rather than the match.
+func TestValueCompleteMatchesAliasesWithoutUnderlining(t *testing.T) {
+	t.Parallel()
+
+	// Neither label contains an f, so every match below can only have come from an alias.
+	tray := NewValueComplete([]ValueItem{
+		{ID: "haiku-4-5", Label: "claude-haiku-4-5", Aliases: []string{"fast"}},
+		{ID: "flash", Label: "gemini-2-5-lite", Aliases: []string{"fastest"}},
+	}, "fast")
+	if tray == nil {
+		t.Fatal("an alias term matched nothing, want both aliased models")
+	}
+	if got := tray.Len(); got != 2 {
+		t.Fatalf("alias term matched %d choices, want 2", got)
+	}
+	if got := tray.Selected().ID; got != "haiku-4-5" {
+		t.Errorf("selected = %q, want the first aliased model's payload", got)
+	}
+
+	lines := strings.Split(tray.ViewWindow(60, 2), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("tray drew %d rows, want 2:\n%q", len(lines), lines)
+	}
+	// Composed through the tray's own style rather than spelled as a raw escape, so the
+	// assertion cannot drift from what lipgloss emits.
+	underline, _, _ := strings.Cut(trayMatchStyle.Render("x"), "x")
+	if underline == "" {
+		t.Fatal("trayMatchStyle no longer emits an opening sequence; the check below is vacuous")
+	}
+	if row := lines[1]; strings.Contains(row, underline) {
+		t.Errorf("an alias-only match underlined runes of the label: %q", row)
+	}
+}
+
+// TestValueCompleteCopiesAliases pins the defensive copy. The tray outlives the call that
+// built it, and the aliases arrive on a slice the catalog still owns, so a refresh rewriting
+// that slice must not change what a tray the user is already typing into matches or returns.
+func TestValueCompleteCopiesAliases(t *testing.T) {
+	t.Parallel()
+
+	aliases := []string{"fast"}
+	tray := NewValueComplete([]ValueItem{{ID: "haiku-4-5", Label: "claude-haiku-4-5", Aliases: aliases}}, "")
+	if tray == nil {
+		t.Fatal("an unfiltered tray of one choice is nil, want the choice")
+	}
+	aliases[0] = "slow"
+	if got := tray.Selected().Aliases; len(got) != 1 || got[0] != "fast" {
+		t.Errorf("aliases = %q, want [fast]: the tray is sharing the caller's slice", got)
+	}
+}
