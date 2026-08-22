@@ -22,9 +22,14 @@ var CardPanelBg = lipgloss.Color("#242527")
 // dialog look), rather than only the ▸ cursor.
 var CardSelectedBg = lipgloss.Color("#2c3a5a")
 
-// TraySelectedBg is the completion tray's settled selection fill. It is lighter and more
-// blue than the gate-card selection while remaining dark enough for faint path/description
-// text. Screen animates toward this endpoint; standalone component views render it directly.
+// TraySelectedBg WAS the completion tray's settled selection fill, and no longer is: the
+// tray bands its selected row with SelectedRow, which owns the fill itself so no surface can
+// drift to its own shade. Nothing reads this value to paint a tray row any more.
+//
+// It survives only as the endpoint of the tray-open glow animation in internal/presentation,
+// which SelectedRow's one-argument signature has cut off from the row it used to tint, and
+// as the default argument the four tray panels still pass to their ViewWindowBackground.
+// Both go away with the task that migrates the last panel, and this token with them.
 var TraySelectedBg = lipgloss.Color("#3A526B")
 
 // CardRailStyle colors the gate card's left ▌ rail the brand blue, matching the user card's
