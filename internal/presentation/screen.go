@@ -145,6 +145,12 @@ type Screen struct {
 	// glow tick so it can animate smoothly without speeding up the status shimmer.
 	anim animState
 
+	// keyPanelOpen shows the transient `?` key legend below the composer (keypanel.go). It is
+	// a PEEK, not a mode: `?` on an empty composer opens it, and the next key of ANY kind
+	// closes it while still doing its own job. It is pure chrome — never committed to the
+	// transcript, unlike the /help slash command's command catalogue.
+	keyPanelOpen bool
+
 	// quitting latches on ctrl+c or /exit so the continuous anim tick chain self-terminates instead of
 	// leaking a reschedule past tea.Quit: handleAnim stops re-arming once it is set.
 	quitting        bool
@@ -1185,6 +1191,23 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.quitting {
 		return m, nil
 	}
+	// Precedence (0): the transient key panel. `?` on an empty composer toggles it (see
+	// keyPanelToggles for why that guard is the whole feature). Once it is open the NEXT key
+	// of any kind DISMISSES it and then falls through to do its normal job — it is a peek,
+	// not a mode, so nothing is ever swallowed and no key needs to know the panel exists.
+	// Esc closes it as one instance of that rule, and still interrupts.
+	if m.keyPanelToggles(msg) {
+		m.keyPanelOpen = !m.keyPanelOpen
+		m.resize()
+		return m, nil
+	}
+	if m.keyPanelOpen {
+		m.keyPanelOpen = false
+		// The panel's rows return to the content region, so the viewport is re-sized before
+		// the dismissing key runs: a path below that returns without its own resize (a
+		// global chord) would otherwise leave the viewport short by panelH rows.
+		m.resize()
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m, m.beginGracefulQuit()
@@ -1541,8 +1564,8 @@ func (m *Screen) contentMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
 // (which draws the regions) and regionAt (which hit-tests a mouse row) compute from, so a
 // drawn row and a hit-tested row can never disagree. Top to bottom: the content region
 // occupies rows [0, contentH); then an inert blank pad row, the status line, a blank gap row,
-// an optional completion tray, the bottom box, a second blank gap row, and finally the
-// active-loops bar at the very bottom.
+// an optional completion tray, the bottom box, an optional transient key panel, a second
+// blank gap row, and finally the active-loops bar at the very bottom.
 type screenLayout struct {
 	contentH int // viewport content rows: region [0, contentH)
 	padTopY  int // the inert blank pad row between the content and the status line
@@ -1552,6 +1575,8 @@ type screenLayout struct {
 	trayH    int // the completion tray's rendered height; zero when hidden
 	boxTop   int // the first row of the bottom box
 	boxH     int // the bottom box's rendered height
+	panelTop int // the first row of the optional transient key panel
+	panelH   int // the key panel's rendered height; zero when closed
 	gapBotY  int // the inert blank gap row between the box and the loop bar
 	barY     int // the loop bar row (the very bottom)
 	barH     int // wrapped footer row count
@@ -1563,8 +1588,16 @@ type screenLayout struct {
 // whatever remains after that (floored at 0). Because it is deterministic in the model state,
 // View and regionAt compute the identical layout.
 //
-// The row order is pad → status → gap → optional tray → box → gap → bar. There is deliberately
-// no blank row between tray and box, so their accent rails read as one continuous surface.
+// The row order is pad → status → gap → optional tray → box → optional key panel → gap → bar.
+// There is deliberately no blank row between tray and box, so their accent rails read as one
+// continuous surface, nor between box and key panel, so the legend reads as belonging to the
+// composer it describes rather than floating above the loop bar.
+//
+// The key panel's height is a function of the WIDTH alone (dropped columns), then clamped to
+// the rows left over, so re-measuring it at its own height is the identity — the same fixed
+// point the tray's ViewWindow has. Both are required: layout() and composeBody each render
+// these regions independently, and every row below one of them lands wrong if the two
+// renders disagree by even a line.
 //
 // NOT side-effect-free: measuring the box (bottomBoxView → the bubbles textarea's View)
 // drives the textarea's internal render/measure cache, so layout must run only on Bubble
@@ -1589,7 +1622,12 @@ func (m Screen) layout() screenLayout {
 	if tray := m.completionTrayView(trayBudget); tray != "" {
 		trayH = lipgloss.Height(tray)
 	}
-	contentH := m.height - fixedH - trayH
+	// The key panel claims from what the tray left. In practice the two never coexist —
+	// `?` only toggles the panel in compose mode with no tray open, and the slash/@path
+	// completers need composer text the panel's empty-composer guard forbids — but the
+	// arithmetic is written so that BOTH being visible still yields a frame that fits.
+	panelH := m.keyPanelHeight(trayBudget - trayH)
+	contentH := m.height - fixedH - trayH - panelH
 	if contentH < 0 {
 		contentH = 0
 	}
@@ -1598,7 +1636,8 @@ func (m Screen) layout() screenLayout {
 	gapTopY := statusY + statusH
 	trayTop := gapTopY + gapH
 	boxTop := trayTop + trayH
-	gapBotY := boxTop + boxH
+	panelTop := boxTop + boxH
+	gapBotY := panelTop + panelH
 	barY := gapBotY + gapH
 	return screenLayout{
 		contentH: contentH,
@@ -1609,6 +1648,8 @@ func (m Screen) layout() screenLayout {
 		trayH:    trayH,
 		boxTop:   boxTop,
 		boxH:     boxH,
+		panelTop: panelTop,
+		panelH:   panelH,
 		gapBotY:  gapBotY,
 		barY:     barY,
 		barH:     barH,
@@ -1634,6 +1675,9 @@ const (
 // inert blank pad row above the status line, the two blank gap rows (and any row past the bar)
 // are regionGap — inert, no mouse behavior. Completion tray rows are regionTray so pointer
 // motion can select them without ever being mistaken for transcript content or composer rows.
+// The transient key panel's rows fall through to regionGap: it is a read-only legend with
+// nothing to click, and it must NOT read as regionContent (which would let a click there
+// toggle a fold in the transcript scrolled behind it).
 func (m Screen) regionAt(y int) screenRegion {
 	lay := m.layout()
 	switch {
@@ -2193,12 +2237,12 @@ func formatElapsed(d time.Duration) string {
 }
 
 // View composes the frame top to bottom — the viewport content (the focused projection with
-// collapse), one status line, a blank gap, an optional completion tray, the bottom box, a
-// blank gap, and the active-loops bar — and returns a per-frame View with the modern
-// configuration: AltScreen on and all-motion mouse (the v2 per-frame mode required for
-// pointer-only hover as well as copy-while-scrolling), plus the composer's Kitty
-// keyboard request (see Screen.View for why). It returns an empty view until the first sized
-// frame (avoids a 0×0 first frame).
+// collapse), one status line, a blank gap, an optional completion tray, the bottom box, an
+// optional transient key panel, a blank gap, and the active-loops bar — and returns a
+// per-frame View with the modern configuration: AltScreen on and all-motion mouse (the v2
+// per-frame mode required for pointer-only hover as well as copy-while-scrolling), plus the
+// composer's Kitty keyboard request (see Screen.View for why). It returns an empty view until
+// the first sized frame (avoids a 0×0 first frame).
 func (m Screen) View() tea.View {
 	if !m.ready {
 		return tea.NewView("")
@@ -2213,10 +2257,11 @@ func (m Screen) View() tea.View {
 // composeBody stacks the frame's rows for lay: the viewport content padded/clamped to
 // EXACTLY contentH rows (so the chrome sits at the fixed rows regionAt assumes), then an inert
 // blank pad row, the status line, an inert blank gap row, the optional completion tray, the
-// bottom box, a second inert blank gap row, and the active-loops bar at the very bottom. The
-// tray directly touches the input so their thick rails connect. The blank pad row sets the
-// status line off the content above it, and the input box sits ABOVE the loop bar, set off by
-// a blank row so the chrome does not read as cramped. The viewport is sized to
+// bottom box, the optional transient key panel, a second inert blank gap row, and the
+// active-loops bar at the very bottom. The tray directly touches the input so their thick
+// rails connect, and the key panel directly follows the input it documents. The blank pad row
+// sets the status line off the content above it, and the input box sits ABOVE the loop bar,
+// set off by a blank row so the chrome does not read as cramped. The viewport is sized to
 // lay.contentH on a LOCAL copy before rendering, so the drawn content region always matches
 // the current layout even if the bottom chrome changed since the last Update-side
 // resize/rerender. Every line is width-clamped (truncate, never wrap) so no row exceeds the
@@ -2242,8 +2287,11 @@ func (m Screen) composeBody(lay screenLayout) string {
 		rows = append(rows, strings.Split(tray, "\n")...) // completion tray (touches input)
 	}
 	rows = append(rows, strings.Split(m.bottomBoxView(), "\n")...) // bottom box (input)
-	rows = append(rows, "")                                        // inert gap: box → bar
-	rows = append(rows, m.footerView())                            // rig + profile + workspace + local loop focus
+	if panel := m.keyPanelView(lay.panelH); panel != "" {
+		rows = append(rows, strings.Split(panel, "\n")...) // transient `?` key legend
+	}
+	rows = append(rows, "")             // inert gap: box/panel → bar
+	rows = append(rows, m.footerView()) // rig + profile + workspace + local loop focus
 	return clampSurfaceWidth(strings.Join(rows, "\n"), m.width)
 }
 
