@@ -13,12 +13,40 @@ type completionTrayRow struct {
 	secondary string
 }
 
+// completionTrayPrimaryColumn is the display width every primary is padded out to so the
+// secondaries line up down the tray instead of trailing each command raggedly.
+//
+// It is the widest primary among the rows that HAVE a secondary. A row with no description
+// paints nothing at that column, so letting a long bare primary push the column right would
+// only cost width and buy nothing. It is recomputed per render from the rows actually being
+// drawn, so a scrolled window aligns to what is on screen rather than to a row the user
+// cannot see.
+func completionTrayPrimaryColumn(rows []completionTrayRow) int {
+	column := 0
+	for _, row := range rows {
+		if row.secondary == "" {
+			continue
+		}
+		column = max(column, ansi.StringWidth(row.primary))
+	}
+	return column
+}
+
+// completionTrayGap is the run of spaces between a primary and its secondary: enough to pad
+// the primary out to the shared column, plus the two-space gutter that separates the two
+// columns. Measuring and rendering both go through it, so the natural width can never
+// disagree with what is drawn.
+func completionTrayGap(primary string, column int) string {
+	return strings.Repeat(" ", max(0, column-ansi.StringWidth(primary))+2)
+}
+
 func completionTrayNaturalWidth(rows []completionTrayRow) int {
+	column := completionTrayPrimaryColumn(rows)
 	width := 0
 	for _, row := range rows {
 		line := styles.AccentBar + " " + row.primary
 		if row.secondary != "" {
-			line += "  " + row.secondary
+			line += completionTrayGap(row.primary, column) + row.secondary
 		}
 		width = max(width, ansi.StringWidth(line))
 	}
@@ -43,6 +71,7 @@ func renderCompletionTrayBackground(rows []completionTrayRow, selected, width in
 	}
 
 	panelOpen, panelReset := styles.DeriveBackgroundSGR(styles.PanelBg)
+	column := completionTrayPrimaryColumn(rows)
 	rendered := make([]string, len(rows))
 	for i, row := range rows {
 		// The rail is the SAME neutral gray on every row, selected or not. It is the
@@ -56,7 +85,7 @@ func renderCompletionTrayBackground(rows []completionTrayRow, selected, width in
 
 		styled := rail + " " + row.primary
 		if row.secondary != "" {
-			styled += "  " + styles.CardHintStyle.Render(row.secondary)
+			styled += completionTrayGap(row.primary, column) + styles.CardHintStyle.Render(row.secondary)
 		}
 		// SelectedRow pads but never truncates, so clamp to width first — that is the
 		// caller's half of the contract.
