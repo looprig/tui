@@ -157,10 +157,24 @@ type prompt struct {
 	// (tool.Requirement.Description / tool.RuleCandidate.Description) — the TUI never
 	// reconstructs a rule or parses tool arguments.
 	Requirements []requirementLine
-	Question     string   // promptUserInput: the AskUser question
-	Choices      []string // promptUserInput: selectable choices (nil → free-text)
-	selected     int      // promptUserInput: cursor over Choices
-	freeText     bool     // promptUserInput: true when there are no Choices
+	// approval is the promptPermission cursor over approvalHints — which action row the
+	// card bands and enter resolves.
+	//
+	// It is deliberately NOT the promptUserInput `selected` cursor, even though only one
+	// of the two is ever live on a given prompt. The two have incompatible invariants:
+	// approval wraps modulo the three fixed approval actions, while selected is clamped
+	// to len(Choices) and is then used as an UNCHECKED index into that slice
+	// (interaction.go choiceKey). Sharing one int would make the choice card's index
+	// safety a matter of convention — "the wrapping mover is never called on a prompt
+	// with Choices" — rather than of construction. One int is cheaper than that argument.
+	//
+	// promptFromPermission starts it on gate.ApprovalDeny, not at zero: the module's rule
+	// is fail secure, so the row a stray enter lands on must block the tool call.
+	approval int
+	Question string   // promptUserInput: the AskUser question
+	Choices  []string // promptUserInput: selectable choices (nil → free-text)
+	selected int      // promptUserInput: cursor over Choices
+	freeText bool     // promptUserInput: true when there are no Choices
 
 	// promptForm fields. GateID is carried directly because a form gate is folded
 	// from GateOpened, which names the gate outright — unlike a permission or
@@ -443,12 +457,17 @@ type requirementLine struct {
 // candidate is projected into a single prompt — the TUI renders the typed payload and
 // never reconstructs a rule or parses tool arguments. freeText is false: a permission
 // gate is never free-text.
+//
+// The action cursor starts on Deny rather than at index zero. Fail secure: the card can
+// appear under a user's hands mid-typing, so the row a blind enter resolves must be the
+// one that blocks the call.
 func promptFromPermission(callID uuid.UUID, req tool.Request) prompt {
 	p := prompt{
 		ToolExecutionID: callID,
 		Kind:            promptPermission,
 		ToolName:        req.ToolName,
 		Summary:         req.Summary,
+		approval:        denyHintIndex(),
 	}
 	for _, requirement := range req.Requirements {
 		line := requirementLine{Description: requirement.Description}
@@ -504,6 +523,50 @@ func (p *prompt) moveSelection(delta int) {
 	p.selected = next
 }
 
+// moveApproval shifts the permission action cursor by delta, WRAPPING modulo the number
+// of approval actions so ↑/↓ cycle the short fixed list rather than sticking at its ends.
+// The double modulo normalizes Go's negative remainder, so an ↑ off the top lands on the
+// last row. An out-of-range cursor (see approvalAt) is normalized on the first move.
+//
+// It is the up/down handler for permission mode; like moveSelection, the value-copy router
+// calls it on the head of the RETURNED model's freshly-cloned slice.
+func (p *prompt) moveApproval(delta int) {
+	n := len(approvalHints)
+	if n == 0 {
+		p.approval = 0
+		return
+	}
+	p.approval = ((p.approval+delta)%n + n) % n
+}
+
+// approvalAt is the action the permission cursor at i names.
+//
+// A cursor that names no row yields gate.ApprovalDeny. That is the fail-secure rule, not
+// defensiveness: an ambiguous cursor must block the tool call, and falling back to index 0
+// would instead resolve it to Approve.
+func approvalAt(i int) gate.ApprovalAction {
+	if i < 0 || i >= len(approvalHints) {
+		return gate.ApprovalDeny
+	}
+	return approvalHints[i].action
+}
+
+// denyHintIndex is where a fresh permission prompt's action cursor starts: the
+// gate.ApprovalDeny row. It is LOOKED UP rather than hardcoded so the fail-secure default
+// cannot silently become "approve" if the control order ever changes.
+//
+// A hint list with no deny row returns -1, which names no row: nothing is banded and
+// approvalAt denies. Falling back to 0 would put the cursor on Approve, which is the one
+// answer this function must never give.
+func denyHintIndex() int {
+	for i, h := range approvalHints {
+		if h.action == gate.ApprovalDeny {
+			return i
+		}
+	}
+	return -1
+}
+
 // approvalHint pairs one of the three exact approval actions (gate.ApprovalAction)
 // with the key that produces it. The keys match the modal router
 // (interaction.go permissionKey): y approves, a approves-always-for-this-workspace,
@@ -514,9 +577,10 @@ type approvalHint struct {
 	action gate.ApprovalAction
 }
 
-// approvalHints is the ordered permission legend, one hint per gate.ApprovalControls
-// control. It is derived from the shared control set so a control can never drift from
-// its key: the labels ARE the gate.ApprovalAction values the session validates against.
+// approvalHints is the ordered permission action list, one selectable row per
+// gate.ApprovalControls control. It is derived from the shared control set so a control
+// can never drift from its key: the labels ARE the gate.ApprovalAction values the session
+// validates against.
 var approvalHints = []approvalHint{
 	{"y", gate.ApprovalApprove},
 	{"a", gate.ApprovalApproveAlwaysWorkspace},
@@ -534,10 +598,14 @@ const (
 // renderPermissionBox renders the ONE combined tool-preparation approval prompt as a
 // blue-panel card: a bold "Approve <ToolName>?" title, the request summary, then EVERY
 // unmet requirement's description with its exact persisted rule candidates beneath it,
-// and a footer offering exactly the three actions gate.ApprovalControls declares
-// (Approve / Approve always for this workspace / Deny), keyed y/a/n. When pending > 1 a
-// faint "(+N more pending)" note trails the card. It renders the typed payload only —
-// no agent, no mutation, no rule reconstruction.
+// and then one SELECTABLE row per action gate.ApprovalControls declares (Approve / Approve
+// always for this workspace / Deny), keyed y/a/n. When pending > 1 a faint "(+N more
+// pending)" note trails the card. It renders the typed payload only — no agent, no
+// mutation, no rule reconstruction.
+//
+// The rows carry no per-action consequence note. The labels ARE the gate.ApprovalAction
+// values and the requirement tree above already lists, candidate by candidate, exactly what
+// an "always" approval persists — a note beside the row would restate it less precisely.
 func renderPermissionBox(p prompt, width, pending int) string {
 	textW := cardTextWidth(width)
 	sections := make([]string, 0, 4)
@@ -548,12 +616,24 @@ func renderPermissionBox(p prompt, width, pending int) string {
 	if body := permissionRequirementsBody(p, textW); body != "" {
 		sections = append(sections, body)
 	}
-	footer := make([]string, 0, len(approvalHints))
-	for _, h := range approvalHints {
-		footer = append(footer, styleKeyHint("["+h.key+"] "+string(h.action)))
-	}
-	sections = append(sections, strings.Join(footer, "  "))
+	sections = append(sections, permissionActionRows(p, textW))
 	return cardFrame(cardSections(sections...), width, pending)
+}
+
+// permissionActionRows renders the approval actions as one keyRow per hint, the row at
+// p.approval banded by styles.SelectedRow. It is the SAME row shape and the SAME band the
+// AskUser choice card uses, which is the point: an approval and a choice must not read as
+// two different kinds of thing, and neither carries a cursor glyph — the band is the cursor.
+func permissionActionRows(p prompt, textW int) string {
+	rows := make([]string, 0, len(approvalHints))
+	for i, h := range approvalHints {
+		row := keyRow("["+h.key+"]", string(h.action), textW)
+		if i == p.approval {
+			row = styles.SelectedRow(row, textW)
+		}
+		rows = append(rows, row)
+	}
+	return strings.Join(rows, "\n")
 }
 
 // permissionRequirementsBody renders every unmet requirement and, indented beneath

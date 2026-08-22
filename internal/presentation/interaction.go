@@ -500,19 +500,59 @@ func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, 
 // esc deny fail-secure (gate.ApprovalDeny). There is no session scope, user-global
 // scope, or per-capability sub-prompt. An approve/deny resolves the head, so it pops
 // optimistically; any other key re-renders.
+//
+// The actions are also SELECTABLE rows: ↑/↓ move the band (resolving nothing) and enter
+// resolves the banded row. The two paths are equals, not alternatives — y/a/n remain
+// one-keystroke accelerators rather than becoming labels on a list you must walk.
+//
+// Binding enter is the one key here that can resolve a gate the user never named, so the
+// cursor starts on Deny (promptFromPermission) and an out-of-range cursor denies
+// (approvalAt). A card can appear under a user's hands mid-typing; the blind keystroke must
+// block the call.
 func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
 	head := *m.ActivePrompt()
 	if msg.Code == tea.KeyEsc {
-		return m.pop(), uiAction{Kind: uiDeny, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID}
+		return m.resolveApproval(head, gate.ApprovalDeny)
+	}
+	if isEnter(msg) {
+		return m.resolveApproval(head, approvalAt(head.approval))
 	}
 	switch msg.Code {
+	case tea.KeyUp:
+		return m.approveBy(-1)
+	case tea.KeyDown:
+		return m.approveBy(1)
 	case 'y':
-		return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Approval: gate.ApprovalApprove}
+		return m.resolveApproval(head, gate.ApprovalApprove)
 	case 'a':
-		return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Approval: gate.ApprovalApproveAlwaysWorkspace}
+		return m.resolveApproval(head, gate.ApprovalApproveAlwaysWorkspace)
 	case 'n':
-		return m.pop(), uiAction{Kind: uiDeny, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID}
+		return m.resolveApproval(head, gate.ApprovalDeny)
 	}
+	return m, noop
+}
+
+// resolveApproval pops the head and turns action into the request Screen dispatches.
+//
+// It is the ONE place an approval decision becomes a uiAction, so the direct y/a/n
+// accelerators and the enter-on-the-banded-row path cannot diverge — one of them growing a
+// bug the other does not have is exactly the failure this surface cannot afford. Anything
+// that is not one of the two exact approve actions is a deny: fail secure, so an action
+// that fell through every case blocks the call rather than falling through to running it.
+func (m interactionModel) resolveApproval(head prompt, action gate.ApprovalAction) (interactionModel, uiAction) {
+	if action == gate.ApprovalApprove || action == gate.ApprovalApproveAlwaysWorkspace {
+		return m.pop(), uiAction{Kind: uiApprove, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Approval: action}
+	}
+	return m.pop(), uiAction{Kind: uiDeny, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID}
+}
+
+// approveBy moves the head permission action cursor by delta and returns a no-op —
+// navigating is local state and must never resolve the gate on its own. Like selectBy, the
+// head is cloned before mutating because the returned model shares its backing array with
+// the caller under the value-copy model.
+func (m interactionModel) approveBy(delta int) (interactionModel, uiAction) {
+	m.pending = cloneHead(m.pending)
+	m.pending[0].moveApproval(delta)
 	return m, noop
 }
 

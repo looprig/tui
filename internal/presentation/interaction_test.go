@@ -513,25 +513,34 @@ func TestInteractionClearPromptsForLoopDrainsAndRestores(t *testing.T) {
 	}
 }
 
-// TestInteractionNonComposeUpdateIsNoop covers the deferral to Task 8: while a
-// prompt is active (non-compose mode), Update returns noop for now (modal routing
-// is the next task) and never submits.
-func TestInteractionNonComposeUpdateIsNoop(t *testing.T) {
+// TestInteractionPromptModeEnterNeverSubmits pins what enter may and may not do while a
+// permission card is active. It must never reach the composer's submit path: a card
+// preempts the editor, and a half-written message must not be sent by a keystroke aimed at
+// the card. What it does do is resolve the gate the FAIL-SECURE way — the action cursor
+// starts on Deny, so an enter pressed blind blocks the tool call rather than running it.
+//
+// This assertion used to be "enter is a plain no-op here", which held only because
+// permission mode had no enter binding at all. Selectable action rows gave it one; the
+// invariants that survive are "never a submit" and "never a blind approve".
+func TestInteractionPromptModeEnterNeverSubmits(t *testing.T) {
 	t.Parallel()
 
 	m := newInteractionModel()
+	m.input.SetValue("a half-written message")
 	m = m.ApplyEvent(event.PermissionRequested{
 		ToolExecutionID: callID(1),
 		Request:         bashPermission("go build"),
 	})
 
 	m, action, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if action.Kind != uiNoop {
-		t.Errorf("non-compose Update Kind = %d, want uiNoop (%d)", action.Kind, uiNoop)
+	if action.Kind == uiSubmit {
+		t.Fatalf("enter in permission mode submitted the composer: %q", action.Text)
 	}
-	// The prompt is still pending — non-compose Update did not resolve it.
-	if m.PendingCount() != 1 {
-		t.Errorf("PendingCount = %d, want 1 (unchanged)", m.PendingCount())
+	if action.Kind != uiDeny {
+		t.Errorf("enter in permission mode Kind = %d, want uiDeny (%d) — a blind enter must fail secure", action.Kind, uiDeny)
+	}
+	if m.PendingCount() != 0 {
+		t.Errorf("PendingCount = %d, want 0 (enter resolved the gate)", m.PendingCount())
 	}
 }
 
@@ -541,6 +550,12 @@ func TestInteractionNonComposeUpdateIsNoop(t *testing.T) {
 func runeKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
+
+// upKey, downKey and enterKey build the non-printable presses the prompt cards route on.
+// They carry no Text, matching how a terminal reports a navigation key.
+func upKey() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: tea.KeyUp} }
+func downKey() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyDown} }
+func enterKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 
 // permissionModel returns an interaction model already in permission mode for one
 // gate (callID 1) built from req.
@@ -1120,5 +1135,100 @@ func TestInteractionChildGateRoutable(t *testing.T) {
 	m = m.ApplyEvent(event.TurnDone{Header: event.Header{Coordinates: identity.Coordinates{LoopID: child}}})
 	if m.PendingCount() != 0 {
 		t.Errorf("PendingCount after child TurnDone = %d, want 0 (child gate cleared by its own terminal)", m.PendingCount())
+	}
+}
+
+// TestInteractionPermissionSelectionAndAccelerators proves BOTH ways of resolving the
+// combined permission gate, which is the point of making the action rows selectable: the
+// direct y/a/n accelerators still resolve it in one keystroke, AND moving the band with
+// ↑/↓ then pressing enter resolves the row the band names. Making the rows selectable must
+// not turn the accelerators into decoration.
+//
+// It also pins the fail-secure edges. The cursor starts on Deny, so enter pressed blind —
+// the realistic accident, a card appearing under a user's hands mid-typing — DENIES. ↑/↓
+// alone resolve nothing (no pop, no action), so navigating cannot approve by itself. And
+// esc still denies, unchanged.
+func TestInteractionPermissionSelectionAndAccelerators(t *testing.T) {
+	t.Parallel()
+
+	req := bashPermission("go build")
+
+	tests := []struct {
+		name         string
+		keys         []tea.KeyPressMsg
+		wantKind     uiActionKind
+		wantApproval gate.ApprovalAction
+		wantPop      bool
+	}{
+		{name: "enter on the default row denies (fail secure)", keys: []tea.KeyPressMsg{enterKey()}, wantKind: uiDeny, wantPop: true},
+		{name: "down from deny wraps to approve, enter approves", keys: []tea.KeyPressMsg{downKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "up from deny reaches approve-always, enter approves it", keys: []tea.KeyPressMsg{upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
+		{name: "a full down cycle returns to deny", keys: []tea.KeyPressMsg{downKey(), downKey(), downKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
+		{name: "navigating alone resolves nothing", keys: []tea.KeyPressMsg{downKey(), upKey(), downKey()}, wantKind: uiNoop, wantPop: false},
+		{name: "y still approves directly", keys: []tea.KeyPressMsg{runeKey('y')}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "a still approves always for this workspace directly", keys: []tea.KeyPressMsg{runeKey('a')}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
+		{name: "n still denies directly", keys: []tea.KeyPressMsg{runeKey('n')}, wantKind: uiDeny, wantPop: true},
+		{name: "y after navigating away still approves, not the banded row", keys: []tea.KeyPressMsg{downKey(), runeKey('y')}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "esc still denies", keys: []tea.KeyPressMsg{{Code: tea.KeyEsc}}, wantKind: uiDeny, wantPop: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := permissionModel(req)
+			var action uiAction
+			for _, key := range tt.keys {
+				m, action, _ = m.Update(key)
+			}
+
+			if action.Kind != tt.wantKind {
+				t.Fatalf("action.Kind = %d, want %d", action.Kind, tt.wantKind)
+			}
+			if tt.wantKind == uiApprove && action.Approval != tt.wantApproval {
+				t.Errorf("approve Approval = %q, want %q", action.Approval, tt.wantApproval)
+			}
+			if tt.wantKind != uiNoop && action.ToolExecutionID != callID(1) {
+				t.Errorf("action ToolExecutionID = %v, want %v", action.ToolExecutionID, callID(1))
+			}
+			wantPending := 1
+			if tt.wantPop {
+				wantPending = 0
+			}
+			if m.PendingCount() != wantPending {
+				t.Errorf("PendingCount = %d, want %d (pop=%v)", m.PendingCount(), wantPending, tt.wantPop)
+			}
+		})
+	}
+}
+
+// TestPermissionCursorIsNotTheChoiceCursor pins that the permission action cursor and the
+// AskUser choice cursor are SEPARATE state. They have incompatible invariants — one wraps
+// modulo the three fixed approval actions, the other is clamped to len(Choices) and is used
+// as an UNCHECKED index into that slice (choiceKey) — so one field serving both would make
+// the choice card's index safety a matter of convention rather than construction.
+func TestPermissionCursorIsNotTheChoiceCursor(t *testing.T) {
+	t.Parallel()
+
+	// A permission prompt that also carries choices (the shape a shared field would make
+	// dangerous). Moving the approval cursor must not touch the choice cursor, and vice
+	// versa.
+	p := promptFromPermission(callID(1), bashPermission("go build"))
+	p.Choices = []string{"alpha"}
+
+	before := p.selected
+	p.moveApproval(1)
+	p.moveApproval(1)
+	if p.selected != before {
+		t.Errorf("moving the approval cursor moved the choice cursor: selected = %d, want %d", p.selected, before)
+	}
+	if p.selected >= len(p.Choices) {
+		t.Errorf("choice cursor %d is out of range for %d choices — Choices[selected] would panic", p.selected, len(p.Choices))
+	}
+
+	approval := p.approval
+	p.moveSelection(1)
+	if p.approval != approval {
+		t.Errorf("moving the choice cursor moved the approval cursor: approval = %d, want %d", p.approval, approval)
 	}
 }

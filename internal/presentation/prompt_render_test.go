@@ -406,3 +406,62 @@ func TestChoiceRowFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestPermissionRowsAreSelectable pins the permission card's new shape: one row per
+// approvalHints entry, each with a bracketed accelerator, the row at p.approval BANDED,
+// and no cursor glyph anywhere — the same treatment the AskUser choice card uses, so the
+// two cards read alike. The labels are asserted against the exact gate.ApprovalAction
+// values so the control set still cannot drift.
+func TestPermissionRowsAreSelectable(t *testing.T) {
+	t.Parallel()
+
+	p := prompt{ToolName: "Bash", approval: 1}
+	rendered := renderPermissionBox(p, 60, 1)
+	got := stripANSI(rendered)
+
+	for _, want := range []string{
+		"[y] " + string(gate.ApprovalApprove),
+		"[a] " + string(gate.ApprovalApproveAlwaysWorkspace),
+		"[n] " + string(gate.ApprovalDeny),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("permission card missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "▸") {
+		t.Errorf("permission card uses a cursor glyph:\n%s", got)
+	}
+	assertBandedRow(t, rendered, "[a] "+string(gate.ApprovalApproveAlwaysWorkspace))
+}
+
+// TestPermissionBandFollowsTheCursor pins that the band tracks p.approval — exactly one
+// row banded, and it is the one the cursor names. assertBandedRow's "exactly one" half is
+// the load-bearing part: two banded rows would mean two cursors.
+func TestPermissionBandFollowsTheCursor(t *testing.T) {
+	t.Parallel()
+
+	for i, h := range approvalHints {
+		p := prompt{ToolName: "Bash", approval: i}
+		assertBandedRow(t, renderPermissionBox(p, 60, 1), "["+h.key+"] "+string(h.action))
+	}
+}
+
+// TestPermissionCursorFailsSecure covers the two fail-secure properties of the action
+// cursor. A freshly built permission prompt starts on Deny, so the action a stray enter
+// lands on blocks the tool call rather than running it. And a cursor that names no row at
+// all resolves to Deny rather than to whatever sits at index 0.
+func TestPermissionCursorFailsSecure(t *testing.T) {
+	t.Parallel()
+
+	p := promptFromPermission(callID(1), bashPermission("rm -rf /"))
+	if got := approvalAt(p.approval); got != gate.ApprovalDeny {
+		t.Errorf("fresh permission prompt selects %q, want %q", got, gate.ApprovalDeny)
+	}
+	assertBandedRow(t, renderPermissionBox(p, 60, 1), "[n] "+string(gate.ApprovalDeny))
+
+	for _, i := range []int{-1, len(approvalHints), 1 << 20} {
+		if got := approvalAt(i); got != gate.ApprovalDeny {
+			t.Errorf("approvalAt(%d) = %q, want %q", i, got, gate.ApprovalDeny)
+		}
+	}
+}
