@@ -467,12 +467,56 @@ func TestKeyRowNeverOverflowsWidth(t *testing.T) {
 func TestFormRowFitsWidth(t *testing.T) {
 	t.Parallel()
 
-	const width = 30
-	for _, focused := range []bool{false, true} {
-		f := formField{Label: strings.Repeat("longfieldlabel", 6), Kind: gate.FieldText, editor: newFormEditor(strings.Repeat("v", 40))}
-		row := stripANSI(formRow(&f, focused, width))
-		if got := lipgloss.Width(row); got != width {
-			t.Errorf("focused=%v: form row width = %d, want %d (%q)", focused, got, width, row)
+	labels := map[string]string{
+		"overlong ascii": strings.Repeat("longfieldlabel", 6),
+		"short ascii":    "Note",
+		// A CJK label is the case a rune count gets wrong: the lead-in is 2 cells per
+		// rune, so the continuation rows are indented by CELLS or they do not line up
+		// under the first row and the field stops spanning the card.
+		"cjk": "日本語のラベル",
+	}
+	for name, label := range labels {
+		for _, width := range []int{12, 20, 30, 48} {
+			for _, focused := range []bool{false, true} {
+				f := formField{Label: label, Kind: gate.FieldText, editor: newFormEditor(strings.Repeat("v", 40))}
+				row := stripANSI(formRow(&f, focused, width))
+				if got := lipgloss.Width(row); got != width {
+					t.Errorf("%s/%d/focused=%v: form row width = %d, want %d (%q)", name, width, focused, got, width, row)
+				}
+			}
+		}
+	}
+}
+
+// TestFormRowKeepsTheWholeValue pins that a growing text field never LOSES the answer to
+// the row's column budget. Whatever the label costs, the value wraps into the columns
+// left over and every one of its characters reaches the card.
+//
+// This is the half of the row contract the width clamp cannot see. A clamped row is
+// exactly the card width whether the budget was right or wrong, so a field that wrapped
+// at the wrong column — charged for a cursor prefix it does not pay, indented by runes
+// instead of cells, handed a lead-in that was never clipped — looks perfect to a width
+// check while quietly cutting the tail off every row. A field that grows exists so an
+// answer is never clipped; that is the thing to pin.
+func TestFormRowKeepsTheWholeValue(t *testing.T) {
+	t.Parallel()
+
+	const value = "abcdefghijklmnopqrstuvwxyz0123456789"
+	labels := map[string]string{
+		"short ascii":    "Note",
+		"overlong ascii": strings.Repeat("longfieldlabel", 6),
+		"cjk":            "日本語のラベル",
+	}
+	for name, label := range labels {
+		for _, width := range []int{12, 20, 30, 48} {
+			f := formField{Label: label, Kind: gate.FieldText, editor: newFormEditor(value)}
+			// The value wraps into fixed-width chunks padded with spaces, so dropping the
+			// whitespace and the row breaks puts it back together contiguously.
+			row := stripANSI(formRow(&f, true, width))
+			joined := strings.NewReplacer(" ", "", "\n", "").Replace(row)
+			if !strings.Contains(joined, value) {
+				t.Errorf("%s/%d: the value did not survive the row: %q", name, width, row)
+			}
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
@@ -551,5 +552,124 @@ func TestFormFieldBoundsValueLength(t *testing.T) {
 	}
 	if strings.Contains(got, "b") {
 		t.Error("a keystroke past the bound was accepted")
+	}
+}
+
+// assertFormCardFits fails when any row of a rendered form card is wider than the card.
+//
+// An over-wide row is not a cosmetic problem. cardFrame lays the card out row by row and
+// the surface reserves a height from that count, so a row the TERMINAL has to fold pushes
+// every row beneath it one line down, off its ▌ rail and out of the reservation.
+//
+// Rows are measured in DISPLAY CELLS on the styled string, which is the unit the terminal
+// lays a row out in: a rune count would let two CJK columns pass for one, and a cell count
+// taken after stripping ANSI would miss nothing but is no safer.
+func assertFormCardFits(t *testing.T, card string, width int, what string) {
+	t.Helper()
+	for i, line := range strings.Split(card, "\n") {
+		if got := ansi.StringWidth(line); got > width {
+			t.Errorf("%s: row %d is %d cells wide in a %d-column card (over by %d): %q",
+				what, i, got, width, got-width, stripANSI(line))
+		}
+	}
+}
+
+// formWidthSchema is the width-guard fixture: one required text field seeded with value,
+// plus a select and a confirm whose labels are deliberately wider than a narrow card, so
+// the guard covers a clipped lead-in as well as a wrapped one.
+func formWidthSchema(label, value string) gate.PromptSchema {
+	return gate.PromptSchema{Fields: []gate.Field{
+		{Name: "note", Label: label, Kind: gate.FieldText, Required: true, Default: json.RawMessage(strconv.Quote(value))},
+		{Name: "region", Label: "Region", Kind: gate.FieldSelect, Options: []gate.Option{
+			{Value: "eu", Label: strings.Repeat("Europe ", 6)},
+		}},
+		{Name: "consent", Label: strings.Repeat("Share telemetry ", 3), Kind: gate.FieldConfirm},
+	}}
+}
+
+// TestFormCardRowsFitCardWidth pins every row of a form card to the card width, across
+// card widths, field values and which field holds the focus.
+//
+// A GROWING field makes this sharper than a fixed one: the row's height is a function of
+// the value AND the columns the label leaves it, so the column budget has to be right at
+// every width rather than merely at the one the card is usually drawn at. The values
+// include a token with nowhere to break and CJK text, because a 2-cell rune must not be
+// allowed to straddle the limit.
+func TestFormCardRowsFitCardWidth(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"empty":          "",
+		"short":          "ada",
+		"wrapping prose": strings.Repeat("value ", 12),
+		"unbroken token": strings.Repeat("x", 80),
+		"cjk":            strings.Repeat("日本語", 14),
+		"cjk and spaces": strings.Repeat("日本 ", 14),
+	}
+	labels := map[string]string{
+		"short label": "Note",
+		"long label":  strings.Repeat("a rather long field label ", 3),
+	}
+
+	// The narrow end matters most: the cursor column and the "<label>: " lead-in are
+	// emitted whether or not the card has room for them, so a card too narrow to hold
+	// its own chrome is where an unclamped row runs over — the same failure keyRow
+	// clamps for. Three columns is the floor of the card itself, not of the rows: the ▌
+	// rail takes cardRailWidth and cardTextWidth floors the body at one more, so a
+	// narrower card cannot be asked for and is not a claim this makes.
+	for _, width := range []int{3, 4, 6, 9, 12, 16, 20, 28, 40, 60, 80} {
+		for labelName, label := range labels {
+			for valueName, value := range values {
+				name := strconv.Itoa(width) + "/" + labelName + "/" + valueName
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					m := formModel(formWidthSchema(label, value), gate.FormActionAccept, gate.FormActionDecline)
+					// Walk the focus over every field: only the focused row is banded, and
+					// the band is exactly what pads a row to the card without clipping it.
+					for focus := 0; focus < 3; focus++ {
+						p := m.ActivePrompt()
+						assertFormCardFits(t, renderFormBox(*p, width, 1), width, name+" focus="+strconv.Itoa(focus))
+						// The validation notice is a card row too, and it appears only after
+						// a refused submit.
+						invalid := *p
+						invalid.invalid = true
+						assertFormCardFits(t, renderFormBox(invalid, width, 1), width, name+" invalid focus="+strconv.Itoa(focus))
+						m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+					}
+					// An unsupported schema is a card too — a different body and a
+					// different legend, and no field rows to hide behind.
+					unsupported := *m.ActivePrompt()
+					unsupported.unsupported = true
+					assertFormCardFits(t, renderFormBox(unsupported, width, 1), width, name+" unsupported")
+				})
+			}
+		}
+	}
+}
+
+// TestFormCardWidthSurvivesGrowth re-checks the card after EVERY keystroke. A field that
+// grows changes the card's shape as the user types, so the row budget has to hold at each
+// intermediate value — including the keystroke that tips the value onto a new row, which
+// is exactly where an off-by-one in the column budget shows up.
+func TestFormCardWidthSurvivesGrowth(t *testing.T) {
+	t.Parallel()
+
+	texts := map[string]string{
+		"ascii": "the quick brown fox jumps over the lazy dog",
+		"cjk":   "日本語のテキストが折り返されるところ",
+	}
+	for _, width := range []int{3, 8, 16, 24, 34, 48} {
+		for name, text := range texts {
+			name := strconv.Itoa(width) + "/" + name
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				m := formModel(formSchema(), gate.FormActionAccept, gate.FormActionDecline)
+				for i, r := range text {
+					m, _, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+					card := renderFormBox(*m.ActivePrompt(), width, 1)
+					assertFormCardFits(t, card, width, name+" after keystroke "+strconv.Itoa(i))
+				}
+			})
+		}
 	}
 }
