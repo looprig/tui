@@ -1232,3 +1232,154 @@ func TestPermissionCursorIsNotTheChoiceCursor(t *testing.T) {
 		t.Errorf("moving the choice cursor moved the approval cursor: approval = %d, want %d", p.approval, approval)
 	}
 }
+
+// modKey builds a MODIFIED press of a printable key the way bubbletea v2 reports one:
+// Key.Code is the unshifted, unmodified key and Key.Mod carries the chord, so ctrl+a and a
+// bare a are distinguishable ONLY through Mod/Text — never through Code alone. Shifted keys
+// additionally carry the shifted Text ("A" for shift+a), which is what Key.String() renders.
+func modKey(code rune, mod tea.KeyMod, text string) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Mod: mod, Text: text}
+}
+
+// TestInteractionApprovalAcceleratorsIgnoreModifiedKeys is the security pin on the
+// permission card: a MODIFIED key that merely shares a Code with an accelerator must never
+// resolve the gate.
+//
+// Key.Code is the unshifted, unmodified key, so ctrl+a, alt+a and shift+a (capital A) all
+// arrive with Code == 'a'. A router that switches on Code alone therefore reads every one of
+// them as the [a] accelerator and persists a workspace-wide always-approve rule for a
+// keystroke the user never aimed at the card. ctrl+a is readline's beginning-of-line, which
+// users press constantly in the composer, so this is an ordinary typo away — and it defeats
+// the card's own threat model, the one the enter path was hardened for: a card can appear
+// under a user's hands mid-typing, and that blind keystroke must block the call, not grant a
+// standing grant.
+//
+// Every case here must be uiNoop with the gate still pending. ctrl+n/alt+n are included even
+// though deny is the fail-secure answer: resolving a gate the user never answered is the bug,
+// and which way it resolves is not the point.
+func TestInteractionApprovalAcceleratorsIgnoreModifiedKeys(t *testing.T) {
+	t.Parallel()
+
+	req := bashPermission("go build")
+
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "shift+a (capital A) does not approve always", key: modKey('a', tea.ModShift, "A")},
+		{name: "ctrl+a does not approve always", key: modKey('a', tea.ModCtrl, "")},
+		{name: "alt+a does not approve always", key: modKey('a', tea.ModAlt, "")},
+		{name: "ctrl+y does not approve", key: modKey('y', tea.ModCtrl, "")},
+		{name: "shift+y (capital Y) does not approve", key: modKey('y', tea.ModShift, "Y")},
+		{name: "alt+y does not approve", key: modKey('y', tea.ModAlt, "")},
+		{name: "ctrl+n does not deny", key: modKey('n', tea.ModCtrl, "")},
+		{name: "shift+n (capital N) does not deny", key: modKey('n', tea.ModShift, "N")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := permissionModel(req)
+			m, action, _ := m.Update(tt.key)
+
+			if action.Kind != uiNoop {
+				t.Errorf("%s resolved the gate: action.Kind = %d, want uiNoop (%d) with Approval %q",
+					tt.key.String(), action.Kind, uiNoop, action.Approval)
+			}
+			if m.PendingCount() != 1 {
+				t.Errorf("%s popped the gate: PendingCount = %d, want 1 (still awaiting the user)",
+					tt.key.String(), m.PendingCount())
+			}
+		})
+	}
+}
+
+// TestInteractionApprovalAcceleratorsAllowLockModifiers is the other half of the pin above,
+// and the reason the accelerators match Key.String() rather than rejecting every press with
+// a non-zero Key.Mod.
+//
+// Num lock is reported as a MODIFIER on ordinary printable keys, so a plain a typed with num
+// lock on arrives as Code 'a', Text "a", Mod ModNumLock — non-zero Mod, yet unambiguously the
+// [a] key. A `Mod != 0` guard would silently break the accelerators for anyone with num lock
+// on; Key.String() renders that press "a" and matches, which is why it is the right test.
+//
+// Caps lock is the opposite case and is deliberately NOT accepted: it renders "A", the card
+// cannot tell it from shift+a, and an ambiguous keystroke on a privilege gate must do nothing
+// rather than guess. ↑/↓ + enter still reach every action.
+func TestInteractionApprovalAcceleratorsAllowLockModifiers(t *testing.T) {
+	t.Parallel()
+
+	req := bashPermission("go build")
+
+	t.Run("num lock does not disable the accelerator", func(t *testing.T) {
+		t.Parallel()
+
+		m := permissionModel(req)
+		m, action, _ := m.Update(modKey('a', tea.ModNumLock, "a"))
+
+		if action.Kind != uiApprove || action.Approval != gate.ApprovalApproveAlwaysWorkspace {
+			t.Errorf("num lock + a: Kind = %d Approval = %q, want uiApprove (%d) %q",
+				action.Kind, action.Approval, uiApprove, gate.ApprovalApproveAlwaysWorkspace)
+		}
+		if m.PendingCount() != 0 {
+			t.Errorf("PendingCount = %d, want 0 (accelerator resolved the gate)", m.PendingCount())
+		}
+	})
+
+	t.Run("caps lock is ambiguous and resolves nothing", func(t *testing.T) {
+		t.Parallel()
+
+		m := permissionModel(req)
+		m, action, _ := m.Update(modKey('a', tea.ModCapsLock, "A"))
+
+		if action.Kind != uiNoop {
+			t.Errorf("caps lock + a: Kind = %d, want uiNoop (%d)", action.Kind, uiNoop)
+		}
+		if m.PendingCount() != 1 {
+			t.Errorf("PendingCount = %d, want 1 (ambiguous press resolves nothing)", m.PendingCount())
+		}
+	})
+}
+
+// TestInteractionChoiceAcceleratorsIgnoreModifiedKeys is the same pin on the AskUser choice
+// card, whose o and 1–9 accelerators had the identical Code-only flaw: ctrl+o, alt+1 and
+// shift+O all resolved the prompt.
+//
+// Answering an AskUser is not a privilege grant, so this is the milder half. It is fixed
+// alongside the permission card precisely so the two cards cannot drift: one shared rule for
+// what counts as pressing an accelerator is what keeps a fix to one from missing the other.
+func TestInteractionChoiceAcceleratorsIgnoreModifiedKeys(t *testing.T) {
+	t.Parallel()
+
+	three := []string{"alpha", "beta", "gamma"}
+
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "ctrl+o does not answer other", key: modKey('o', tea.ModCtrl, "")},
+		{name: "alt+o does not answer other", key: modKey('o', tea.ModAlt, "")},
+		{name: "shift+o (capital O) does not answer other", key: modKey('o', tea.ModShift, "O")},
+		{name: "ctrl+1 does not answer the first choice", key: modKey('1', tea.ModCtrl, "")},
+		{name: "alt+1 does not answer the first choice", key: modKey('1', tea.ModAlt, "")},
+		{name: "alt+3 does not answer the third choice", key: modKey('3', tea.ModAlt, "")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := choiceModel(three)
+			m, action, _ := m.Update(tt.key)
+
+			if action.Kind != uiNoop {
+				t.Errorf("%s resolved the prompt: action.Kind = %d, want uiNoop (%d) with Text %q",
+					tt.key.String(), action.Kind, uiNoop, action.Text)
+			}
+			if m.PendingCount() != 1 {
+				t.Errorf("%s popped the prompt: PendingCount = %d, want 1", tt.key.String(), m.PendingCount())
+			}
+		})
+	}
+}

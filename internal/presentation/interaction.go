@@ -344,6 +344,29 @@ var noop = uiAction{Kind: uiNoop}
 // submit in one mode yet be typed literally in another.
 func isEnter(msg tea.KeyPressMsg) bool { return msg.String() == "enter" }
 
+// accelerator is the keystroke msg names for the prompt cards' single-key accelerators
+// (y/a/n on the permission card, o and 1–9 on the choice card): the RENDERED key, so
+// matching it means the user pressed that key and nothing else.
+//
+// Matching tea.KeyPressMsg.Code instead is the trap. Code is the UNSHIFTED, UNMODIFIED key
+// — the chord lives in Key.Mod — so ctrl+a, alt+a and shift+a (capital A) every one arrive
+// with Code == 'a'. A card switching on Code alone reads all of them as [a] and grants a
+// persistent workspace-wide approval for a keystroke aimed at the composer; ctrl+a is
+// readline's beginning-of-line and reaches the card unintercepted. Key.String() renders
+// those "ctrl+a", "alt+a" and "A", none of which is "a", so none of them matches.
+//
+// Rejecting every press with a non-zero Key.Mod would look equivalent and is not: num lock
+// is reported as a modifier ON ORDINARY PRINTABLE KEYS, so a plain a typed with num lock on
+// carries Mod == ModNumLock while still rendering "a". A Mod check would disable the
+// accelerators for those users. Caps lock renders "A" and so is not accepted — it is
+// indistinguishable from shift+a, and an ambiguous press on a privilege gate must do
+// nothing; ↑/↓ + enter still reach every action.
+//
+// This is isEnter's rule applied to the remaining keys, and for the same reason: routing
+// every accelerator through one definition of "the user pressed this key" is what stops the
+// two cards, and the enter path, from drifting apart one fix at a time.
+func accelerator(msg tea.KeyPressMsg) string { return msg.String() }
+
 // Update advances the model on a key press and returns the new model, a typed
 // uiAction, and the editor's cursor-blink Cmd. It dispatches on the current mode:
 // compose edits/submits the next message; the three prompt modes route the key to a
@@ -522,11 +545,13 @@ func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, 
 		return m.approveBy(-1)
 	case tea.KeyDown:
 		return m.approveBy(1)
-	case 'y':
+	}
+	switch accelerator(msg) {
+	case "y":
 		return m.resolveApproval(head, gate.ApprovalApprove)
-	case 'a':
+	case "a":
 		return m.resolveApproval(head, gate.ApprovalApproveAlwaysWorkspace)
-	case 'n':
+	case "n":
 		return m.resolveApproval(head, gate.ApprovalDeny)
 	}
 	return m, noop
@@ -574,11 +599,15 @@ func (m interactionModel) choiceKey(msg tea.KeyPressMsg) (interactionModel, uiAc
 		return m.selectBy(-1)
 	case tea.KeyDown:
 		return m.selectBy(1)
-	case 'o':
+	}
+	key := accelerator(msg)
+	if key == "o" {
 		return m.pop(), uiAction{Kind: uiAnswer, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Text: otherChoice}
 	}
-	if i := int(msg.Code - '1'); msg.Code >= '1' && msg.Code <= '9' && i < len(head.Choices) {
-		return m.pop(), uiAction{Kind: uiAnswer, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Text: head.Choices[i]}
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		if i := int(key[0] - '1'); i < len(head.Choices) {
+			return m.pop(), uiAction{Kind: uiAnswer, LoopID: head.LoopID, ToolExecutionID: head.ToolExecutionID, Text: head.Choices[i]}
+		}
 	}
 	return m, noop
 }

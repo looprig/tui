@@ -2430,6 +2430,66 @@ func TestModernPermissionPromptDispatches(t *testing.T) {
 	}
 }
 
+// TestModernPermissionModifiedKeysDispatchNothing is the end-to-end half of the modifier
+// pin: it drives whole keystrokes through Screen.handleKey against a fake agent and proves a
+// modified key never reaches Approve/Deny at all.
+//
+// The unit test in interaction_test.go pins the router; this pins the ROUTE. handleKey
+// intercepts only ctrl+c/t/n/p before handing the key to the prompt, so ctrl+a — the chord
+// users press constantly in the composer for beginning-of-line — arrives at the permission
+// card untouched. Before the accelerators matched the rendered keystroke, that dispatched
+// Approve with "Approve always for this workspace" and persisted a workspace-wide rule.
+//
+// The gate must simply stay pending: no Approve, no Deny, nothing popped.
+func TestModernPermissionModifiedKeysDispatchNothing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "shift+a (capital A)", key: modKey('a', tea.ModShift, "A")},
+		{name: "ctrl+a", key: modKey('a', tea.ModCtrl, "")},
+		{name: "alt+a", key: modKey('a', tea.ModAlt, "")},
+		{name: "ctrl+y", key: modKey('y', tea.ModCtrl, "")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			primary := callID(1)
+			gateLoop := callID(9)
+			agent := &fakeAgent{activeLoopID: primary}
+			m := runningScreen(t, agent)
+			m = feed(t, m, event.TurnStarted{Header: hdr(primary), Message: userMsg("q")})
+			m = feed(t, m, loopStarted(gateLoop, "reviewer"))
+			m = feed(t, m, event.PermissionRequested{
+				Header:          hdr(gateLoop),
+				ToolExecutionID: callID(7),
+				Request:         bashPermission("ls"),
+			})
+
+			m, cmd := updateScreen(t, m, tt.key)
+			drainCmd(t, cmd)
+
+			if agent.approveCalled {
+				t.Errorf("%s dispatched Approve %q — a modified key must not resolve a permission gate",
+					tt.key.String(), agent.lastApproval)
+			}
+			if agent.denyCalled {
+				t.Errorf("%s dispatched Deny — a modified key must not resolve a permission gate", tt.key.String())
+			}
+			if m.interaction.PendingCount() != 1 {
+				t.Errorf("%s: PendingCount = %d, want 1 (gate still awaiting the user)",
+					tt.key.String(), m.interaction.PendingCount())
+			}
+			if e, ok := barEntryFor(m.bar(), gateLoop); !ok || !e.gate {
+				t.Errorf("%s cleared the bar gate marker, so the gate was treated as resolved", tt.key.String())
+			}
+		})
+	}
+}
+
 // TestModernAskUserDispatches pins AskUser parity: a free-text UserInputRequested renders its
 // answer field and a typed answer dispatches ProvideAnswer to the producing loop; a choice
 // request renders its choices and Enter answers the selected choice.
