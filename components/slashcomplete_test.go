@@ -19,10 +19,10 @@ func TestNewSlashComplete(t *testing.T) {
 		wantNames []string
 	}{
 		{
-			name:      "prefix /cl ranks clear before related close match",
+			name:      "prefix /cl matches only clear",
 			prefix:    "/cl",
-			wantCount: 2,
-			wantNames: []string{"/clear", "/exit"},
+			wantCount: 1,
+			wantNames: []string{"/clear"},
 		},
 		{
 			name:      "slash shows visible commands in stable order",
@@ -37,10 +37,11 @@ func TestNewSlashComplete(t *testing.T) {
 			wantNames: []string{"/compact"},
 		},
 		{
-			name:      "related word new matches clear",
-			prefix:    "/new",
-			wantCount: 1,
-			wantNames: []string{"/clear"},
+			// Related words are gone: the filter reads command NAMES only, so a synonym
+			// that appears in no name no longer opens the tray.
+			name:    "synonym of a command matches nothing",
+			prefix:  "/new",
+			wantNil: true,
 		},
 		{
 			name:      "matching ignores case",
@@ -49,13 +50,13 @@ func TestNewSlashComplete(t *testing.T) {
 			wantNames: []string{"/compact"},
 		},
 		{
-			name:      "name prefixes rank before related word matches",
+			name:      "single letter matches every name containing it",
 			prefix:    "/c",
-			wantCount: 3,
-			wantNames: []string{"/clear", "/compact", "/exit"},
+			wantCount: 2,
+			wantNames: []string{"/clear", "/compact"},
 		},
 		{
-			name:      "command-name contains ranks last",
+			name:      "a run inside a name still matches",
 			prefix:    "/ear",
 			wantCount: 1,
 			wantNames: []string{"/clear"},
@@ -83,12 +84,13 @@ func TestNewSlashComplete(t *testing.T) {
 			if got == nil {
 				t.Fatalf("NewSlashComplete(%q) = nil, want %d items", tt.prefix, tt.wantCount)
 			}
-			if len(got.items) != tt.wantCount {
-				t.Fatalf("NewSlashComplete(%q) item count = %d, want %d", tt.prefix, len(got.items), tt.wantCount)
+			names := slashNames(t, got)
+			if len(names) != tt.wantCount {
+				t.Fatalf("NewSlashComplete(%q) item count = %d, want %d", tt.prefix, len(names), tt.wantCount)
 			}
 			for i, name := range tt.wantNames {
-				if got.items[i].Name != name {
-					t.Errorf("NewSlashComplete(%q) item[%d].Name = %q, want %q", tt.prefix, i, got.items[i].Name, name)
+				if names[i] != name {
+					t.Errorf("NewSlashComplete(%q) item[%d].Name = %q, want %q", tt.prefix, i, names[i], name)
 				}
 			}
 		})
@@ -107,17 +109,6 @@ func TestNewSlashCompleteWithCommandsUsesInjectedCatalog(t *testing.T) {
 	}
 	if NewSlashCompleteWithCommands("/clear", commands) != nil {
 		t.Fatal("injected catalog unexpectedly fell back to static commands")
-	}
-}
-
-func TestSlashMatchRankNormalizesRelatedWords(t *testing.T) {
-	original := slashRelatedWords["/clear"]
-	slashRelatedWords["/clear"] = []string{"NEW"}
-	t.Cleanup(func() { slashRelatedWords["/clear"] = original })
-
-	got := NewSlashComplete("/new")
-	if got == nil || got.Selected().Name != "/clear" {
-		t.Fatalf("NewSlashComplete(\"/new\") = %#v, want /clear from case-insensitive related word", got)
 	}
 }
 
@@ -302,7 +293,10 @@ func TestSlashCompleteViewWidthClampsANSISafely(t *testing.T) {
 	t.Parallel()
 
 	const width = 11
-	s := &SlashComplete{items: []SlashCmd{{Name: "/界界界界", Desc: "a long description"}}}
+	s := NewSlashCompleteWithCommands("", []SlashCmd{{Name: "/界界界界", Desc: "a long description"}})
+	if s == nil {
+		t.Fatal(`NewSlashCompleteWithCommands("", one command) = nil, want the whole catalog`)
+	}
 	type widthViewer interface {
 		ViewWidth(int) string
 	}
@@ -316,5 +310,107 @@ func TestSlashCompleteViewWidthClampsANSISafely(t *testing.T) {
 	}
 	if strings.ContainsRune(stripANSI(view), '\uFFFD') {
 		t.Fatalf("ViewWidth() split a Unicode sequence: %q", view)
+	}
+}
+
+// slashNames is every matched command in render order, read through the exported API alone.
+// The filtered items belong to the list engine now, so the walk uses the wrapping cursor:
+// Down from the last row returns to the first, which is where the walk stops -- and where a
+// freshly built panel started, so the walk leaves the cursor as it found it.
+func slashNames(t *testing.T, s *SlashComplete) []string {
+	t.Helper()
+
+	var names []string
+	for {
+		names = append(names, s.Selected().Name)
+		s.Down()
+		if s.Cursor() == 0 {
+			return names
+		}
+		if len(names) > 1000 {
+			t.Fatal("cursor never wrapped back to the first row")
+		}
+	}
+}
+
+// The old rank ladder was prefix/substring only, so a subsequence query found nothing.
+// /sandbox is a fixture rather than a real command: the catalog is production data, and a
+// command nobody can run has no business in it just to make a test read well.
+func TestFuzzyFindsSubsequence(t *testing.T) {
+	t.Parallel()
+
+	commands := []SlashCmd{
+		{Name: "/clear", Desc: "start a new conversation"},
+		{Name: "/sandbox", Desc: "change the sandbox policy"},
+	}
+	s := NewSlashCompleteWithCommands("sbx", commands)
+	if s == nil {
+		t.Fatal(`fuzzy filter found no match for "sbx", want /sandbox`)
+	}
+	if got := s.Selected().Name; got != "/sandbox" {
+		t.Errorf("Selected() = %q, want /sandbox", got)
+	}
+}
+
+// TestSlashCompleteSelectWindowRowSlidesAndPins covers the half of the migration the list
+// engine cannot do for itself. list.Model paginates: with a two-row window and the cursor on
+// the fifth of five commands it considers rows 4-5 to be a page of their own, so its own
+// SelectWindowRow would map the window's top row to the cursor's own item and report no
+// change. The tray SLIDES, so that top row is the FOURTH command.
+//
+// The second half is the pin: having pointed at a row, the window must hold still. A window
+// re-derived from the new cursor would scroll up by one and slide a different command under
+// the motionless pointer.
+func TestSlashCompleteSelectWindowRowSlidesAndPins(t *testing.T) {
+	t.Parallel()
+
+	commands := []SlashCmd{
+		{Name: "/one", Desc: "first"},
+		{Name: "/two", Desc: "second"},
+		{Name: "/three", Desc: "third"},
+		{Name: "/four", Desc: "fourth"},
+		{Name: "/five", Desc: "fifth"},
+	}
+	s := NewSlashCompleteWithCommands("", commands)
+	if s == nil {
+		t.Fatal("NewSlashCompleteWithCommands with no query = nil, want the whole catalog")
+	}
+	s.Up() // wrap to the last command, scrolling the window to the bottom
+
+	if !s.SelectWindowRow(0, 2) {
+		t.Fatal("SelectWindowRow(top row of the scrolled window) reported no change, want a move")
+	}
+	if got := s.Selected().Name; got != "/four" {
+		t.Errorf("selected = %q, want %q: the window slides, it does not page", got, "/four")
+	}
+
+	view := stripANSI(s.ViewWindow(40, 2))
+	if !strings.Contains(view, "/five") {
+		t.Errorf("window after pointing at its top row = %q, want it pinned with /five still below", view)
+	}
+	if strings.Contains(view, "/three") {
+		t.Errorf("window after pointing at its top row = %q, want it pinned, not scrolled up onto /three", view)
+	}
+}
+
+// TestSlashCompleteViewIsAsWideAsItsMatches pins where the natural width is measured. The
+// tray is only ever as wide as the rows it draws, so a long command the filter removed must
+// not leave its width behind as a band of empty fill.
+func TestSlashCompleteViewIsAsWideAsItsMatches(t *testing.T) {
+	t.Parallel()
+
+	match := completionTrayRow{primary: "/clear", secondary: "start a new conversation"}
+	commands := []SlashCmd{
+		{Name: match.primary, Desc: match.secondary},
+		{Name: "/zzzzzzzzzzzzzzzzzzzz", Desc: "a much wider row that the filter drops"},
+	}
+	s := NewSlashCompleteWithCommands("clear", commands)
+	if s == nil {
+		t.Fatal(`NewSlashCompleteWithCommands("clear", ...) = nil, want /clear`)
+	}
+
+	want := completionTrayNaturalWidth([]completionTrayRow{match})
+	if got := lipgloss.Width(s.View()); got != want {
+		t.Errorf("View() width = %d, want %d: the width of the matched rows alone", got, want)
 	}
 }
