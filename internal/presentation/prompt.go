@@ -5,9 +5,11 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/core/uuid"
@@ -60,10 +62,65 @@ type formField struct {
 	Kind     gate.FieldKind
 	Required bool
 	Options  []gate.Option
-	Text     string // FieldText: the typed value
-	Choice   int    // FieldSelect: index into Options
-	Confirm  bool   // FieldConfirm: the toggle state
+	// editor holds a FieldText field's value in a bubbles textarea, so the field has a
+	// real CURSOR — ←/→, word ops, line start/end, delete-before-cursor — instead of the
+	// append-and-trim-the-end editing it had, and GROWS as the value wraps rather than
+	// scrolling sideways inside one fixed row.
+	//
+	// It is populated for gate.FieldText ONLY (newFormEditor, from formFieldFromSchema).
+	// A select answers with Choice and a confirm with Confirm, so both carry the zero
+	// Model, which is never focused, never updated and never rendered — and is safe to
+	// read anyway: textarea.Value reports "" for a zero model.
+	editor  textarea.Model
+	Choice  int  // FieldSelect: index into Options
+	Confirm bool // FieldConfirm: the toggle state
 }
+
+// formEditorMaxHeight parks a field editor's own MaxHeight far above any answer a form
+// field can hold.
+//
+// MaxHeight in the bubbles textarea is BOTH the visible row cap AND an input gate: once
+// the logical line count reaches it the widget refuses further newlines and silently
+// drops what the user typed. A gate prompt must never eat an answer, so the value is
+// parked out of reach and the real bound on an answer stays CharLimit
+// (maxFormFieldRunes). Nothing caps the VISIBLE height: growing to fit is the point of
+// the field, and CharLimit already bounds how far it can grow.
+const formEditorMaxHeight = 10000
+
+// newFormEditor returns the textarea one gate.FieldText row edits in, seeded with the
+// schema's default. It is configured the way components.NewInputBox configures the
+// composer, and for the same reasons:
+//
+//   - No prompt and no line numbers: the row already carries the field's "<label>: "
+//     lead-in and the card its ▌ rail, so the widget must draw no chrome of its own.
+//   - enter SUBMITS the form, so newline insertion moves off it onto the composer's TWO
+//     keys — shift+enter, which only terminals implementing the Kitty keyboard protocol
+//     can tell apart from enter, plus ctrl+j, the raw LF byte every terminal delivers.
+//   - The default focused CursorLine paints a black background as wide as the text,
+//     which would punch a dark hole through the card's blue panel. An empty style leaves
+//     the row to the card.
+//   - DynamicHeight recomputes the height from the VISUAL (soft-wrap aware) line count on
+//     every mutation, which is what makes the row grow with the answer. The width it
+//     wraps at is the card's, and only the renderer knows it — see formRow.
+func newFormEditor(value string) textarea.Model {
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
+	ta.CharLimit = maxFormFieldRunes
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"))
+	s := ta.Styles()
+	s.Focused.CursorLine = lipgloss.NewStyle()
+	ta.SetStyles(s)
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = formEditorMaxHeight
+	ta.SetValue(value)
+	return ta
+}
+
+// value is the text a FieldText field currently holds. The editor IS the value: there
+// is no second copy to drift from it.
+func (f formField) value() string { return f.editor.Value() }
 
 // display renders the field's current value for the editor row.
 func (f formField) display() string {
@@ -82,7 +139,7 @@ func (f formField) display() string {
 		}
 		return f.Options[f.Choice].Value
 	default:
-		return f.Text
+		return f.value()
 	}
 }
 
@@ -110,10 +167,11 @@ func (f formField) encode() (json.RawMessage, bool) {
 		}
 		return raw, true
 	default:
-		if f.Text == "" {
+		v := f.value()
+		if v == "" {
 			return nil, false
 		}
-		raw, err := json.Marshal(f.Text)
+		raw, err := json.Marshal(v)
 		if err != nil {
 			return nil, false
 		}
@@ -260,6 +318,11 @@ func promptFromForm(g gate.Gate) prompt {
 		}
 		p.Fields = append(p.Fields, field)
 	}
+	// Point the editors at the field the cursor starts on, so the first keypress lands
+	// in a FOCUSED textarea (an unfocused one drops every message). The blink Cmd is
+	// dropped because folding an event has no Cmd channel to return it on; the cursor
+	// starts blinking off the first keypress's own Cmd.
+	_ = p.syncFieldFocus()
 	return p
 }
 
@@ -311,7 +374,9 @@ func formFieldFromSchema(f gate.Field) (formField, bool) {
 	}
 	switch f.Kind {
 	case gate.FieldText:
-		_ = json.Unmarshal(f.Default, &field.Text) // absent/!string default → empty field
+		var def string
+		_ = json.Unmarshal(f.Default, &def) // absent/!string default → empty field
+		field.editor = newFormEditor(def)
 	case gate.FieldConfirm:
 		_ = json.Unmarshal(f.Default, &field.Confirm) // absent/!bool default → false
 	case gate.FieldSelect:
@@ -356,12 +421,14 @@ func (p *prompt) formComplete() bool {
 	return true
 }
 
-// moveFocus shifts the field cursor by delta, clamped to the field list.
-func (p *prompt) moveFocus(delta int) {
+// moveFocus shifts the field cursor by delta, clamped to the field list, and hands the
+// editors to the field it lands on. It returns that field's cursor-blink Cmd (nil when
+// it is a select or a confirm, which have no editor).
+func (p *prompt) moveFocus(delta int) tea.Cmd {
 	n := len(p.Fields)
 	if n == 0 {
 		p.focus = 0
-		return
+		return nil
 	}
 	next := p.focus + delta
 	if next < 0 {
@@ -371,75 +438,130 @@ func (p *prompt) moveFocus(delta int) {
 		next = n - 1
 	}
 	p.focus = next
+	return p.syncFieldFocus()
 }
 
-// typeRune applies a printable keypress to the focused field: a rune extends a
-// text field, and space toggles a confirm.
+// syncFieldFocus focuses the focused text field's editor and blurs every other, so
+// exactly one cursor is ever live on the card. Focus is not cosmetic: textarea.Update
+// returns immediately on an unfocused model, so an unfocused editor would swallow every
+// key typed at it. It returns the focused editor's cursor-blink Cmd, or nil when the
+// focused field has no editor.
+func (p *prompt) syncFieldFocus() tea.Cmd {
+	var cmd tea.Cmd
+	for i := range p.Fields {
+		f := &p.Fields[i]
+		if f.Kind != gate.FieldText {
+			continue
+		}
+		if i == p.focus {
+			cmd = f.editor.Focus()
+			continue
+		}
+		f.editor.Blur()
+	}
+	return cmd
+}
+
+// editFocused applies an editing keypress to the FOCUSED field, dispatching on its
+// kind: a text field's keys go to its editor, ←/→ cycle a select, and space toggles a
+// confirm. It returns the editor's cursor Cmd, or nil for the two kinds that have none.
 //
-// Space is safe to overload because it can only ever reach a FOCUSED field, and a
-// confirm field has no text to type a space into. A text field keeps the space.
+// The keys are matched on msg.String(), not msg.Code. Code is modifier-BLIND — ctrl+a
+// and a capital A both carry Code 'a' — so a Code match would let a chord toggle a
+// confirm or cycle a select. String names the whole keystroke, lock states aside.
 //
-// A rune is accepted only when it is printable and carries no modifier, so a
-// control chord (ctrl+c, alt+f) can never be typed into an answer as a literal.
-// Values are bounded at maxFormFieldRunes: the field is a human-facing prompt, not
-// a data channel, and the session refuses an over-long answer anyway
-// (gate.ParseFormAnswers) — clamping here refuses it before the user loses work.
-func (p *prompt) typeRune(msg tea.KeyPressMsg) {
+// ←/→ belong to the field, not the form: a text field needs them for its cursor, which
+// is why only the select branch reads them. ↑/↓ never reach here at all — they move
+// between FIELDS (see interactionModel.editFormField), because a form is a list of
+// fields first and an editor second.
+func (p *prompt) editFocused(msg tea.KeyPressMsg) tea.Cmd {
 	if p.focus < 0 || p.focus >= len(p.Fields) {
-		return
+		return nil
 	}
 	f := &p.Fields[p.focus]
-	if msg.Mod != 0 {
-		return
-	}
-	if f.Kind == gate.FieldConfirm {
-		if msg.Code == tea.KeySpace {
+	switch f.Kind {
+	case gate.FieldText:
+		return f.edit(msg)
+	case gate.FieldSelect:
+		switch msg.String() {
+		case "left":
+			f.cycle(-1)
+		case "right":
+			f.cycle(1)
+		}
+	case gate.FieldConfirm:
+		if msg.String() == "space" {
 			f.Confirm = !f.Confirm
 		}
-		return
 	}
-	if f.Kind != gate.FieldText {
-		return
-	}
-	r := msg.Code
-	if !unicode.IsPrint(r) {
-		return
-	}
-	if utf8.RuneCountInString(f.Text) >= maxFormFieldRunes {
-		return
-	}
-	f.Text += string(r)
+	return nil
 }
 
-// backspaceText removes the last rune of the focused text field.
-func (p *prompt) backspaceText() {
-	if p.focus < 0 || p.focus >= len(p.Fields) {
-		return
+// edit applies an editing keypress to a text field's editor and returns its cursor Cmd.
+//
+// The message is forwarded WHOLE so the textarea's own bindings still fire — ctrl+w
+// deletes a word back, alt+b steps back one, ctrl+a goes to the start of the line,
+// ctrl+j inserts a newline. What is stripped first is the msg.Text of anything that is
+// not ordinary typing: the textarea's default branch inserts msg.Text verbatim, so a
+// chord no binding claims would otherwise land in the answer as a literal — a ctrl+c
+// carrying Text "c" would type a "c" into a privilege prompt's answer.
+func (f *formField) edit(msg tea.KeyPressMsg) tea.Cmd {
+	text, ok := formTyped(msg)
+	if !ok {
+		text = ""
 	}
-	f := &p.Fields[p.focus]
-	if f.Kind != gate.FieldText || f.Text == "" {
-		return
-	}
-	runes := []rune(f.Text)
-	f.Text = string(runes[:len(runes)-1])
+	msg.Text = text
+	var cmd tea.Cmd
+	f.editor, cmd = f.editor.Update(msg)
+	return cmd
 }
 
-// maxFormFieldRunes bounds one typed field value. It is well under the session's
-// own 4096-BYTE cap (gate.ParseFormAnswers) so a multi-byte answer at this rune
-// count still fits, and it is far more than a prompt field should ever need.
+// formTypingMods are the modifiers a keypress may carry and still be ORDINARY TYPING.
+// Shift is how a capital arrives once the program asks the terminal to report all keys
+// as escape codes, and caps/num lock are lock STATES a terminal stamps onto every
+// keypress while they are on — a plain "a" typed with num lock on carries ModNumLock, so
+// a bare `msg.Mod != 0` check would refuse to type for those users. Every other modifier
+// makes a chord, and a chord reaches a field only through a binding, never as a literal.
+const formTypingMods = tea.ModShift | tea.ModCapsLock | tea.ModNumLock
+
+// formTyped returns the text a keypress types into a field, and whether it types at all.
+//
+// It reads msg.Text and falls back to a printable msg.Code — NOT msg.String(), which
+// NAMES a key rather than spelling it: the space bar stringifies to "space", so a filter
+// written against String() (or against len(String()) == 1) swallows every space in an
+// answer and makes a multi-word one untypeable.
+func formTyped(msg tea.KeyPressMsg) (string, bool) {
+	if msg.Mod&^formTypingMods != 0 {
+		return "", false
+	}
+	text := msg.Text
+	if text == "" && unicode.IsPrint(msg.Code) {
+		text = string(msg.Code)
+	}
+	if text == "" {
+		return "", false
+	}
+	for _, r := range text {
+		if !unicode.IsPrint(r) {
+			return "", false
+		}
+	}
+	return text, true
+}
+
+// maxFormFieldRunes bounds one typed field value, as the editor's CharLimit. It is well
+// under the session's own 4096-BYTE cap (gate.ParseFormAnswers) so a multi-byte answer
+// at this rune count still fits, and it is far more than a prompt field should ever
+// need. Refusing the 513th rune here costs the user one keystroke; letting it through
+// costs them the whole answer when the session rejects it.
 const maxFormFieldRunes = 512
 
-// cycleChoice advances the focused select field's option by delta, wrapping. It is
-// a no-op on any other field kind.
-func (p *prompt) cycleChoice(delta int) {
-	if p.focus < 0 || p.focus >= len(p.Fields) {
-		return
-	}
-	f := &p.Fields[p.focus]
-	if f.Kind != gate.FieldSelect || len(f.Options) == 0 {
-		return
-	}
+// cycle advances a select field's option by delta, wrapping.
+func (f *formField) cycle(delta int) {
 	n := len(f.Options)
+	if n == 0 {
+		return
+	}
 	f.Choice = ((f.Choice+delta)%n + n) % n
 }
 
@@ -704,6 +826,9 @@ const formUnsupportedNotice = "This request uses a field type this terminal cann
 // formRequiredMark trails the label of a required field.
 const formRequiredMark = " *"
 
+// formInvalidNotice is shown when a submit was attempted with a required field blank.
+const formInvalidNotice = "fill in the required fields marked *"
+
 // formCursorWidth is the 2-cell cursor/indent prefix on every form field row ("▸ " when
 // focused, "  " otherwise); the field text wraps in the remaining columns. Form rows still
 // carry a glyph cursor — the choice and permission cards have moved to the banded
@@ -713,13 +838,23 @@ const formCursorWidth = 2
 // renderFormBox renders a form gate as a card: the form's title, its body, one row
 // per field with the focused row highlighted, and a footer legend listing only the
 // actions the gate actually offers. An unsupported schema renders the notice
-// instead of an editor. Pure: view-model only.
+// instead of an editor.
+//
+// EVERY line it emits fits cardTextWidth(width). Nothing here is allowed to run wide:
+// cardFrame lays the card out row by row, so one over-wide row is folded by the terminal
+// and every row beneath it sits one line off its rail. The legend, the title and the
+// validation notice are therefore wrapped or clipped to the card, and each field row
+// clamps itself (formRow).
+//
+// It is also the ONE place that knows the card width, so it is where each text field's
+// editor learns the column it wraps at — hence the pointer into p.Fields. That is a
+// LAYOUT write and nothing more: no answer, no focus and no validation flag is touched.
 func renderFormBox(p prompt, width, pending int) string {
 	textW := cardTextWidth(width)
-	title := styles.CardTitleStyle.Render(formTitle(p))
+	title := styles.CardTitleStyle.Render(truncate(formTitle(p), textW))
 	if p.unsupported {
 		body := strings.Join(wrapToWidth(formUnsupportedNotice, textW), "\n")
-		footer := styles.CardHintStyle.Render(formUnsupportedLegend)
+		footer := styles.CardHintStyle.Render(strings.Join(wrapToWidth(formUnsupportedLegend, textW), "\n"))
 		return cardFrame(cardSections(title, body, footer), width, pending)
 	}
 
@@ -728,14 +863,14 @@ func renderFormBox(p prompt, width, pending int) string {
 		sections = append(sections, strings.Join(wrapToWidth(p.Body, textW), "\n"))
 	}
 	rows := make([]string, 0, len(p.Fields))
-	for i, f := range p.Fields {
-		rows = append(rows, formRow(f, i == p.focus, textW))
+	for i := range p.Fields {
+		rows = append(rows, formRow(&p.Fields[i], i == p.focus, textW))
 	}
 	sections = append(sections, strings.Join(rows, "\n"))
 	if p.invalid {
-		sections = append(sections, styles.CardHintStyle.Render("fill in the required fields marked *"))
+		sections = append(sections, styles.CardHintStyle.Render(strings.Join(wrapToWidth(formInvalidNotice, textW), "\n")))
 	}
-	sections = append(sections, styles.CardHintStyle.Render(formLegend))
+	sections = append(sections, styles.CardHintStyle.Render(strings.Join(wrapToWidth(formLegend, textW), "\n")))
 	return cardFrame(cardSections(append([]string{title}, sections...)...), width, pending)
 }
 
@@ -750,7 +885,21 @@ func formTitle(p prompt) string {
 
 // formRow renders one field as "<label>: <value>", the focused row carrying the ▸
 // cursor and a filled highlight bar. A required field's label is marked with *.
-func formRow(f formField, focused bool, width int) string {
+//
+// A TEXT field renders through its OWN editor, so the row is as tall as the answer
+// needs: the value wraps in the columns the label leaves, and each further visual row is
+// indented under the first so the field reads as one block. The cursor glyph marks only
+// the first row — one field, one cursor.
+//
+// The field arrives by POINTER because this is where its editor learns the card's wrap
+// column (see renderFormBox). Setting it here rather than on a render-local copy is what
+// keeps the widget's own column math — line start/end walk the SOFT row, not the logical
+// one — agreeing with what the user can see.
+//
+// Every finished line is clamped to width. styles.CardSelectedStyle pads to width but a
+// row wider than the card is not the card's to fold, and neither is it the terminal's:
+// this is the same clamp, and the same reason, as keyRow.
+func formRow(f *formField, focused bool, width int) string {
 	label := f.Label
 	if label == "" {
 		label = f.Name
@@ -758,11 +907,48 @@ func formRow(f formField, focused bool, width int) string {
 	if f.Required {
 		label += formRequiredMark
 	}
-	row := label + ": " + f.display()
-	if focused {
-		return styles.CardSelectedStyle.Width(width).Render("▸ " + truncate(row, width-formCursorWidth))
+	lines := formRowLines(f, label+": ", width)
+	for i, line := range lines {
+		cursor := "  "
+		if focused && i == 0 {
+			cursor = "▸ "
+		}
+		lines[i] = ansi.Truncate(cursor+line, width, "")
 	}
-	return "  " + truncate(row, width-formCursorWidth)
+	row := strings.Join(lines, "\n")
+	if focused {
+		return styles.CardSelectedStyle.Width(width).Render(row)
+	}
+	return row
+}
+
+// formRowLines is a field's rendered content WITHOUT the cursor column: the "<label>: "
+// lead-in followed by the value, indented under the lead-in from the second line on. A
+// select or a confirm is always one line; a text field is as many lines as its value
+// wraps to.
+//
+// The column budget is the whole game here. The row must fit width, the cursor column
+// takes formCursorWidth of it, and the lead-in takes what the label needs — so the
+// editor wraps at what is LEFT, and a label too long for the card is clipped rather than
+// allowed to squeeze the answer out of its own row. Get this wrong and the field looks
+// like it "is not wrapping" when in fact it is wrapping at the wrong column.
+func formRowLines(f *formField, lead string, width int) []string {
+	avail := width - formCursorWidth
+	if f.Kind != gate.FieldText {
+		return []string{truncate(lead+f.display(), avail)}
+	}
+	lead = truncate(lead, avail-1) // hold one column back for the editor
+	indent := ansi.StringWidth(lead)
+	f.editor.SetWidth(avail - indent)
+	lines := strings.Split(f.editor.View(), "\n")
+	for i := range lines {
+		if i == 0 {
+			lines[i] = lead + lines[i]
+			continue
+		}
+		lines[i] = strings.Repeat(" ", indent) + lines[i]
+	}
+	return lines
 }
 
 // openURLTitleFallback is the card heading when the projection carried no title.

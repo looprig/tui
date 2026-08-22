@@ -3,10 +3,12 @@ package presentation
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/event"
@@ -178,12 +180,12 @@ func TestFormGateRejectsMultiSelect(t *testing.T) {
 				t.Errorf("no unsupported notice in:\n%s", got)
 			}
 			// Enter must not submit an answer the user never gave.
-			_, action := m.formKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			_, action, _ := m.formKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 			if action.Kind != uiNoop {
 				t.Errorf("enter on an unsupported form produced %v, want uiNoop", action.Kind)
 			}
 			// Decline remains available: it is the only honest action left.
-			_, action = m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+			_, action, _ = m.formKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 			if action.Kind != uiGateRespond || action.GateAction != gate.FormActionDecline {
 				t.Errorf("esc = %v/%q, want a decline", action.Kind, action.GateAction)
 			}
@@ -295,7 +297,7 @@ func TestFormGateHonorsOfferedControls(t *testing.T) {
 			// A single optional text field, so accept is never blocked by validation.
 			schema := gate.PromptSchema{Fields: []gate.Field{{Name: "note", Kind: gate.FieldText}}}
 			m := formModel(schema, tt.controls...)
-			_, action := m.formKey(tt.key)
+			_, action, _ := m.formKey(tt.key)
 			if action.Kind != tt.wantKind {
 				t.Fatalf("action = %v, want %v", action.Kind, tt.wantKind)
 			}
@@ -418,15 +420,15 @@ func TestFormGateTextEntryRejectsModifiedKeys(t *testing.T) {
 	schema := gate.PromptSchema{Fields: []gate.Field{{Name: "note", Kind: gate.FieldText}}}
 	m := formModel(schema, gate.FormActionAccept)
 	m, _, _ = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c", Mod: tea.ModCtrl})
-	if got := m.ActivePrompt().Fields[0].Text; got != "" {
+	if got := m.ActivePrompt().Fields[0].value(); got != "" {
 		t.Fatalf("a modified key was typed into the field: %q", got)
 	}
 	m, _, _ = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
-	if got := m.ActivePrompt().Fields[0].Text; got != "c" {
+	if got := m.ActivePrompt().Fields[0].value(); got != "c" {
 		t.Fatalf("an unmodified rune did not type: %q", got)
 	}
 	m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
-	if got := m.ActivePrompt().Fields[0].Text; got != "" {
+	if got := m.ActivePrompt().Fields[0].value(); got != "" {
 		t.Fatalf("backspace did not delete: %q", got)
 	}
 }
@@ -459,13 +461,215 @@ func TestFormGateDefaultsApply(t *testing.T) {
 	}}
 	m := formModel(schema, gate.FormActionAccept)
 	p := m.ActivePrompt()
-	if p.Fields[0].Text != "hello" {
-		t.Errorf("text default = %q, want %q", p.Fields[0].Text, "hello")
+	if p.Fields[0].value() != "hello" {
+		t.Errorf("text default = %q, want %q", p.Fields[0].value(), "hello")
 	}
 	if p.Fields[1].Choice != 1 {
 		t.Errorf("select default index = %d, want 1 (us)", p.Fields[1].Choice)
 	}
 	if !p.Fields[2].Confirm {
 		t.Error("confirm default did not apply")
+	}
+}
+
+// oneTextField is a single-text-field schema carrying def as its JSON default (""
+// for no default). It is the minimum fixture for the text EDITOR tests, which care
+// about the field's value and nothing about the surrounding form.
+func oneTextField(def string) gate.PromptSchema {
+	f := gate.Field{Name: "note", Label: "Note", Kind: gate.FieldText}
+	if def != "" {
+		f.Default = json.RawMessage(def)
+	}
+	return gate.PromptSchema{Fields: []gate.Field{f}}
+}
+
+// TestFormFieldCursorMoves proves a text field carries a real CURSOR. The old
+// editor could only append and trim from the END, so ← was a no-op on a text
+// field and backspace always deleted the last rune; here ← steps the cursor back
+// into the value and backspace deletes the rune it now sits after.
+func TestFormFieldCursorMoves(t *testing.T) {
+	t.Parallel()
+	m := formModel(oneTextField(`"abcdef"`), gate.FormActionAccept)
+	m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := m.ActivePrompt().Fields[0].value(); got != "abcdf" {
+		t.Fatalf("left then backspace = %q, want %q", got, "abcdf")
+	}
+}
+
+// TestFormFieldAcceptsSpace is the space-bar regression guard. A keypress
+// stringifies to "space", not " ", so any printable-input filter written against
+// msg.String() would silently swallow the space bar and make multi-word answers
+// untypeable.
+func TestFormFieldAcceptsSpace(t *testing.T) {
+	t.Parallel()
+	m := formModel(oneTextField(""), gate.FormActionAccept)
+	m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if got := m.ActivePrompt().Fields[0].value(); got != " " {
+		t.Fatalf("space typed %q, want %q", got, " ")
+	}
+}
+
+// TestFormFieldGrows proves a long value WRAPS onto extra card rows rather than
+// being clipped into a one-row field. The tail of the value must survive to the
+// screen: the old renderer truncated the row to the card width and put an ellipsis
+// where the rest of the answer was.
+func TestFormFieldGrows(t *testing.T) {
+	t.Parallel()
+	const width = 40
+	const long = "the quick brown fox jumps over the lazy dog and then keeps running"
+
+	shortModel := formModel(oneTextField(`"hi"`), gate.FormActionAccept)
+	grownModel := formModel(oneTextField(strconv.Quote(long)), gate.FormActionAccept)
+	short := renderFormBox(*shortModel.ActivePrompt(), width, 1)
+	grown := renderFormBox(*grownModel.ActivePrompt(), width, 1)
+
+	shortRows, grownRows := strings.Count(short, "\n"), strings.Count(grown, "\n")
+	if grownRows <= shortRows {
+		t.Errorf("a wrapping value did not grow the card: %d rows against %d for a short value:\n%s", grownRows, shortRows, stripANSI(grown))
+	}
+	if got := stripANSI(grown); !strings.Contains(got, "running") {
+		t.Errorf("the tail of the value never reached the card:\n%s", got)
+	}
+}
+
+// TestFormFieldBoundsValueLength pins the per-field rune bound. The session refuses an
+// over-long answer (gate.ParseFormAnswers caps a value in BYTES), so the field refuses
+// the keystroke that would take it past maxFormFieldRunes rather than letting the user
+// write a long answer only to have the whole of it come back rejected.
+//
+// The bound now lives on the editor as its CharLimit rather than in a hand-rolled length
+// check, which is exactly why it is worth pinning: it is one field assignment away from
+// disappearing without a trace.
+func TestFormFieldBoundsValueLength(t *testing.T) {
+	t.Parallel()
+	full := strings.Repeat("a", maxFormFieldRunes)
+	m := formModel(oneTextField(strconv.Quote(full)), gate.FormActionAccept)
+	m, _, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	got := m.ActivePrompt().Fields[0].value()
+	if n := len([]rune(got)); n != maxFormFieldRunes {
+		t.Fatalf("value is %d runes after typing past the bound, want %d", n, maxFormFieldRunes)
+	}
+	if strings.Contains(got, "b") {
+		t.Error("a keystroke past the bound was accepted")
+	}
+}
+
+// assertFormCardFits fails when any row of a rendered form card is wider than the card.
+//
+// An over-wide row is not a cosmetic problem. cardFrame lays the card out row by row and
+// the surface reserves a height from that count, so a row the TERMINAL has to fold pushes
+// every row beneath it one line down, off its ▌ rail and out of the reservation.
+//
+// Rows are measured in DISPLAY CELLS on the styled string, which is the unit the terminal
+// lays a row out in: a rune count would let two CJK columns pass for one, and a cell count
+// taken after stripping ANSI would miss nothing but is no safer.
+func assertFormCardFits(t *testing.T, card string, width int, what string) {
+	t.Helper()
+	for i, line := range strings.Split(card, "\n") {
+		if got := ansi.StringWidth(line); got > width {
+			t.Errorf("%s: row %d is %d cells wide in a %d-column card (over by %d): %q",
+				what, i, got, width, got-width, stripANSI(line))
+		}
+	}
+}
+
+// formWidthSchema is the width-guard fixture: one required text field seeded with value,
+// plus a select and a confirm whose labels are deliberately wider than a narrow card, so
+// the guard covers a clipped lead-in as well as a wrapped one.
+func formWidthSchema(label, value string) gate.PromptSchema {
+	return gate.PromptSchema{Fields: []gate.Field{
+		{Name: "note", Label: label, Kind: gate.FieldText, Required: true, Default: json.RawMessage(strconv.Quote(value))},
+		{Name: "region", Label: "Region", Kind: gate.FieldSelect, Options: []gate.Option{
+			{Value: "eu", Label: strings.Repeat("Europe ", 6)},
+		}},
+		{Name: "consent", Label: strings.Repeat("Share telemetry ", 3), Kind: gate.FieldConfirm},
+	}}
+}
+
+// TestFormCardRowsFitCardWidth pins every row of a form card to the card width, across
+// card widths, field values and which field holds the focus.
+//
+// A GROWING field makes this sharper than a fixed one: the row's height is a function of
+// the value AND the columns the label leaves it, so the column budget has to be right at
+// every width rather than merely at the one the card is usually drawn at. The values
+// include a token with nowhere to break and CJK text, because a 2-cell rune must not be
+// allowed to straddle the limit.
+func TestFormCardRowsFitCardWidth(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"empty":          "",
+		"short":          "ada",
+		"wrapping prose": strings.Repeat("value ", 12),
+		"unbroken token": strings.Repeat("x", 80),
+		"cjk":            strings.Repeat("日本語", 14),
+		"cjk and spaces": strings.Repeat("日本 ", 14),
+	}
+	labels := map[string]string{
+		"short label": "Note",
+		"long label":  strings.Repeat("a rather long field label ", 3),
+	}
+
+	// The narrow end matters most: the cursor column and the "<label>: " lead-in are
+	// emitted whether or not the card has room for them, so a card too narrow to hold
+	// its own chrome is where an unclamped row runs over — the same failure keyRow
+	// clamps for. Three columns is the floor of the card itself, not of the rows: the ▌
+	// rail takes cardRailWidth and cardTextWidth floors the body at one more, so a
+	// narrower card cannot be asked for and is not a claim this makes.
+	for _, width := range []int{3, 4, 6, 9, 12, 16, 20, 28, 40, 60, 80} {
+		for labelName, label := range labels {
+			for valueName, value := range values {
+				name := strconv.Itoa(width) + "/" + labelName + "/" + valueName
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					m := formModel(formWidthSchema(label, value), gate.FormActionAccept, gate.FormActionDecline)
+					// Walk the focus over every field: only the focused row is banded, and
+					// the band is exactly what pads a row to the card without clipping it.
+					for focus := 0; focus < 3; focus++ {
+						p := m.ActivePrompt()
+						assertFormCardFits(t, renderFormBox(*p, width, 1), width, name+" focus="+strconv.Itoa(focus))
+						// The validation notice is a card row too, and it appears only after
+						// a refused submit.
+						invalid := *p
+						invalid.invalid = true
+						assertFormCardFits(t, renderFormBox(invalid, width, 1), width, name+" invalid focus="+strconv.Itoa(focus))
+						m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+					}
+					// An unsupported schema is a card too — a different body and a
+					// different legend, and no field rows to hide behind.
+					unsupported := *m.ActivePrompt()
+					unsupported.unsupported = true
+					assertFormCardFits(t, renderFormBox(unsupported, width, 1), width, name+" unsupported")
+				})
+			}
+		}
+	}
+}
+
+// TestFormCardWidthSurvivesGrowth re-checks the card after EVERY keystroke. A field that
+// grows changes the card's shape as the user types, so the row budget has to hold at each
+// intermediate value — including the keystroke that tips the value onto a new row, which
+// is exactly where an off-by-one in the column budget shows up.
+func TestFormCardWidthSurvivesGrowth(t *testing.T) {
+	t.Parallel()
+
+	texts := map[string]string{
+		"ascii": "the quick brown fox jumps over the lazy dog",
+		"cjk":   "日本語のテキストが折り返されるところ",
+	}
+	for _, width := range []int{3, 8, 16, 24, 34, 48} {
+		for name, text := range texts {
+			name := strconv.Itoa(width) + "/" + name
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				m := formModel(formSchema(), gate.FormActionAccept, gate.FormActionDecline)
+				for i, r := range text {
+					m, _, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+					card := renderFormBox(*m.ActivePrompt(), width, 1)
+					assertFormCardFits(t, card, width, name+" after keystroke "+strconv.Itoa(i))
+				}
+			})
+		}
 	}
 }
