@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/core/uuid"
 	"github.com/looprig/harness/pkg/gate"
@@ -467,7 +468,7 @@ func promptFromPermission(callID uuid.UUID, req tool.Request) prompt {
 		Kind:            promptPermission,
 		ToolName:        req.ToolName,
 		Summary:         req.Summary,
-		approval:        denyHintIndex(),
+		approval:        denyHintIndex(approvalHints),
 	}
 	for _, requirement := range req.Requirements {
 		line := requirementLine{Description: requirement.Description}
@@ -552,14 +553,18 @@ func approvalAt(i int) gate.ApprovalAction {
 }
 
 // denyHintIndex is where a fresh permission prompt's action cursor starts: the
-// gate.ApprovalDeny row. It is LOOKED UP rather than hardcoded so the fail-secure default
-// cannot silently become "approve" if the control order ever changes.
+// gate.ApprovalDeny row of hints. It is LOOKED UP rather than hardcoded so the fail-secure
+// default cannot silently become "approve" if the control order ever changes.
 //
 // A hint list with no deny row returns -1, which names no row: nothing is banded and
 // approvalAt denies. Falling back to 0 would put the cursor on Approve, which is the one
 // answer this function must never give.
-func denyHintIndex() int {
-	for i, h := range approvalHints {
+//
+// hints is a parameter rather than a read of the approvalHints package var so that the
+// no-deny-row case can be exercised by passing a list, instead of swapping a global that
+// every parallel render test reads concurrently.
+func denyHintIndex(hints []approvalHint) int {
+	for i, h := range hints {
 		if h.action == gate.ApprovalDeny {
 			return i
 		}
@@ -578,9 +583,14 @@ type approvalHint struct {
 }
 
 // approvalHints is the ordered permission action list, one selectable row per
-// gate.ApprovalControls control. It is derived from the shared control set so a control
-// can never drift from its key: the labels ARE the gate.ApprovalAction values the session
+// gate.ApprovalControls control. The labels ARE the gate.ApprovalAction values the session
 // validates against.
+//
+// It is written out rather than derived, because a control's KEY is a TUI decision that the
+// shared control set does not carry — there is nothing to derive the "y" from. The pairing
+// with gate.ApprovalControls is therefore PINNED BY TEST
+// (TestApprovalHintsCoverEveryControl), not produced by construction: a control added,
+// removed or reordered upstream fails that test rather than silently drifting from its key.
 var approvalHints = []approvalHint{
 	{"y", gate.ApprovalApprove},
 	{"a", gate.ApprovalApproveAlwaysWorkspace},
@@ -856,20 +866,32 @@ const freeTextLegend = "enter submit · esc"
 const keyRowGap = 2
 
 // keyRowTextWidth is the columns a label may occupy on a row of width columns whose
-// bracketed accelerator is key, so the finished row is exactly width wide. The accelerator
+// bracketed accelerator is key, so the finished row is at most width wide. The accelerator
 // is VARIABLE width ("[9]" against "[12]"), so unlike the old fixed "▸ " cursor the prefix
 // cannot be one constant — get this wrong and a double-digit choice overflows the card. A
 // very narrow card drives it non-positive, which truncate renders as "".
+//
+// The accelerator is measured in DISPLAY CELLS (ansi.StringWidth), the unit a terminal lays
+// a row out in, not in runes: a rune count is only accidentally the same number for ASCII.
 func keyRowTextWidth(width int, key string) int {
-	return width - keyRowGap - utf8.RuneCountInString(key)
+	return width - keyRowGap - ansi.StringWidth(key)
 }
 
 // keyRow renders one " [k] label" row: a leading indent column, the accelerator bracketed
 // and bold-blue (CardKeyStyle), then the label clipped to fit width. It is the ONE shared
 // shape of an AskUser choice and a permission action, so a row cannot read differently
 // between the two cards.
+//
+// The finished row is clamped to width. Bounding the LABEL alone is not enough: the " [k] "
+// chrome is emitted unconditionally, so a card too narrow to hold even the accelerator
+// ("[100]" in 6 columns) still rendered 7 cells. styles.SelectedRow pads but never
+// truncates and leaves clamping to the caller, and this is that caller — an over-wide row
+// escapes the card and pushes the panel rail out of alignment for every row below it.
+// The clamp takes no ellipsis: the label already carries one when IT overflowed, and a
+// row cut mid-accelerator has no sensible tail to add.
 func keyRow(key, label string, width int) string {
-	return " " + styles.CardKeyStyle.Render(key) + " " + truncate(label, keyRowTextWidth(width, key))
+	row := " " + styles.CardKeyStyle.Render(key) + " " + truncate(label, keyRowTextWidth(width, key))
+	return ansi.Truncate(row, width, "")
 }
 
 // choiceChromeRows is the number of footer rows the choice card reserves inside its
@@ -1001,21 +1023,23 @@ func cardTextWidth(width int) int {
 	return w
 }
 
-// truncate clips s to at most width display runes, appending "…" when it overflows.
+// truncate clips s to at most width DISPLAY CELLS, appending "…" when it overflows.
 // A non-positive width returns "". It keeps a long choice on a single row so the
 // window's row count stays predictable.
+//
+// Cells, not runes. Choice and form labels are model- and tool-supplied text, so a
+// rune count is not the width the terminal will lay them out in: six CJK runes occupy
+// twelve columns and used to overflow their card by that much, while an accented label
+// decomposed into base+combining runes counted double and under-filled. ansi.Truncate
+// measures the same way the terminal does and also accounts for the tail's own width.
+//
+// A wide rune straddling the limit is dropped rather than split, so an odd remaining
+// column can go unused — at most width, not exactly width.
 func truncate(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(r[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
 // choiceWindowCap is the number of choice rows the box can show given its height

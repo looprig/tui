@@ -1164,6 +1164,14 @@ func TestInteractionPermissionSelectionAndAccelerators(t *testing.T) {
 		{name: "down from deny wraps to approve, enter approves", keys: []tea.KeyPressMsg{downKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
 		{name: "up from deny reaches approve-always, enter approves it", keys: []tea.KeyPressMsg{upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
 		{name: "a full down cycle returns to deny", keys: []tea.KeyPressMsg{downKey(), downKey(), downKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
+		// ↑ PAST the top row. moveApproval normalizes Go's negative remainder with a double
+		// modulo, so index 0 - 1 wraps to the LAST row rather than to -1. Three ↑ reach the
+		// top and step off it; the fourth proves the wrap landed on a real row, because a
+		// single-modulo -1 would keep counting down into indices that name no row and
+		// approvalAt would deny every one of them. Three ↑ alone cannot show this: -1 and the
+		// correct index 2 both resolve to Deny.
+		{name: "up off the top wraps to the last row", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
+		{name: "up past the top keeps cycling real rows", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
 		{name: "navigating alone resolves nothing", keys: []tea.KeyPressMsg{downKey(), upKey(), downKey()}, wantKind: uiNoop, wantPop: false},
 		{name: "y still approves directly", keys: []tea.KeyPressMsg{runeKey('y')}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
 		{name: "a still approves always for this workspace directly", keys: []tea.KeyPressMsg{runeKey('a')}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
@@ -1382,4 +1390,51 @@ func TestInteractionChoiceAcceleratorsIgnoreModifiedKeys(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPromptCursorMovesDoNotAliasTheCaller pins the clone in approveBy and selectBy.
+//
+// interactionModel is passed and returned BY VALUE, but a value copy shares the pending
+// slice's backing array with the original. Moving a cursor by writing through
+// m.pending[0] therefore mutates the CALLER's prompt too — the returned model is supposed
+// to be the only thing that changed. Both movers clone the head first, and this is the
+// hazard that justifies it: without the clone the assertions below see the pre-update model
+// silently move under them.
+//
+// approveBy and selectBy are covered together because they have the identical structure and
+// the identical gap; a fix to one that missed the other is exactly what this catches.
+func TestPromptCursorMovesDoNotAliasTheCaller(t *testing.T) {
+	t.Parallel()
+
+	t.Run("approveBy does not move the caller's approval cursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := permissionModel(bashPermission("go build"))
+		before := m.ActivePrompt().approval
+
+		moved, _, _ := m.Update(downKey())
+
+		if got := m.ActivePrompt().approval; got != before {
+			t.Errorf("caller's approval cursor moved to %d, want %d — the returned model wrote through the shared backing array", got, before)
+		}
+		if got := moved.ActivePrompt().approval; got == before {
+			t.Errorf("returned model's approval cursor = %d, want it moved off %d", got, before)
+		}
+	})
+
+	t.Run("selectBy does not move the caller's choice cursor", func(t *testing.T) {
+		t.Parallel()
+
+		m := choiceModel([]string{"alpha", "beta", "gamma"})
+		before := m.ActivePrompt().selected
+
+		moved, _, _ := m.Update(downKey())
+
+		if got := m.ActivePrompt().selected; got != before {
+			t.Errorf("caller's choice cursor moved to %d, want %d — the returned model wrote through the shared backing array", got, before)
+		}
+		if got := moved.ActivePrompt().selected; got == before {
+			t.Errorf("returned model's choice cursor = %d, want it moved off %d", got, before)
+		}
+	})
 }

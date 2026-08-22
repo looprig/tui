@@ -38,12 +38,12 @@ func bandedRows(t *testing.T, rendered string) []string {
 // "Exactly one" is half the assertion: two banded rows would mean two cursors.
 func assertBandedRow(t *testing.T, rendered, want string) {
 	t.Helper()
+	if want == "" {
+		t.Fatal("assertBandedRow called with an empty want — that would assert nothing")
+	}
 	got := bandedRows(t, rendered)
 	if len(got) != 1 {
 		t.Fatalf("banded rows = %q, want exactly one (%q) in:\n%s", got, want, stripANSI(rendered))
-	}
-	if want == "" {
-		t.Fatal("assertBandedRow called with an empty want — that would assert nothing")
 	}
 	if !strings.Contains(got[0], want) {
 		t.Errorf("banded row = %q, want it to contain %q", got[0], want)
@@ -388,22 +388,144 @@ func TestChoiceRowSelectionDoesNotShiftText(t *testing.T) {
 	}
 }
 
-// TestChoiceRowFitsWidth pins that a row is padded/clipped to exactly the card body width
-// whether or not it is selected, so the band spans the card and a long choice cannot push
-// the panel rail out of alignment. The double-digit accelerator is the case a single fixed
-// prefix width got wrong.
+// TestChoiceRowFitsWidth pins the two things a choice row owes the card: a SELECTED row
+// spans the body width exactly, so the band reaches both edges, and NO row exceeds it, so a
+// long choice cannot push the panel rail out of alignment. The double-digit accelerator is
+// the case a single fixed prefix width got wrong.
+//
+// It measures with lipgloss.Width, a DISPLAY-width function, and so must feed labels whose
+// display width differs from their rune count — otherwise it only ever asserts against
+// ASCII and reads as a guarantee the row arithmetic does not actually make. Choice labels
+// are model- and tool-supplied text, so both cases below arrive through normal use: CJK is
+// two columns per rune (a rune-counted budget overflowed the card by the difference), and a
+// decomposed accent is two runes per column (it under-filled by the same slack).
+//
+// An UNSELECTED row is asserted as a bound, not an equality, and the difference is real
+// rather than a hedge: a 2-cell rune cannot be split across the limit, so a label ending one
+// column short of the budget leaves that column unused (" [10] 日日日日日日日日…" is 23 of 24).
+// The selected row still measures exactly width because styles.SelectedRow pads it.
 func TestChoiceRowFitsWidth(t *testing.T) {
 	t.Parallel()
 
 	const width = 24
-	long := strings.Repeat("verylongchoice", 4)
-	for _, index := range []int{0, 9, 99} {
-		for _, selected := range []bool{false, true} {
-			row := stripANSI(choiceRow(index, long, selected, width))
-			if got := lipgloss.Width(row); got != width {
-				t.Errorf("index %d selected=%v: row width = %d, want %d (%q)", index, selected, got, width, row)
+	labels := map[string]string{
+		"ascii":     strings.Repeat("verylongchoice", 4),
+		"cjk wide":  strings.Repeat("\u65e5", 40),
+		"combining": strings.Repeat("e\u0301", 40),
+	}
+	for name, long := range labels {
+		for _, index := range []int{0, 9, 99} {
+			for _, selected := range []bool{false, true} {
+				row := stripANSI(choiceRow(index, long, selected, width))
+				got := lipgloss.Width(row)
+				if got > width {
+					t.Errorf("%s index %d selected=%v: row width = %d, want at most %d (%q)", name, index, selected, got, width, row)
+				}
+				if selected && got != width {
+					t.Errorf("%s index %d: selected row width = %d, want exactly %d so the band spans the card (%q)", name, index, got, width, row)
+				}
 			}
 		}
+	}
+}
+
+// TestKeyRowNeverOverflowsWidth pins the clamp on the shared row shape at the widths where
+// the row's own chrome does not fit.
+//
+// keyRow emits " [k] " unconditionally and used to bound only the LABEL, so a card too
+// narrow to hold the accelerator overflowed by the difference no matter how short the label
+// was: "[100]" in 6 columns rendered 7 cells. styles.SelectedRow pads but never truncates,
+// and neither choiceRow nor permissionActionRows clamped, so that extra cell escaped the
+// card and pushed the panel rail out of alignment for every row beneath it.
+func TestKeyRowNeverOverflowsWidth(t *testing.T) {
+	t.Parallel()
+
+	keys := []string{"[y]", "[1]", "[10]", "[100]"}
+	labels := []string{"", "x", "a much longer label than fits", strings.Repeat("日", 20)}
+
+	for _, key := range keys {
+		for _, label := range labels {
+			for width := 0; width <= 12; width++ {
+				row := stripANSI(keyRow(key, label, width))
+				if got := lipgloss.Width(row); got > width {
+					t.Errorf("keyRow(%q, %q, %d) = %q, width %d — overflows by %d",
+						key, label, width, row, got, got-width)
+				}
+			}
+		}
+	}
+}
+
+// TestFormRowFitsWidth pins that a form field row is clipped to the card body width,
+// cursor prefix included. The row carries a 2-cell cursor/indent prefix (formCursorWidth)
+// that the label budget must pay for; charging the label the full width instead put the
+// row two columns over on every long field, focused or not.
+func TestFormRowFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	const width = 30
+	f := formField{Label: strings.Repeat("longfieldlabel", 6), Kind: gate.FieldText, Text: strings.Repeat("v", 40)}
+	for _, focused := range []bool{false, true} {
+		row := stripANSI(formRow(f, focused, width))
+		if got := lipgloss.Width(row); got != width {
+			t.Errorf("focused=%v: form row width = %d, want %d (%q)", focused, got, width, row)
+		}
+	}
+}
+
+// TestApprovalHintsCoverEveryControl pins approvalHints against gate.ApprovalControls,
+// one row per control and in the same order.
+//
+// approvalHints cannot be DERIVED from the control set, because a control's key is a TUI
+// decision the shared set does not carry. This test is what the derivation would have
+// bought: a control added, removed or reordered upstream fails here rather than leaving the
+// card silently short a row, or pairing an action with another action's key.
+func TestApprovalHintsCoverEveryControl(t *testing.T) {
+	t.Parallel()
+
+	controls := gate.ApprovalControls()
+	if len(controls) != len(approvalHints) {
+		t.Fatalf("approvalHints has %d rows, want one per gate.ApprovalControls control (%d)", len(approvalHints), len(controls))
+	}
+	for i, c := range controls {
+		if string(approvalHints[i].action) != c.Action {
+			t.Errorf("approvalHints[%d].action = %q, want control %d's action %q", i, approvalHints[i].action, i, c.Action)
+		}
+	}
+}
+
+// TestDenyHintIndexWithoutADenyRow pins the answer denyHintIndex must never give.
+//
+// The cursor a fresh permission prompt starts on is whatever this returns. A hint list with
+// no gate.ApprovalDeny row has no correct index, and -1 is how that is said: it names no
+// row, nothing is banded, and approvalAt(-1) denies. Returning 0 on a miss would instead
+// park the cursor on the FIRST row and a blind enter would approve — the fail-secure
+// default silently inverted.
+func TestDenyHintIndexWithoutADenyRow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		hints []approvalHint
+		want  int
+	}{
+		{name: "no deny row", hints: []approvalHint{{"y", gate.ApprovalApprove}, {"a", gate.ApprovalApproveAlwaysWorkspace}}, want: -1},
+		{name: "empty list", hints: nil, want: -1},
+		{name: "deny is not first", hints: []approvalHint{{"y", gate.ApprovalApprove}, {"n", gate.ApprovalDeny}}, want: 1},
+		{name: "the shipped list", hints: approvalHints, want: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := denyHintIndex(tt.hints); got != tt.want {
+				t.Errorf("denyHintIndex = %d, want %d", got, tt.want)
+			}
+			if got := denyHintIndex(tt.hints); got == 0 && tt.want != 0 {
+				t.Error("denyHintIndex returned 0 on a miss — a blind enter would approve")
+			}
+		})
 	}
 }
 
