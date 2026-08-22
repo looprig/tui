@@ -46,7 +46,8 @@ runtime contracts, and Harness never imports TUI.
 - `golang.org/x/vuln/cmd/govulncheck` — official Go vulnerability scanner (dev/tool only)
 - `honnef.co/go/tools/cmd/staticcheck` — extended static analysis (dev/tool only)
 - `github.com/charmbracelet/bubbletea` — Elm-architecture TUI runtime; required by `internal/presentation` and `runtime` (stdlib has no terminal raw-mode/TUI framework). **v2 approved (2026-06-15):** the TUI uses Bubble Tea v2 and co-versioned Bubbles/Lipgloss v2 for the Kitty keyboard protocol and other v2 features. The v2 import path is the `charm.land/...` vanity module.
-- `github.com/charmbracelet/bubbles` — textarea + viewport widgets for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/bubbles/v2` (subpackages `.../textarea`, `.../viewport`, `.../key`).
+- `github.com/charmbracelet/bubbles` — textarea + viewport widgets for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/bubbles/v2`. **Subpackages `list` and `help` additionally approved (2026-08-22)** for the completion tray and the `?` key panel. `textarea` (already approved) additionally serves form-gate text fields.
+- `github.com/sahilm/fuzzy` — transitive (indirect) dep of `bubbles/list`, which imports it for `DefaultFilter`; approved as part of `list`, not chosen directly
 - `github.com/charmbracelet/lipgloss` — terminal styling/layout for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/lipgloss/v2`.
 - `github.com/charmbracelet/glamour` — markdown → ANSI rendering for the TUI transcript; pin a version compatible with Lipgloss v2. v2 import path: `charm.land/glamour/v2` (styles subpackage `charm.land/glamour/v2/styles`).
 - `github.com/atotto/clipboard` — transitive (indirect) dep of `bubbles/textarea`, which imports it unconditionally for paste; approved as part of textarea, not chosen directly
