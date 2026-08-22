@@ -29,30 +29,43 @@ func renderCompletionTray(rows []completionTrayRow, selected, width int) string 
 	return renderCompletionTrayBackground(rows, selected, width, styles.TraySelectedBg)
 }
 
+// renderCompletionTrayBackground renders every row at width columns and bands the selected
+// one with the shared selection treatment.
+//
+// selectedBg is IGNORED and kept only so the four panels' ViewWindowBackground signatures
+// need not change while they migrate one at a time. styles.SelectedRow is deliberately
+// one-argument — it owns the selection fill so no surface can drift to its own shade — which
+// also means the caller's per-frame glow color no longer reaches the row. Retiring the glow
+// (and this parameter with it) belongs to the task that migrates the last panel, not here.
 func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int, selectedBg color.Color) string {
 	if width <= 0 || len(rows) == 0 {
 		return ""
 	}
 
 	panelOpen, panelReset := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, selectedReset := styles.DeriveBackgroundSGR(selectedBg)
 	rendered := make([]string, len(rows))
 	for i, row := range rows {
+		// The rail is the SAME neutral gray on every row, selected or not. It is the
+		// tray's left edge, not a second cursor: the band is the cursor, so a highlighted
+		// rail would say the same thing twice and break the edge's continuity down the
+		// tray. It is also moot on the selected row — the shared fill is light, so
+		// SelectedRow strips inner styling and re-renders the row near-black, discarding
+		// whatever color were chosen here. The old blue CardRailStyle rail would have
+		// been brand blue on brand blue.
 		rail := styles.AccentBarStyle.Render(styles.AccentBar)
-		primary := row.primary
-		open, reset := panelOpen, panelReset
-		if i == selected {
-			rail = styles.CardRailStyle.Render(styles.AccentBar)
-			primary = styles.CardSelectedStyle.Background(selectedBg).Render(primary)
-			open, reset = selectedOpen, selectedReset
-		}
 
-		line := rail + " " + primary
+		styled := rail + " " + row.primary
 		if row.secondary != "" {
-			line += "  " + styles.CardHintStyle.Render(row.secondary)
+			styled += "  " + styles.CardHintStyle.Render(row.secondary)
 		}
-		line = ansi.Truncate(line, width, "")
-		rendered[i] = styles.FillLineBackgroundWith(line, width, open, reset)
+		// SelectedRow pads but never truncates, so clamp to width first — that is the
+		// caller's half of the contract.
+		styled = ansi.Truncate(styled, width, "")
+		if i == selected {
+			rendered[i] = styles.SelectedRow(styled, width)
+			continue
+		}
+		rendered[i] = styles.FillLineBackgroundWith(styled, width, panelOpen, panelReset)
 	}
 	return strings.Join(rendered, "\n")
 }

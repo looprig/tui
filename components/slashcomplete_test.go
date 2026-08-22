@@ -238,7 +238,6 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 	}
 
 	panelOpen, _ := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	for i, line := range lines {
 		if got := lipgloss.Width(line); got != width {
 			t.Errorf("row %d width = %d, want %d", i, got, width)
@@ -252,15 +251,13 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 		}
 	}
 
-	if !strings.HasPrefix(lines[0], selectedOpen) {
-		t.Errorf("selected row does not open with TraySelectedBg: %q", lines[0])
+	// The selected row is the shared band and nothing else: no tray-local fill, no
+	// highlighted rail, no bold label. Those were three ways for this surface to drift.
+	if !strings.HasPrefix(lines[0], selectedBandOpen(t)) {
+		t.Errorf("selected row does not open with the shared selection band: %q", lines[0])
 	}
-	if !strings.Contains(lines[0], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
-		t.Errorf("selected row does not use CardRailStyle: %q", lines[0])
-	}
-	selectedLabel := styles.CardSelectedStyle.Background(styles.TraySelectedBg).Render("/clear")
-	if !strings.Contains(lines[0], strings.TrimSuffix(selectedLabel, "\x1b[m")) {
-		t.Errorf("selected primary label is not rendered with CardSelectedStyle: %q", lines[0])
+	if strings.Contains(lines[0], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
+		t.Errorf("selected row still paints its own rail color: %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], panelOpen) {
 		t.Errorf("unselected row does not open with PanelBg: %q", lines[1])
@@ -290,7 +287,7 @@ func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(stripANSI(view), "/exit") {
 		t.Errorf("ViewWindow() = %q, want selected /exit visible", view)
 	}
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
+	selectedOpen := selectedBandOpen(t)
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(stripANSI(line), "/exit") && !strings.HasPrefix(line, selectedOpen) {
 			t.Errorf("visible /exit row is not selected: %q", line)
@@ -301,20 +298,19 @@ func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	}
 }
 
-func TestSlashCompleteViewWindowBackgroundUsesProvidedSelectionFill(t *testing.T) {
+// TestSlashCompleteViewWindowBackgroundIgnoresProvidedSelectionFill pins the NEW contract of
+// the selectedBg parameter: it does nothing. styles.SelectedRow is one-argument and owns the
+// selection fill so no surface can drift to its own shade, so a caller-supplied color no
+// longer reaches the row. The parameter survives only so the four panels' signatures need
+// not change while they migrate one at a time. Asserting the no-op keeps anyone from quietly
+// re-plumbing a per-caller fill and reopening the drift.
+func TestSlashCompleteViewWindowBackgroundIgnoresProvidedSelectionFill(t *testing.T) {
 	t.Parallel()
 
 	s := NewSlashComplete("/")
-	bg := lipgloss.Color("#112233")
-	view := s.ViewWindowBackground(40, 3, bg)
-	line := strings.Split(view, "\n")[0]
-	open, _ := styles.DeriveBackgroundSGR(bg)
-	if !strings.HasPrefix(line, open) {
-		t.Errorf("selected row does not open with provided background: %q", line)
-	}
-	wantLabel := lipgloss.NewStyle().Bold(true).Background(bg).Render("/clear")
-	if !strings.Contains(line, strings.TrimSuffix(wantLabel, "\x1b[m")) {
-		t.Errorf("selected label does not use provided background: %q", line)
+	got := s.ViewWindowBackground(40, 3, lipgloss.Color("#112233"))
+	if want := s.ViewWindow(40, 3); got != want {
+		t.Errorf("ViewWindowBackground honored the provided fill:\n got %q\nwant %q", got, want)
 	}
 }
 

@@ -75,22 +75,19 @@ func TestFileCompleteViewWidthShowsFullAtPathsAndTraySelection(t *testing.T) {
 	}
 
 	panelOpen, _ := styles.DeriveBackgroundSGR(styles.PanelBg)
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	if !strings.HasPrefix(lines[0], panelOpen) {
 		t.Errorf("unselected row does not open with PanelBg: %q", lines[0])
 	}
 	if !strings.Contains(lines[0], strings.TrimSuffix(styles.AccentBarStyle.Render(styles.AccentBar), "\x1b[m")) {
 		t.Errorf("unselected row does not use AccentBarStyle: %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], selectedOpen) {
-		t.Errorf("selected row does not open with TraySelectedBg: %q", lines[1])
+	// The selected row is the shared band and nothing else: no tray-local fill, no
+	// highlighted rail, no bold label. Those were three ways for this surface to drift.
+	if !strings.HasPrefix(lines[1], selectedBandOpen(t)) {
+		t.Errorf("selected row does not open with the shared selection band: %q", lines[1])
 	}
-	if !strings.Contains(lines[1], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
-		t.Errorf("selected row does not use CardRailStyle: %q", lines[1])
-	}
-	selectedLabel := styles.CardSelectedStyle.Background(styles.TraySelectedBg).Render("@tui/components/")
-	if !strings.Contains(lines[1], strings.TrimSuffix(selectedLabel, "\x1b[m")) {
-		t.Errorf("selected path is not rendered with CardSelectedStyle: %q", lines[1])
+	if strings.Contains(lines[1], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
+		t.Errorf("selected row still paints its own rail color: %q", lines[1])
 	}
 }
 
@@ -116,7 +113,7 @@ func TestFileCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	if !strings.Contains(ansi.Strip(view), "@file-6.go") {
 		t.Errorf("ViewWindow() = %q, want selected @file-6.go visible", view)
 	}
-	selectedOpen, _ := styles.DeriveBackgroundSGR(styles.TraySelectedBg)
+	selectedOpen := selectedBandOpen(t)
 	for _, line := range strings.Split(view, "\n") {
 		if strings.Contains(ansi.Strip(line), "@file-6.go") && !strings.HasPrefix(line, selectedOpen) {
 			t.Errorf("visible @file-6.go row is not selected: %q", line)
