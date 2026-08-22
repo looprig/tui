@@ -20,6 +20,7 @@ require (
 require (
 	github.com/dlclark/regexp2/v2 v2.6.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
+	github.com/sahilm/fuzzy v0.1.3 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 )
 

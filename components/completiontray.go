@@ -57,12 +57,70 @@ func renderCompletionTray(rows []completionTrayRow, selected, width int) string 
 	return renderCompletionTrayBackground(rows, selected, width, styles.TraySelectedBg)
 }
 
+// trayRowRender holds everything the rows of ONE render share: the width they fill, the
+// column their secondaries align to, the inset their content is pushed in by, and the panel
+// fill's SGR pair -- derived once per render rather than once per row, per the note on
+// styles.FillLineBackgroundWith.
+//
+// It exists so the batch renderer and the list-backed trayDelegate compose a row through the
+// SAME code. Two renderers that merely agree today would drift the first time one of them is
+// touched; going through one primitive makes their agreement structural.
+type trayRowRender struct {
+	width      int
+	column     int
+	inset      int
+	panelOpen  string
+	panelReset string
+}
+
+func newTrayRowRender(rows []completionTrayRow, width, inset int) trayRowRender {
+	open, reset := styles.DeriveBackgroundSGR(styles.PanelBg)
+	return trayRowRender{
+		width:      width,
+		column:     completionTrayPrimaryColumn(rows),
+		inset:      max(0, inset),
+		panelOpen:  open,
+		panelReset: reset,
+	}
+}
+
+// row composes one PHYSICAL row -- rail, inset, body -- and paints its background.
+//
+// The rail is the same neutral gray on every row, selected or not. It is the tray's left
+// edge, not a second cursor: the band is the cursor, so a highlighted rail would say the
+// same thing twice and break the edge's continuity down the tray. It is moot on the selected
+// row in any case -- the shared fill is light, so styles.SelectedRow strips inner styling and
+// re-renders the row near-black, discarding whatever color were chosen here.
+//
+// The clamp happens BEFORE the band because styles.SelectedRow pads to width but never
+// truncates; that half of the contract is the caller's. It clamps short of width by the
+// inset, so nothing is ever drawn in the trailing inset columns -- while the FILL still runs
+// the full width, so the tray stays one solid block rather than a ragged one.
+func (r trayRowRender) row(body string, selected bool) string {
+	line := styles.AccentBarStyle.Render(styles.AccentBar) + strings.Repeat(" ", 1+r.inset) + body
+	line = ansi.Truncate(line, max(0, r.width-r.inset), "")
+	if selected {
+		return styles.SelectedRow(line, r.width)
+	}
+	return styles.FillLineBackgroundWith(line, r.width, r.panelOpen, r.panelReset)
+}
+
+// line renders a whole tray row: the primary, padded out to the shared column, then the
+// faint secondary beside it.
+func (r trayRowRender) line(row completionTrayRow, selected bool) string {
+	body := row.primary
+	if row.secondary != "" {
+		body += completionTrayGap(row.primary, r.column) + styles.CardHintStyle.Render(row.secondary)
+	}
+	return r.row(body, selected)
+}
+
 // renderCompletionTrayBackground renders every row at width columns and bands the selected
 // one with the shared selection treatment.
 //
 // selectedBg is IGNORED and kept only so the four panels' ViewWindowBackground signatures
 // need not change while they migrate one at a time. styles.SelectedRow is deliberately
-// one-argument — it owns the selection fill so no surface can drift to its own shade — which
+// one-argument -- it owns the selection fill so no surface can drift to its own shade -- which
 // also means the caller's per-frame glow color no longer reaches the row. Retiring the glow
 // (and this parameter with it) belongs to the task that migrates the last panel, not here.
 func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int, selectedBg color.Color) string {
@@ -70,31 +128,10 @@ func renderCompletionTrayBackground(rows []completionTrayRow, selected, width in
 		return ""
 	}
 
-	panelOpen, panelReset := styles.DeriveBackgroundSGR(styles.PanelBg)
-	column := completionTrayPrimaryColumn(rows)
+	render := newTrayRowRender(rows, width, 0)
 	rendered := make([]string, len(rows))
 	for i, row := range rows {
-		// The rail is the SAME neutral gray on every row, selected or not. It is the
-		// tray's left edge, not a second cursor: the band is the cursor, so a highlighted
-		// rail would say the same thing twice and break the edge's continuity down the
-		// tray. It is also moot on the selected row — the shared fill is light, so
-		// SelectedRow strips inner styling and re-renders the row near-black, discarding
-		// whatever color were chosen here. The old blue CardRailStyle rail would have
-		// been brand blue on brand blue.
-		rail := styles.AccentBarStyle.Render(styles.AccentBar)
-
-		styled := rail + " " + row.primary
-		if row.secondary != "" {
-			styled += completionTrayGap(row.primary, column) + styles.CardHintStyle.Render(row.secondary)
-		}
-		// SelectedRow pads but never truncates, so clamp to width first — that is the
-		// caller's half of the contract.
-		styled = ansi.Truncate(styled, width, "")
-		if i == selected {
-			rendered[i] = styles.SelectedRow(styled, width)
-			continue
-		}
-		rendered[i] = styles.FillLineBackgroundWith(styled, width, panelOpen, panelReset)
+		rendered[i] = render.line(row, i == selected)
 	}
 	return strings.Join(rendered, "\n")
 }
