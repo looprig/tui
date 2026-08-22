@@ -1,11 +1,8 @@
 package components
 
 import (
-	"image/color"
 	"strings"
 	"unicode"
-
-	"github.com/looprig/tui/styles"
 )
 
 // FileItem is one @path completion candidate. Path is the value to complete to (e.g.
@@ -127,10 +124,5 @@ func (f *FileComplete) ViewWidth(width int) string {
 // ViewWindow renders a full-width tray capped to maxRows and keeps the selected path in the
 // visible window. View and ViewWidth remain the unbounded variants.
 func (f *FileComplete) ViewWindow(width, maxRows int) string {
-	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows), styles.TraySelectedBg)
-}
-
-// ViewWindowBackground renders the bounded tray with a caller-provided selected-row fill.
-func (f *FileComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
-	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows), selectedBg)
+	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows))
 }

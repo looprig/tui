@@ -298,22 +298,6 @@ func TestSlashCompleteViewWindowKeepsSelectionVisible(t *testing.T) {
 	}
 }
 
-// TestSlashCompleteViewWindowBackgroundIgnoresProvidedSelectionFill pins the NEW contract of
-// the selectedBg parameter: it does nothing. styles.SelectedRow is one-argument and owns the
-// selection fill so no surface can drift to its own shade, so a caller-supplied color no
-// longer reaches the row. The parameter survives only so the four panels' signatures need
-// not change while they migrate one at a time. Asserting the no-op keeps anyone from quietly
-// re-plumbing a per-caller fill and reopening the drift.
-func TestSlashCompleteViewWindowBackgroundIgnoresProvidedSelectionFill(t *testing.T) {
-	t.Parallel()
-
-	s := NewSlashComplete("/")
-	got := s.ViewWindowBackground(40, 3, lipgloss.Color("#112233"))
-	if want := s.ViewWindow(40, 3); got != want {
-		t.Errorf("ViewWindowBackground honored the provided fill:\n got %q\nwant %q", got, want)
-	}
-}
-
 func TestSlashCompleteViewWidthClampsANSISafely(t *testing.T) {
 	t.Parallel()
 

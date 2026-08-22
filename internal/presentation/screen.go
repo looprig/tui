@@ -119,12 +119,6 @@ type Screen struct {
 	hoverGlowFrame uint
 	hoverGlowEpoch uint64
 
-	// trayGlowFrame drives only the selected completion row's background. Keyboard and
-	// pointer selection changes restart it at the neutral panel background; its independent
-	// epoch prevents stale ticks from an earlier row advancing the new selection.
-	trayGlowFrame uint
-	trayGlowEpoch uint64
-
 	// turnStartedAt records each running loop's current-turn start time — set from the
 	// loop's TurnStarted event CreatedAt, deleted on its terminal (TurnDone/Failed/
 	// Interrupted). The focused loop's entry drives the live status-line elapsed timer
@@ -194,16 +188,6 @@ func hoverGlowCmd(epoch uint64) tea.Cmd {
 	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return hoverGlowMsg{epoch: epoch} })
 }
 
-// trayGlowFinalFrame retains the completion tray's longer four-color background ignition;
-// link hover uses its independent two-color transition.
-const trayGlowFinalFrame uint = 3
-
-type trayGlowMsg struct{ epoch uint64 }
-
-func trayGlowCmd(epoch uint64) tea.Cmd {
-	return tea.Tick(hoverGlowInterval, func(time.Time) tea.Msg { return trayGlowMsg{epoch: epoch} })
-}
-
 // loopBarCap is the visible-cap the modern active-loops bar renders under: at most
 // this many loop segments show, the rest folding into a "… +N" overflow marker so the bar
 // never grows unbounded across a long session's accumulated loops.
@@ -256,7 +240,6 @@ func New(ctx context.Context, agent Agent, open OpenAgent, banner AgentBanner, s
 		focusedLoopID:     agent.ActiveLoopID(),
 		turnStartedAt:     make(map[uuid.UUID]time.Time),
 		restoring:         true,
-		trayGlowFrame:     trayGlowFinalFrame,
 	}
 	m.interaction = styleComposer(m.interaction)
 	if runtimeCatalog != nil && runtimeController != nil {
@@ -410,9 +393,6 @@ func (m Screen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hoverGlowMsg:
 		cmd := m.handleHoverGlow(msg)
 		return m, cmd
-	case trayGlowMsg:
-		cmd := m.handleTrayGlow(msg)
-		return m, cmd
 	case runtimeChoicesMsg:
 		cmd := m.handleRuntimeChoices(msg)
 		return m, cmd
@@ -499,7 +479,7 @@ func (m *Screen) handleRuntimeChoices(msg runtimeChoicesMsg) tea.Cmd {
 	m.runtimeTrayKind = msg.kind
 	m.runtimeTrayLoopID = msg.loopID
 	m.resize()
-	return m.startTrayGlow()
+	return nil
 }
 
 func (m *Screen) handleRuntimeMutation(msg runtimeMutationMsg) tea.Cmd {
@@ -546,7 +526,7 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 		return nil
 	}
 	m.resize()
-	return m.startTrayGlow()
+	return nil
 }
 
 // lastUsedDate is the picker's second-row date: when the session was actually last used.
@@ -829,30 +809,6 @@ func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
 		return nil
 	}
 	return hoverGlowCmd(msg.epoch)
-}
-
-func (m *Screen) handleTrayGlow(msg trayGlowMsg) tea.Cmd {
-	if msg.epoch != m.trayGlowEpoch || !m.completionTrayOpen() {
-		return nil
-	}
-	if m.trayGlowFrame >= trayGlowFinalFrame {
-		return nil
-	}
-	m.trayGlowFrame++
-	if m.trayGlowFrame >= trayGlowFinalFrame {
-		return nil
-	}
-	return trayGlowCmd(msg.epoch)
-}
-
-func (m Screen) completionTrayOpen() bool {
-	return m.sessionTray != nil || m.runtimeTray != nil || m.interaction.slash != nil || m.interaction.files != nil
-}
-
-func (m *Screen) startTrayGlow() tea.Cmd {
-	m.trayGlowFrame = 0
-	m.trayGlowEpoch++
-	return trayGlowCmd(m.trayGlowEpoch)
 }
 
 // handleRestored releases the initial replay barrier. A non-empty historical fold installs
@@ -1215,16 +1171,10 @@ func (m Screen) routeToEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.runtimeTray != nil || m.sessionTray != nil {
 		return m, nil
 	}
-	beforeKind, _, beforeOpen := m.completionCursor()
 	var cmd tea.Cmd
 	m.interaction, cmd = m.interaction.ForwardToEditor(msg)
 	m.resize()
-	afterKind, _, afterOpen := m.completionCursor()
-	var trayGlow tea.Cmd
-	if completionTrayDidOpen(beforeKind, beforeOpen, afterKind, afterOpen) {
-		trayGlow = m.startTrayGlow()
-	}
-	return m, tea.Batch(cmd, trayGlow)
+	return m, cmd
 }
 
 func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1267,10 +1217,10 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "up":
 			m.runtimeTray.Up()
-			return m, m.startTrayGlow()
+			return m, nil
 		case "down", "tab":
 			m.runtimeTray.Down()
-			return m, m.startTrayGlow()
+			return m, nil
 		case "enter":
 			selected := m.runtimeTray.Selected()
 			kind, loopID := m.runtimeTrayKind, m.runtimeTrayLoopID
@@ -1290,10 +1240,10 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "up":
 			m.sessionTray.Up()
-			return m, m.startTrayGlow()
+			return m, nil
 		case "down", "tab":
 			m.sessionTray.Down()
-			return m, m.startTrayGlow()
+			return m, nil
 		case "enter":
 			id, err := uuid.Parse(m.sessionTray.Selected().ID)
 			m.sessionTray = nil
@@ -1353,7 +1303,6 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
 // default submit path (mapAction → submit → Submit) is untouched.
 func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	beforeKind, beforeCursor, beforeOpen := m.completionCursor()
 	var action uiAction
 	var blink tea.Cmd
 	m.interaction, action, blink = m.interaction.Update(msg)
@@ -1408,34 +1357,7 @@ func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.resize()
 	}
-	var trayGlow tea.Cmd
-	afterKind, afterCursor, afterOpen := m.completionCursor()
-	opened := completionTrayDidOpen(beforeKind, beforeOpen, afterKind, afterOpen)
-	moved := (msg.String() == "up" || msg.String() == "down") &&
-		beforeOpen && afterOpen && beforeKind == afterKind && beforeCursor != afterCursor
-	if opened || moved {
-		trayGlow = m.startTrayGlow()
-	}
-	return m, tea.Batch(cmd, blink, trayGlow)
-}
-
-func completionTrayDidOpen(beforeKind byte, beforeOpen bool, afterKind byte, afterOpen bool) bool {
-	return afterOpen && (!beforeOpen || beforeKind != afterKind)
-}
-
-func (m Screen) completionCursor() (kind byte, cursor int, open bool) {
-	switch {
-	case m.sessionTray != nil:
-		return 'r', m.sessionTray.Cursor(), true
-	case m.runtimeTray != nil:
-		return 'v', m.runtimeTray.Cursor(), true
-	case m.interaction.slash != nil:
-		return 's', m.interaction.slash.Cursor(), true
-	case m.interaction.files != nil:
-		return 'f', m.interaction.files.Cursor(), true
-	default:
-		return 0, 0, false
-	}
+	return m, tea.Batch(cmd, blink)
 }
 
 // handleMouse routes a mouse event by the region it falls in. The wheel scrolls the content
@@ -1464,7 +1386,7 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case regionBar:
 		regionCmd = m.barMouse(msg, mouse)
 	case regionTray:
-		regionCmd = m.trayMouse(msg, mouse)
+		m.trayMouse(msg, mouse)
 	}
 	if hoverCmd == nil {
 		return regionCmd
@@ -1477,33 +1399,25 @@ func (m *Screen) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 // trayMouse maps pointer motion to the visible completion row. The tray is selection-only:
 // motion never completes, dispatches, or submits the highlighted item.
-func (m *Screen) trayMouse(msg tea.MouseMsg, mouse tea.Mouse) tea.Cmd {
+func (m *Screen) trayMouse(msg tea.MouseMsg, mouse tea.Mouse) {
 	if _, ok := msg.(tea.MouseMotionMsg); !ok {
-		return nil
+		return
 	}
 	lay := m.layout()
 	row := mouse.Y - lay.trayTop
 	if row < 0 || row >= lay.trayH {
-		return nil
+		return
 	}
-	if m.sessionTray != nil {
-		if m.sessionTray.SelectWindowRow(row, lay.trayH) {
-			return m.startTrayGlow()
-		}
-	} else if m.runtimeTray != nil {
-		if m.runtimeTray.SelectWindowRow(row, lay.trayH) {
-			return m.startTrayGlow()
-		}
-	} else if m.interaction.slash != nil {
-		if m.interaction.slash.SelectWindowRow(row, lay.trayH) {
-			return m.startTrayGlow()
-		}
-	} else if m.interaction.files != nil {
-		if m.interaction.files.SelectWindowRow(row, lay.trayH) {
-			return m.startTrayGlow()
-		}
+	switch {
+	case m.sessionTray != nil:
+		m.sessionTray.SelectWindowRow(row, lay.trayH)
+	case m.runtimeTray != nil:
+		m.runtimeTray.SelectWindowRow(row, lay.trayH)
+	case m.interaction.slash != nil:
+		m.interaction.slash.SelectWindowRow(row, lay.trayH)
+	case m.interaction.files != nil:
+		m.interaction.files.SelectWindowRow(row, lay.trayH)
 	}
-	return nil
 }
 
 // updateHover maps a cell-motion event to the same hit targets clicks use. A held-left
@@ -2119,13 +2033,13 @@ func (m Screen) completionTrayView(maxRows int) string {
 	}
 	switch {
 	case m.sessionTray != nil:
-		return m.sessionTray.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
+		return m.sessionTray.ViewWindow(m.width, maxRows)
 	case m.runtimeTray != nil:
-		return m.runtimeTray.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
+		return m.runtimeTray.ViewWindow(m.width, maxRows)
 	case m.interaction.slash != nil:
-		return m.interaction.slash.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
+		return m.interaction.slash.ViewWindow(m.width, maxRows)
 	case m.interaction.files != nil:
-		return m.interaction.files.ViewWindowBackground(m.width, maxRows, traySelectionColor(m.trayGlowFrame))
+		return m.interaction.files.ViewWindow(m.width, maxRows)
 	default:
 		return ""
 	}

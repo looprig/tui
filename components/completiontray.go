@@ -1,7 +1,6 @@
 package components
 
 import (
-	"image/color"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -54,7 +53,7 @@ func completionTrayNaturalWidth(rows []completionTrayRow) int {
 }
 
 func renderCompletionTray(rows []completionTrayRow, selected, width int) string {
-	return renderCompletionTrayBackground(rows, selected, width, styles.TraySelectedBg)
+	return renderCompletionTrayBackground(rows, selected, width)
 }
 
 // trayRowRender holds everything the rows of ONE render share: the width they fill, the
@@ -118,12 +117,9 @@ func (r trayRowRender) line(row completionTrayRow, selected bool) string {
 // renderCompletionTrayBackground renders every row at width columns and bands the selected
 // one with the shared selection treatment.
 //
-// selectedBg is IGNORED and kept only so the four panels' ViewWindowBackground signatures
-// need not change while they migrate one at a time. styles.SelectedRow is deliberately
-// one-argument -- it owns the selection fill so no surface can drift to its own shade -- which
-// also means the caller's per-frame glow color no longer reaches the row. Retiring the glow
-// (and this parameter with it) belongs to the task that migrates the last panel, not here.
-func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int, selectedBg color.Color) string {
+// There is deliberately NO fill parameter: styles.SelectedRow is one-argument and owns the
+// selection fill, so no surface can drift to its own shade.
+func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int) string {
 	if width <= 0 || len(rows) == 0 {
 		return ""
 	}
@@ -136,15 +132,15 @@ func renderCompletionTrayBackground(rows []completionTrayRow, selected, width in
 	return strings.Join(rendered, "\n")
 }
 
-func renderCompletionTrayWindowBackgroundAt(rows []completionTrayRow, selected, width, maxRows, start int, selectedBg color.Color) string {
+func renderCompletionTrayWindowBackgroundAt(rows []completionTrayRow, selected, width, maxRows, start int) string {
 	if maxRows <= 0 || len(rows) == 0 {
 		return ""
 	}
 	if maxRows >= len(rows) {
-		return renderCompletionTrayBackground(rows, selected, width, selectedBg)
+		return renderCompletionTrayBackground(rows, selected, width)
 	}
 	start = max(0, min(start, len(rows)-maxRows))
-	return renderCompletionTrayBackground(rows[start:start+maxRows], selected-start, width, selectedBg)
+	return renderCompletionTrayBackground(rows[start:start+maxRows], selected-start, width)
 }
 
 func completionTrayWindowStart(rowCount, selected, maxRows int) int {

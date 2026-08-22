@@ -1,10 +1,7 @@
 package components
 
 import (
-	"image/color"
 	"strings"
-
-	"github.com/looprig/tui/styles"
 )
 
 // ValueItem is one typed runtime choice. ID is the opaque payload returned on selection.
@@ -68,14 +65,10 @@ func (v *ValueComplete) SelectWindowRow(row, maxRows int) bool {
 	return true
 }
 
-func (v *ValueComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
+func (v *ValueComplete) ViewWindow(width, maxRows int) string {
 	rows := make([]completionTrayRow, len(v.items))
 	for i, item := range v.items {
 		rows[i] = completionTrayRow{primary: item.Label, secondary: item.Description}
 	}
-	return renderCompletionTrayWindowBackgroundAt(rows, v.cursor, width, maxRows, completionTrayWindowStart(len(rows), v.cursor, maxRows), selectedBg)
-}
-
-func (v *ValueComplete) ViewWindow(width, maxRows int) string {
-	return v.ViewWindowBackground(width, maxRows, styles.TraySelectedBg)
+	return renderCompletionTrayWindowBackgroundAt(rows, v.cursor, width, maxRows, completionTrayWindowStart(len(rows), v.cursor, maxRows))
 }

@@ -24,16 +24,6 @@ var (
 // transition from quiet gray to brand blue, with no intermediate shade or overshoot.
 const hoverGlowFinalFrame uint = 1
 
-// traySelectionColors are the selected completion row's background ignition frames. The
-// endpoint is a muted blue-gray related to the pastel brand blue, but dark enough to keep
-// both primary and faint hint text legible in the full-width tray.
-var traySelectionColors = [...]rgb{
-	{0x30, 0x30, 0x30},
-	{0x34, 0x3B, 0x43},
-	{0x37, 0x47, 0x58},
-	{0x3A, 0x52, 0x6B},
-}
-
 // gradSpatialFreq is the gradient's angular step PER CHARACTER (radians): how quickly the
 // color sweeps along the label. ~0.45 rad/char spreads a little over half a cosine cycle
 // across a typical 8-glyph label, so both endpoint colors show without the band repeating
@@ -121,13 +111,6 @@ func hoverGlowColor(frame uint) color.Color {
 	}
 	t := float64(frame) / float64(hoverGlowFinalFrame)
 	return lipgloss.Color(hoverGlowBase.lerp(gradBlue, t).hex())
-}
-
-func traySelectionColor(frame uint) color.Color {
-	if frame >= trayGlowFinalFrame {
-		frame = trayGlowFinalFrame
-	}
-	return lipgloss.Color(traySelectionColors[frame].hex())
 }
 
 // brandBlueLabel renders an action row in the palette's pastel-blue endpoint and underlines

@@ -241,10 +241,6 @@ func TestTrayListViewWindow(t *testing.T) {
 	if got := stacked.ViewWindow(40, 1); got != "" {
 		t.Errorf("stacked ViewWindow(maxRows=1) = %q, want empty", got)
 	}
-	// The bg argument is dead; ViewWindowBackground must agree with ViewWindow.
-	if got, want := tray.ViewWindowBackground(40, 2, lipgloss.Color("#112233")), tray.ViewWindow(40, 2); got != want {
-		t.Errorf("ViewWindowBackground honored the provided fill:\n got %q\nwant %q", got, want)
-	}
 }
 
 // TestTrayListEmpty pins the degenerate cases. An empty tray renders nothing rather than

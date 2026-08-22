@@ -18,7 +18,7 @@ func TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly(t *testing.T) {
 	tray := NewSessionComplete([]SessionItem{
 		{ID: "one", Title: "First", LastUsed: "2026-07-15", ShortID: "12345678"},
 	})
-	lines := strings.Split(tray.ViewWindowBackground(80, 3, styles.TraySelectedBg), "\n")
+	lines := strings.Split(tray.ViewWindow(80, 3), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("row count = %d, want at least 2", len(lines))
 	}
@@ -36,7 +36,7 @@ func TestSessionCompleteRendersTwoRowsWithContinuousUnboxedRail(t *testing.T) {
 		{ID: "one", Title: "First", State: "idle", Activity: "2m ago", LastUsed: "2026-07-15", ShortID: "12345678"},
 		{ID: "two", Title: "Second", State: "stopped", LastUsed: "2026-07-14", ShortID: "87654321"},
 	})
-	lines := strings.Split(tray.ViewWindowBackground(80, 6, styles.TraySelectedBg), "\n")
+	lines := strings.Split(tray.ViewWindow(80, 6), "\n")
 	if len(lines) != 5 {
 		t.Fatalf("row count = %d, want 5 (two + padding + two)", len(lines))
 	}

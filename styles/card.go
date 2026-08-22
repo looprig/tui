@@ -24,12 +24,11 @@ var CardSelectedBg = lipgloss.Color("#2c3a5a")
 
 // TraySelectedBg WAS the completion tray's settled selection fill, and no longer is: the
 // tray bands its selected row with SelectedRow, which owns the fill itself so no surface can
-// drift to its own shade. Nothing reads this value to paint a tray row any more.
+// drift to its own shade.
 //
-// It survives only as the endpoint of the tray-open glow animation in internal/presentation,
-// which SelectedRow's one-argument signature has cut off from the row it used to tint, and
-// as the default argument the four tray panels still pass to their ViewWindowBackground.
-// Both go away with the task that migrates the last panel, and this token with them.
+// One reader survives: the session picker's bespoke renderSessionLine, which has not yet
+// moved onto the shared tray renderer. It goes away with the task that migrates that panel,
+// and this token with it.
 var TraySelectedBg = lipgloss.Color("#3A526B")
 
 // CardRailStyle colors the gate card's left ▌ rail the brand blue, matching the user card's

@@ -2,7 +2,6 @@ package components
 
 import (
 	"fmt"
-	"image/color"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -53,7 +52,10 @@ func (s *SessionComplete) SelectWindowRow(row, maxRows int) bool {
 	return true
 }
 
-func (s *SessionComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
+// ViewWindow renders the bounded picker. It still bands its selected record with
+// styles.TraySelectedBg through its own renderSessionLine rather than styles.SelectedRow;
+// migrating this panel onto the shared tray renderer is a separate task.
+func (s *SessionComplete) ViewWindow(width, maxRows int) string {
 	if width <= 0 || maxRows < 2 || len(s.items) == 0 {
 		return ""
 	}
@@ -65,11 +67,11 @@ func (s *SessionComplete) ViewWindowBackground(width, maxRows int, selectedBg co
 		item := s.items[i]
 		selected := i == s.cursor
 		rows = append(rows,
-			renderSessionLine(width, item.Title+joinMetadata(item.State, item.Activity), selected, selectedBg),
-			renderSessionLine(width, fmt.Sprintf("%s · %s", item.LastUsed, item.ShortID), selected, selectedBg),
+			renderSessionLine(width, item.Title+joinMetadata(item.State, item.Activity), selected),
+			renderSessionLine(width, fmt.Sprintf("%s · %s", item.LastUsed, item.ShortID), selected),
 		)
 		if i+1 < end {
-			rows = append(rows, renderSessionLine(width, "", false, selectedBg))
+			rows = append(rows, renderSessionLine(width, "", false))
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -88,12 +90,12 @@ func joinMetadata(parts ...string) string {
 	return " · " + strings.Join(kept, " · ")
 }
 
-func renderSessionLine(width int, content string, selected bool, selectedBg color.Color) string {
+func renderSessionLine(width int, content string, selected bool) string {
 	rail := styles.AccentBarStyle.Render(styles.AccentBar)
 	open, reset := styles.DeriveBackgroundSGR(styles.PanelBg)
 	if selected {
 		rail = styles.CardRailStyle.Render(styles.AccentBar)
-		open, reset = styles.DeriveBackgroundSGR(selectedBg)
+		open, reset = styles.DeriveBackgroundSGR(styles.TraySelectedBg)
 	}
 	line := ansi.Truncate(rail+" "+content, width, "")
 	return styles.FillLineBackgroundWith(line, width, open, reset)

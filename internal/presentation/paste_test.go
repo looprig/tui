@@ -73,8 +73,7 @@ func TestPastedSlashCommandOpensTheCompletionPanel(t *testing.T) {
 	agent := &fakeAgent{activeLoopID: callID(1)}
 
 	pasted := newScreenSized(t, agent, 80, 24)
-	beforeEpoch := pasted.trayGlowEpoch
-	pasted, cmd := updateScreen(t, pasted, tea.PasteMsg{Content: "/cle"})
+	pasted, _ = updateScreen(t, pasted, tea.PasteMsg{Content: "/cle"})
 
 	typed := newScreenSized(t, agent, 80, 24)
 	for _, r := range "/cle" {
@@ -89,15 +88,6 @@ func TestPastedSlashCommandOpensTheCompletionPanel(t *testing.T) {
 	}
 	if got, want := pasted.interaction.input.Value(), typed.interaction.input.Value(); got != want {
 		t.Errorf("pasted composer = %q, typed composer = %q; a paste must match typing", got, want)
-	}
-	if pasted.trayGlowEpoch != beforeEpoch+1 {
-		t.Errorf("pasted tray glow epoch = %d, want %d after opening", pasted.trayGlowEpoch, beforeEpoch+1)
-	}
-	if pasted.trayGlowFrame != 0 {
-		t.Errorf("pasted tray glow frame = %d, want 0 after opening", pasted.trayGlowFrame)
-	}
-	if cmd == nil {
-		t.Error("pasted tray opening did not schedule the background transition")
 	}
 }
 

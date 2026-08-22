@@ -1,10 +1,7 @@
 package components
 
 import (
-	"image/color"
 	"strings"
-
-	"github.com/looprig/tui/styles"
 )
 
 // SlashCmd is one slash command's display metadata. The action is dispatched by
@@ -164,10 +161,5 @@ func (s *SlashComplete) ViewWidth(width int) string {
 // ViewWindow renders a full-width tray capped to maxRows and keeps the selected command in
 // the visible window. View and ViewWidth remain the unbounded variants.
 func (s *SlashComplete) ViewWindow(width, maxRows int) string {
-	return renderCompletionTrayWindowBackgroundAt(s.trayRows(), s.cursor, width, maxRows, s.visibleWindowStart(maxRows), styles.TraySelectedBg)
-}
-
-// ViewWindowBackground renders the bounded tray with a caller-provided selected-row fill.
-func (s *SlashComplete) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
-	return renderCompletionTrayWindowBackgroundAt(s.trayRows(), s.cursor, width, maxRows, s.visibleWindowStart(maxRows), selectedBg)
+	return renderCompletionTrayWindowBackgroundAt(s.trayRows(), s.cursor, width, maxRows, s.visibleWindowStart(maxRows))
 }

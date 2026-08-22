@@ -1,7 +1,6 @@
 package components
 
 import (
-	"image/color"
 	"io"
 	"strings"
 
@@ -238,14 +237,6 @@ func (t *trayList) ViewWindow(width, maxRows int) string {
 		return ""
 	}
 	return t.render(width, maxRows)
-}
-
-// ViewWindowBackground renders the bounded tray. selectedBg is IGNORED: styles.SelectedRow
-// is one-argument and owns the selection fill so no surface can drift to its own shade. The
-// parameter survives only so this engine can be dropped into the four panels without
-// touching their call sites.
-func (t *trayList) ViewWindowBackground(width, maxRows int, selectedBg color.Color) string {
-	return t.ViewWindow(width, maxRows)
 }
 
 // render draws the tray at width columns, showing at most maxRows visual rows (zero or less
