@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,6 +13,16 @@ import (
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
 )
+
+// styledCursor matches the ▸ focus cursor immediately preceded by an SGR escape — the
+// evidence that the focused FORM field row is highlighted (CardSelectedStyle wraps the row,
+// which begins with "▸ "), not rendered plain like the unfocused rows. Bold alone emits an
+// SGR even with color off, so this holds across color profiles.
+//
+// It lives here because the form card is the last surface still using a glyph cursor: the
+// choice and permission cards have moved to the banded styles.SelectedRow treatment, which
+// carries no glyph at all.
+var styledCursor = regexp.MustCompile("\x1b\\[[0-9;]*m▸")
 
 // formGateID is the deterministic gate id the form fixtures carry.
 var formGateID = gate.ID{0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}

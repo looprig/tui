@@ -575,9 +575,8 @@ func permissionRequirementsBody(p prompt, textW int) string {
 }
 
 // renderAskUserBox renders an AskUser prompt as a card. With choices it shows the
-// numbered list (a window scrolling with selected so a high row stays visible), the
-// ▸ cursor with the selected row highlighted, an [o] other escape hatch and a key
-// legend; with no choices it renders the free-text variant (the question above the
+// numbered list (a window scrolling with selected so a high row stays visible) with the
+// selected row banded, an [o] other escape hatch and a key legend; with no choices it renders the free-text variant (the question above the
 // reused answer field, no list/[o]). height bounds the choice window; width sizes the
 // card. Pure: view-model only.
 func renderAskUserBox(p prompt, width, height, pending int) string {
@@ -614,6 +613,12 @@ const formUnsupportedNotice = "This request uses a field type this terminal cann
 
 // formRequiredMark trails the label of a required field.
 const formRequiredMark = " *"
+
+// formCursorWidth is the 2-cell cursor/indent prefix on every form field row ("▸ " when
+// focused, "  " otherwise); the field text wraps in the remaining columns. Form rows still
+// carry a glyph cursor — the choice and permission cards have moved to the banded
+// styles.SelectedRow treatment, forms have not.
+const formCursorWidth = 2
 
 // renderFormBox renders a form gate as a card: the form's title, its body, one row
 // per field with the focused row highlighted, and a footer legend listing only the
@@ -665,9 +670,9 @@ func formRow(f formField, focused bool, width int) string {
 	}
 	row := label + ": " + f.display()
 	if focused {
-		return styles.CardSelectedStyle.Width(width).Render("▸ " + truncate(row, width-choicePrefixWidth))
+		return styles.CardSelectedStyle.Width(width).Render("▸ " + truncate(row, width-formCursorWidth))
 	}
-	return "  " + truncate(row, width-choicePrefixWidth)
+	return "  " + truncate(row, width-formCursorWidth)
 }
 
 // openURLTitleFallback is the card heading when the projection carried no title.
@@ -764,10 +769,28 @@ const choiceLegend = "↑/↓ select · enter · 1–9 · esc"
 // freeTextLegend is the muted key legend shown at the foot of a free-text card.
 const freeTextLegend = "enter submit · esc"
 
-// choicePrefixWidth is the 2-cell cursor/indent prefix on every choice row
-// ("▸ " when selected, "  " otherwise); the choice text wraps in the remaining
-// columns.
-const choicePrefixWidth = 2
+// keyRowGap is the columns a bracketed-accelerator row spends on chrome around its key:
+// one leading indent column, plus one space between the key and the label. It is shared by
+// the AskUser choice rows and the permission action rows, which is why those two cards line
+// up with each other and with the completion tray.
+const keyRowGap = 2
+
+// keyRowTextWidth is the columns a label may occupy on a row of width columns whose
+// bracketed accelerator is key, so the finished row is exactly width wide. The accelerator
+// is VARIABLE width ("[9]" against "[12]"), so unlike the old fixed "▸ " cursor the prefix
+// cannot be one constant — get this wrong and a double-digit choice overflows the card. A
+// very narrow card drives it non-positive, which truncate renders as "".
+func keyRowTextWidth(width int, key string) int {
+	return width - keyRowGap - utf8.RuneCountInString(key)
+}
+
+// keyRow renders one " [k] label" row: a leading indent column, the accelerator bracketed
+// and bold-blue (CardKeyStyle), then the label clipped to fit width. It is the ONE shared
+// shape of an AskUser choice and a permission action, so a row cannot read differently
+// between the two cards.
+func keyRow(key, label string, width int) string {
+	return " " + styles.CardKeyStyle.Render(key) + " " + truncate(label, keyRowTextWidth(width, key))
+}
 
 // choiceChromeRows is the number of footer rows the choice card reserves inside its
 // height budget: the "[o] other" hint and the key legend. Only these two rows count
@@ -776,9 +799,8 @@ const choicePrefixWidth = 2
 const choiceChromeRows = 2
 
 // renderChoiceBox renders the numbered-choice card: a bold "<Question> · choice
-// n/total" title, the visible window of choices (scrolled to keep selected in view)
-// with the ▸ cursor and a highlighted selected row, then a footer of the [o] other
-// hint and the key legend.
+// n/total" title, the visible window of choices (scrolled to keep selected in view) with
+// the selected row banded, then a footer of the [o] other hint and the key legend.
 func renderChoiceBox(p prompt, width, height, pending int) string {
 	textW := cardTextWidth(width)
 	capacity := choiceWindowCap(height)
@@ -802,18 +824,26 @@ func choiceHeader(p prompt, total int) string {
 	return p.Question + " · choice " + strconv.Itoa(p.selected+1) + "/" + strconv.Itoa(total)
 }
 
-// choiceRow renders one numbered choice line. The selected row is "▸ N. text"
-// highlighted as a filled bar spanning the card body (CardSelectedStyle sized to
-// width); every other row is "  N. text" plain. The 1-based index means numbers past 9
-// render normally (10., 11., …) — the 1–9 keys are only quick accelerators; ↑/↓ + enter
-// reach any choice.
+// choiceRow renders one numbered choice line as " [N] text".
+//
+// The selected row is BANDED edge to edge by styles.SelectedRow rather than marked with a
+// cursor glyph — the band is the cursor, and it is the same treatment the permission card
+// and the completion tray use, so selection cannot read differently between surfaces. The
+// band's fill is light, so SelectedRow strips the row and re-renders it near-black: the
+// accelerator keeps its brackets but loses its blue on the SELECTED row only. That is the
+// point — bold blue on an identical blue fill would be invisible.
+//
+// Both forms carry the identical " [N] " prefix, so the text starts in the same column
+// whether or not the row is selected and the list does not jitter under ↑/↓.
+//
+// The 1-based index means numbers past 9 render normally ([10], [11], …) — the 1–9 keys
+// are only quick accelerators; ↑/↓ + enter reach any choice.
 func choiceRow(index int, text string, selected bool, width int) string {
-	label := strconv.Itoa(index+1) + ". " + text
+	row := keyRow("["+strconv.Itoa(index+1)+"]", text, width)
 	if selected {
-		row := "▸ " + truncate(label, width-choicePrefixWidth)
-		return styles.CardSelectedStyle.Width(width).Render(row)
+		return styles.SelectedRow(row, width)
 	}
-	return "  " + truncate(label, width-choicePrefixWidth)
+	return row
 }
 
 // styleKeyHint styles one "[key] label" footer fragment: the bracketed accelerator in
@@ -856,8 +886,8 @@ const cardRailWidth = 2
 // The two pad rows keep the frame exactly two rows tall, so surface.go's boxBorderH height
 // reservation stays correct. Content lines were wrapped/sized to cardTextWidth(width) so they
 // sit behind the rail; a blank content line (the \n\n between sections) renders as a rail-only
-// row, keeping the rail unbroken. The selected-choice row carries its own brighter-blue fill
-// (CardSelectedStyle) spanning cardTextWidth, so it reads as a filled bar on the panel.
+// row, keeping the rail unbroken. A selected choice or action row arrives already banded by
+// styles.SelectedRow across cardTextWidth, so it reads as a filled bar on the panel.
 func cardFrame(content string, width, pending int) string {
 	open, reset := styles.DeriveBackgroundSGR(styles.CardPanelBg)
 	rail := styles.CardRailStyle.Render(styles.AccentBar)

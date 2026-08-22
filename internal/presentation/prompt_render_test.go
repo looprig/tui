@@ -5,14 +5,50 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/looprig/harness/pkg/gate"
+	"github.com/looprig/tui/styles"
 )
 
-// styledCursor matches the ▸ selection cursor immediately preceded by an SGR escape —
-// the evidence that the selected choice row is HIGHLIGHTED (CardSelectedStyle wraps the
-// row, which begins with "▸ "), not rendered plain like the unselected rows. Bold alone
-// emits an SGR even with color off, so this holds across color profiles.
-var styledCursor = regexp.MustCompile("\x1b\\[[0-9;]*m▸")
+// bandedRows returns the ANSI-stripped, space-trimmed text of every row of a rendered card
+// that carries THE selection fill — the evidence of which row is selected now that the band
+// replaces the ▸ cursor glyph.
+//
+// It looks for the fill derived from styles.CardBorderColor, the single blue token
+// styles.SelectedRow bands with. Asserting against that token rather than a literal escape
+// is what makes these tests catch a card that invents its own highlight: a private shade
+// would simply not appear here.
+func bandedRows(t *testing.T, rendered string) []string {
+	t.Helper()
+	open, _ := styles.DeriveBackgroundSGR(styles.CardBorderColor)
+	if open == "" {
+		t.Fatal("selection fill derives no SGR — bandedRows cannot tell selected rows apart")
+	}
+	var out []string
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, open) {
+			out = append(out, strings.TrimSpace(stripANSI(line)))
+		}
+	}
+	return out
+}
+
+// assertBandedRow fails t unless exactly one row of rendered is banded and it reads want.
+// "Exactly one" is half the assertion: two banded rows would mean two cursors.
+func assertBandedRow(t *testing.T, rendered, want string) {
+	t.Helper()
+	got := bandedRows(t, rendered)
+	if len(got) != 1 {
+		t.Fatalf("banded rows = %q, want exactly one (%q) in:\n%s", got, want, stripANSI(rendered))
+	}
+	if want == "" {
+		t.Fatal("assertBandedRow called with an empty want — that would assert nothing")
+	}
+	if !strings.Contains(got[0], want) {
+		t.Errorf("banded row = %q, want it to contain %q", got[0], want)
+	}
+}
 
 // panelRail is the blue ▌ edge every gate row carries in the panel-styled card. It
 // survives stripANSI (only SGR color codes are stripped), so it is the color-agnostic
@@ -128,9 +164,10 @@ func TestRenderPermissionBoxPendingAndPure(t *testing.T) {
 }
 
 // TestRenderAskUserBoxChoices covers the choice-list AskUser card: a blue-panel box with
-// numbered choices [1].., the ▸ cursor on prompt.selected with that row HIGHLIGHTED, an
-// [o] other escape hatch, the key legend, and a window that scrolls with selected so a
-// high row (including double-digit choices past the 1–9 accelerators) stays visible.
+// bracketed accelerators [1].., prompt.selected's row BANDED (no cursor glyph — the band is
+// the cursor), an [o] other escape hatch, the key legend, and a window that scrolls with
+// selected so a high row (including double-digit choices past the 1–9 accelerators) stays
+// visible.
 func TestRenderAskUserBoxChoices(t *testing.T) {
 	t.Parallel()
 
@@ -149,25 +186,29 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 		pending     int
 		wantContain []string
 		wantAbsent  []string
+		wantBanded  string // the text expected on the one banded (selected) row
 	}{
 		{
-			name:        "short list shows all numbered with other and cursor",
+			name:        "short list shows all with bracketed keys, other and a band",
 			question:    "pick one",
 			choices:     []string{"alpha", "beta", "gamma"},
 			selected:    0,
 			height:      10,
 			pending:     1,
-			wantContain: []string{"1.", "alpha", "2.", "beta", "3.", "gamma", "[o] other", "▸", "↑/↓ select"},
+			wantContain: []string{"[1] alpha", "[2] beta", "[3] gamma", "[o] other", "↑/↓ select"},
+			wantAbsent:  []string{"▸"},
+			wantBanded:  "[1] alpha",
 		},
 		{
-			name:        "cursor marks the selected row",
+			name:        "the band marks the selected row",
 			question:    "pick one",
 			choices:     []string{"alpha", "beta", "gamma"},
 			selected:    2,
 			height:      10,
 			pending:     1,
-			wantContain: []string{"▸ 3. gamma"},
-			wantAbsent:  []string{"▸ 1.", "▸ 2."},
+			wantContain: []string{"[3] gamma"},
+			wantAbsent:  []string{"▸"},
+			wantBanded:  "[3] gamma",
 		},
 		{
 			name:        "window scrolls so high selection stays visible",
@@ -176,8 +217,9 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			selected:    9, // the 10th choice, well past a small window
 			height:      5,
 			pending:     1,
-			wantContain: []string{"▸ 10. date-based"},
-			wantAbsent:  []string{"1. internal/version.Version()"}, // scrolled out of the window
+			wantContain: []string{"[10] date-based"},
+			wantAbsent:  []string{"internal/version.Version()"}, // scrolled out of the window
+			wantBanded:  "[10] date-based",
 		},
 		{
 			name:        "double-digit choice past the 1-9 keys renders and is reachable",
@@ -186,7 +228,8 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			selected:    11, // the 12th choice — beyond the 1–9 accelerators
 			height:      5,
 			pending:     1,
-			wantContain: []string{"▸ 12. ask each build"},
+			wantContain: []string{"[12] ask each build"},
+			wantBanded:  "[12] ask each build",
 		},
 		{
 			name:        "more pending hint with many choices",
@@ -196,6 +239,7 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			height:      8,
 			pending:     4,
 			wantContain: []string{"(+3 more pending)"},
+			wantBanded:  "[1] internal/version.Version()",
 		},
 	}
 
@@ -209,9 +253,7 @@ func TestRenderAskUserBoxChoices(t *testing.T) {
 			got := stripANSI(rendered)
 
 			assertPanelFramed(t, rendered)
-			if !styledCursor.MatchString(rendered) {
-				t.Errorf("choice card selected row not highlighted (no styled ▸) in:\n%s", rendered)
-			}
+			assertBandedRow(t, rendered, tt.wantBanded)
 			for _, sub := range tt.wantContain {
 				if !strings.Contains(got, sub) {
 					t.Errorf("renderAskUserBox missing %q in:\n%s", sub, got)
@@ -242,10 +284,13 @@ func TestRenderAskUserBoxFreeText(t *testing.T) {
 			t.Errorf("free-text box missing %q in:\n%s", sub, got)
 		}
 	}
-	for _, sub := range []string{"[o] other", "▸", "1."} {
+	for _, sub := range []string{"[o] other", "▸", "[1]"} {
 		if strings.Contains(got, sub) {
 			t.Errorf("free-text box unexpectedly contains choice affordance %q in:\n%s", sub, got)
 		}
+	}
+	if got := bandedRows(t, rendered); len(got) != 0 {
+		t.Errorf("free-text box unexpectedly bands a row: %q", got)
 	}
 }
 
@@ -286,5 +331,78 @@ func TestChoiceWindow(t *testing.T) {
 					hasCursor, tt.wantHasCursor, start, end, tt.selected)
 			}
 		})
+	}
+}
+
+// styledAccelerator matches a bracketed accelerator immediately preceded by an SGR
+// escape — the evidence CardKeyStyle actually wrapped it. CardKeyStyle is bold as well as
+// blue, and bold emits an SGR even with color off, so this holds across color profiles.
+var styledAccelerator = regexp.MustCompile(`\x1b\[[0-9;]*m\[\d+\]`)
+
+// TestChoiceRowHasNoCursorGlyph pins the two halves of the AskUser row's new shape: the
+// accelerator is BRACKETED, and there is no ▸ cursor glyph on the selected row — the
+// selection band is the cursor.
+func TestChoiceRowHasNoCursorGlyph(t *testing.T) {
+	t.Parallel()
+
+	got := choiceRow(1, "develop", true, 40)
+	if strings.Contains(stripANSI(got), "▸") {
+		t.Errorf("selected choice still uses a cursor glyph: %q", stripANSI(got))
+	}
+	if !strings.Contains(stripANSI(got), "[2]") {
+		t.Errorf("accelerator is not bracketed: %q", stripANSI(got))
+	}
+}
+
+// TestChoiceRowAcceleratorStyling pins WHERE the bold-blue accelerator survives. An
+// unselected row keeps it. The selected row deliberately loses it: styles.SelectedRow's
+// fill is light, so it strips the row and re-renders it near-black — a bold-blue key on an
+// identical blue fill would be invisible. Only the selected row pays that price.
+func TestChoiceRowAcceleratorStyling(t *testing.T) {
+	t.Parallel()
+
+	if got := choiceRow(1, "develop", false, 40); !styledAccelerator.MatchString(got) {
+		t.Errorf("unselected choice lost its bold-blue accelerator: %q", got)
+	}
+	if got := choiceRow(1, "develop", true, 40); styledAccelerator.MatchString(got) {
+		t.Errorf("selected choice kept inner accelerator styling against the band: %q", got)
+	}
+}
+
+// TestChoiceRowSelectionDoesNotShiftText pins that moving the selection cannot move a row
+// sideways: selected and unselected rows carry the identical " [N] " prefix, so the text
+// begins in the same column either way and the list does not jitter under ↑/↓.
+func TestChoiceRowSelectionDoesNotShiftText(t *testing.T) {
+	t.Parallel()
+
+	for _, index := range []int{0, 9} { // single- and double-digit accelerators
+		selected := stripANSI(choiceRow(index, "develop", true, 40))
+		plain := stripANSI(choiceRow(index, "develop", false, 40))
+		if got, want := strings.Index(selected, "develop"), strings.Index(plain, "develop"); got != want {
+			t.Errorf("index %d: selected text starts at column %d, unselected at %d\nselected=%q\nplain   =%q",
+				index, got, want, selected, plain)
+		}
+		if !strings.HasPrefix(selected, strings.TrimRight(plain, " ")) {
+			t.Errorf("index %d: selected row %q does not open with the unselected row %q", index, selected, plain)
+		}
+	}
+}
+
+// TestChoiceRowFitsWidth pins that a row is padded/clipped to exactly the card body width
+// whether or not it is selected, so the band spans the card and a long choice cannot push
+// the panel rail out of alignment. The double-digit accelerator is the case a single fixed
+// prefix width got wrong.
+func TestChoiceRowFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	const width = 24
+	long := strings.Repeat("verylongchoice", 4)
+	for _, index := range []int{0, 9, 99} {
+		for _, selected := range []bool{false, true} {
+			row := stripANSI(choiceRow(index, long, selected, width))
+			if got := lipgloss.Width(row); got != width {
+				t.Errorf("index %d selected=%v: row width = %d, want %d (%q)", index, selected, got, width, row)
+			}
+		}
 	}
 }

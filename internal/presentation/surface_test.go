@@ -156,7 +156,7 @@ func TestSurfaceViewChoicePrompt(t *testing.T) {
 
 	got := stripANSI(surfaceView(in))
 
-	for _, sub := range []string{"alpha", "▸", "awaiting input"} {
+	for _, sub := range []string{"[1] alpha", "[2] beta", "awaiting input"} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("surfaceView (choice) missing %q in:\n%s", sub, got)
 		}
