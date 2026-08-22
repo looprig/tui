@@ -389,8 +389,7 @@ func (m interactionModel) Update(msg tea.KeyPressMsg) (interactionModel, uiActio
 	case modeAnswerPrompt:
 		return m.answerKey(msg)
 	case modeFormPrompt:
-		model, action := m.formKey(msg)
-		return model, action, nil
+		return m.formKey(msg)
 	case modeOpenURLPrompt:
 		model, action := m.openURLKey(msg)
 		return model, action, nil
@@ -447,25 +446,31 @@ func (m interactionModel) openURLKey(msg tea.KeyPressMsg) (interactionModel, uiA
 // requires every required field to be answered; an incomplete submit sets the
 // validation notice instead of sending a response the session would reject.
 //
-// The remaining keys edit the focused field: ↑/↓ move between fields, ←/→ cycle a
-// select, space toggles a confirm, and printable runes plus backspace type into a
-// text field. An unsupported form has no editor, so only esc does anything.
-func (m interactionModel) formKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+// The remaining keys edit the focused field: ↑/↓ (and tab) move between fields, ←/→
+// cycle a select, space toggles a confirm, and everything else reaches the focused text
+// field's editor — typing, ←/→, word ops, line start/end, backspace. An unsupported form
+// has no editor, so only esc does anything.
+//
+// The third return is the focused editor's cursor Cmd. A text field is a live textarea
+// now, and a textarea asks for a blink Cmd both when it is focused and whenever its
+// cursor moves; Screen batches it so the cursor keeps blinking inside the card.
+func (m interactionModel) formKey(msg tea.KeyPressMsg) (interactionModel, uiAction, tea.Cmd) {
 	head := *m.ActivePrompt()
 	if msg.Code == tea.KeyEsc {
 		if !head.offersAction(gate.FormActionDecline) {
-			return m, noop
+			return m, noop, nil
 		}
 		return m.pop(), uiAction{
 			Kind: uiGateRespond, LoopID: head.LoopID, GateID: head.GateID,
 			GateAction: gate.FormActionDecline,
-		}
+		}, nil
 	}
 	if head.unsupported {
-		return m, noop
+		return m, noop, nil
 	}
 	if isEnter(msg) {
-		return m.submitForm(head)
+		model, action := m.submitForm(head)
+		return model, action, nil
 	}
 	return m.editFormField(msg)
 }
@@ -491,29 +496,26 @@ func (m interactionModel) submitForm(head prompt) (interactionModel, uiAction) {
 // head first: the value-copy model shares pending's backing array with the caller
 // (see cloneHead), so mutating in place would write through the caller's slice.
 // Any edit clears a stale validation notice.
-func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+//
+// ↑/↓ (and tab) are taken FIRST and never reach the field. A form is a list of fields
+// before it is an editor, so vertical movement belongs to the form even though a grown
+// text field now spans several rows — a textarea handed ↑/↓ would swallow them to walk
+// its own lines, and the user would be trapped in whichever field they were typing in.
+// Everything else is the field's, which is what gives a text field ←/→ for its cursor.
+//
+// The keys are matched on msg.String() rather than msg.Code: Code is modifier-blind, so
+// a Code match would let ctrl+↓ move the focus as if it were a bare ↓.
+func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, uiAction, tea.Cmd) {
 	m.pending = cloneHead(m.pending)
 	head := &m.pending[0]
 	head.invalid = false
-	switch msg.Code {
-	case tea.KeyUp:
-		head.moveFocus(-1)
-		return m, noop
-	case tea.KeyDown, tea.KeyTab:
-		head.moveFocus(1)
-		return m, noop
-	case tea.KeyLeft:
-		head.cycleChoice(-1)
-		return m, noop
-	case tea.KeyRight:
-		head.cycleChoice(1)
-		return m, noop
-	case tea.KeyBackspace:
-		head.backspaceText()
-		return m, noop
+	switch msg.String() {
+	case "up":
+		return m, noop, head.moveFocus(-1)
+	case "down", "tab":
+		return m, noop, head.moveFocus(1)
 	}
-	head.typeRune(msg)
-	return m, noop
+	return m, noop, head.editFocused(msg)
 }
 
 // permissionKey routes a key in modePermissionPrompt (head is the ONE combined

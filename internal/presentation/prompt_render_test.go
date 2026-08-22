@@ -456,17 +456,21 @@ func TestKeyRowNeverOverflowsWidth(t *testing.T) {
 	}
 }
 
-// TestFormRowFitsWidth pins that a form field row is clipped to the card body width,
-// cursor prefix included. The row carries a 2-cell cursor/indent prefix (formCursorWidth)
-// that the label budget must pay for; charging the label the full width instead put the
-// row two columns over on every long field, focused or not.
+// TestFormRowFitsWidth pins that a form field row spans EXACTLY the card body width,
+// cursor prefix included, however long the label and the value are. The row carries a
+// 2-cell cursor/indent prefix (formCursorWidth) that the label budget must pay for;
+// charging the label the full width instead put the row two columns over on every long
+// field, focused or not.
+//
+// A grown field is measured the same way: lipgloss.Width is the WIDEST line, so a row
+// that wrapped onto extra rows and let one of them run long fails here too.
 func TestFormRowFitsWidth(t *testing.T) {
 	t.Parallel()
 
 	const width = 30
-	f := formField{Label: strings.Repeat("longfieldlabel", 6), Kind: gate.FieldText, Text: strings.Repeat("v", 40)}
 	for _, focused := range []bool{false, true} {
-		row := stripANSI(formRow(f, focused, width))
+		f := formField{Label: strings.Repeat("longfieldlabel", 6), Kind: gate.FieldText, editor: newFormEditor(strings.Repeat("v", 40))}
+		row := stripANSI(formRow(&f, focused, width))
 		if got := lipgloss.Width(row); got != width {
 			t.Errorf("focused=%v: form row width = %d, want %d (%q)", focused, got, width, row)
 		}
