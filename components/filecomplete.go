@@ -17,8 +17,18 @@ type FileItem struct {
 // panel, the disk-backed sibling of SlashComplete. It is display-only: package tui
 // computes the candidate list (the filesystem read) and feeds it here.
 type FileComplete struct {
-	items        []FileItem
-	cursor       int
+	// items is kept beside the engine because Selected hands back the ORIGINAL FileItem:
+	// the engine only carries the sanitized label, while completion needs the exact bytes
+	// that came off disk. This panel never filters, so an engine index is always an items
+	// index.
+	items []FileItem
+	// list owns the cursor, its wrap, and how a row is drawn.
+	list *trayList
+	// windowStart and windowPinned are the sliding window, which the engine cannot
+	// supply: list.Model paginates, jumping a whole page once the cursor leaves it, while
+	// every completion panel slides, pinning the selection to the window edge and
+	// scrolling a row at a time. The pin then holds that window still across a mouse pick,
+	// so clicking the top row cannot scroll the list out from under the pointer.
 	windowStart  int
 	windowPinned bool
 }
@@ -28,24 +38,27 @@ func NewFileComplete(items []FileItem) *FileComplete {
 	if len(items) == 0 {
 		return nil
 	}
-	return &FileComplete{items: items, cursor: 0}
+	f := &FileComplete{items: items}
+	rows := f.trayRows()
+	f.list = newTrayList(rows, completionTrayNaturalWidth(rows), trayLayout{})
+	return f
 }
 
 // Selected returns the item under the cursor.
-func (f *FileComplete) Selected() FileItem { return f.items[f.cursor] }
+func (f *FileComplete) Selected() FileItem { return f.items[f.list.Cursor()] }
 
 // Cursor returns the absolute selected index in the filtered list.
-func (f *FileComplete) Cursor() int { return f.cursor }
+func (f *FileComplete) Cursor() int { return f.list.Cursor() }
 
 // Up moves the cursor up, wrapping to the bottom.
 func (f *FileComplete) Up() {
-	f.cursor = (f.cursor - 1 + len(f.items)) % len(f.items)
+	f.list.Up()
 	f.windowPinned = false
 }
 
 // Down moves the cursor down, wrapping to the top.
 func (f *FileComplete) Down() {
-	f.cursor = (f.cursor + 1) % len(f.items)
+	f.list.Down()
 	f.windowPinned = false
 }
 
@@ -58,24 +71,38 @@ func (f *FileComplete) SelectWindowRow(row, maxRows int) bool {
 	}
 	start := f.visibleWindowStart(maxRows)
 	next := start + row
-	if next == f.cursor {
+	if next == f.list.Cursor() {
 		return false
 	}
-	f.cursor = next
+	f.selectIndex(next)
 	f.windowStart = start
 	f.windowPinned = true
 	return true
 }
 
+// selectIndex walks the engine's cursor to an absolute index. trayList moves only
+// relatively, because the panels drive it from a keyboard; a pointed-at row is always
+// inside the visible window, so the walk is one screenful at worst. Both loops are counted
+// ranges rather than conditions, so an out-of-range index can never spin.
+func (f *FileComplete) selectIndex(index int) {
+	for range index - f.list.Cursor() {
+		f.list.Down()
+	}
+	for range f.list.Cursor() - index {
+		f.list.Up()
+	}
+}
+
 func (f *FileComplete) visibleWindowStart(maxRows int) int {
 	visible := min(len(f.items), maxRows)
+	cursor := f.list.Cursor()
 	if f.windowPinned && visible > 0 {
 		start := max(0, min(f.windowStart, len(f.items)-visible))
-		if f.cursor >= start && f.cursor < start+visible {
+		if cursor >= start && cursor < start+visible {
 			return start
 		}
 	}
-	return completionTrayWindowStart(len(f.items), f.cursor, maxRows)
+	return completionTrayWindowStart(len(f.items), cursor, maxRows)
 }
 
 // label is the complete displayed @path, plus a trailing "/" for a directory so a
@@ -109,20 +136,32 @@ func (f *FileComplete) trayRows() []completionTrayRow {
 	return rows
 }
 
-// View renders the filtered list at its natural content width.
-func (f *FileComplete) View() string {
-	rows := f.trayRows()
-	return renderCompletionTray(rows, f.cursor, completionTrayNaturalWidth(rows))
-}
+// View renders the filtered list at its natural content width, which is the width the
+// engine was built with: the rows never change, so neither does it.
+func (f *FileComplete) View() string { return f.list.View() }
 
 // ViewWidth renders the filtered list as a tray whose rows are padded or clamped
 // ANSI-safely to width display columns.
-func (f *FileComplete) ViewWidth(width int) string {
-	return renderCompletionTray(f.trayRows(), f.cursor, width)
-}
+func (f *FileComplete) ViewWidth(width int) string { return f.list.ViewWidth(width) }
 
 // ViewWindow renders a full-width tray capped to maxRows and keeps the selected path in the
 // visible window. View and ViewWidth remain the unbounded variants.
+//
+// It deliberately does NOT call trayList.ViewWindow, which shows the cursor's PAGE. This
+// window slides, so its rows seldom line up with a page boundary. The slice is handed to a
+// throwaway engine instead, which draws it through the same delegate and so emits the same
+// bytes an unbounded tray of those rows would.
 func (f *FileComplete) ViewWindow(width, maxRows int) string {
-	return renderCompletionTrayWindowBackgroundAt(f.trayRows(), f.cursor, width, maxRows, f.visibleWindowStart(maxRows))
+	if maxRows <= 0 {
+		return ""
+	}
+	if maxRows >= len(f.items) {
+		return f.list.ViewWidth(width)
+	}
+	start := f.visibleWindowStart(maxRows)
+	window := newTrayList(f.trayRows()[start:start+maxRows], width, trayLayout{})
+	for range f.list.Cursor() - start {
+		window.Down()
+	}
+	return window.ViewWidth(width)
 }
