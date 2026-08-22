@@ -22,15 +22,6 @@ var CardPanelBg = lipgloss.Color("#242527")
 // dialog look), rather than only the ▸ cursor.
 var CardSelectedBg = lipgloss.Color("#2c3a5a")
 
-// TraySelectedBg WAS the completion tray's settled selection fill, and no longer is: the
-// tray bands its selected row with SelectedRow, which owns the fill itself so no surface can
-// drift to its own shade.
-//
-// One reader survives: the session picker's bespoke renderSessionLine, which has not yet
-// moved onto the shared tray renderer. It goes away with the task that migrates that panel,
-// and this token with it.
-var TraySelectedBg = lipgloss.Color("#3A526B")
-
 // CardRailStyle colors the gate card's left ▌ rail the brand blue, matching the user card's
 // gray rail but tinted — the continuous accent edge down the padded blue panel.
 var CardRailStyle = lipgloss.NewStyle().Foreground(CardBorderColor)

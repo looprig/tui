@@ -13,8 +13,9 @@ import (
 //
 // It is CardBorderColor (#A2D2FF) — the SAME token CardRailStyle, CardKeyStyle and
 // WorkflowActivityStyle resolve to. styles/card.go says that token exists so there is one
-// semantic blue token rather than drifting shades; TraySelectedBg #3A526B was one of the
-// drifting shades and is retired from selection use.
+// semantic blue token rather than drifting shades. The completion tray's own private fill
+// (#3A526B) was one of those drifting shades; it is gone, and the tray bands through
+// SelectedRow like everything else.
 //
 // Unexported deliberately: nothing outside this file needs to write it, and an exported
 // mutable var would be a seam for exactly the drift SelectedRow exists to prevent. Add a

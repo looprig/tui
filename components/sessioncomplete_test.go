@@ -273,3 +273,39 @@ func TestSessionCompleteCursorCountsRecordsNotRows(t *testing.T) {
 		t.Errorf("selected after wrapping up = %q, want three", got)
 	}
 }
+
+// TestSessionCompleteFillsItsBudgetOnTheLastRecord is the concrete failure the shared sliding
+// window fixes. Five records with eleven rows to spare and the cursor on the LAST one used to
+// render two rows -- one record -- because the engine paginated: the cursor sat alone on a
+// short final page, so the tray SHRANK under it and stranded eleven rows of free space. A
+// sliding window fills what it is given and scrolls the records above the cursor into view.
+func TestSessionCompleteFillsItsBudgetOnTheLastRecord(t *testing.T) {
+	t.Parallel()
+
+	items := make([]SessionItem, 5)
+	for i := range items {
+		items[i] = SessionItem{ID: fmt.Sprint(i), Title: fmt.Sprintf("Rec%d", i), LastUsed: "2026-07-15", ShortID: "1234abcd"}
+	}
+	tray := NewSessionComplete(items)
+	tray.Up() // wrap to the last record
+	if got := tray.Selected().Title; got != "Rec4" {
+		t.Fatalf("Up() from the first record selected %q, want Rec4", got)
+	}
+
+	// 11 rows is exactly four records: 2 + 1 + 2 + 1 + 2 + 1 + 2.
+	view := tray.ViewWindow(80, 11)
+	lines := strings.Split(view, "\n")
+	if len(lines) != 11 {
+		t.Fatalf("ViewWindow(80, 11) rendered %d rows, want 11:\n%q", len(lines), ansi.Strip(view))
+	}
+	plain := ansi.Strip(view)
+	for _, want := range []string{"Rec1", "Rec2", "Rec3", "Rec4"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("window = %q, want it to hold the last four records including %q", plain, want)
+		}
+	}
+	// Rec0 is the one record that does NOT fit, and it is the one scrolled off the top.
+	if strings.Contains(plain, "Rec0") {
+		t.Errorf("window = %q, want Rec0 scrolled off: only four records fit", plain)
+	}
+}

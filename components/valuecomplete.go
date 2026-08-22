@@ -1,8 +1,6 @@
 package components
 
 import (
-	"strings"
-
 	"charm.land/bubbles/v2/list"
 )
 
@@ -44,15 +42,11 @@ func NewValueComplete(items []ValueItem, query string) *ValueComplete {
 	// Width zero: this panel is only ever drawn through ViewWindow, which is handed the
 	// terminal's width at render time, so there is no width worth guessing here.
 	tray := newTrayList(rows, 0, trayLayout{})
-	tray.m.Filter = valueFilter(choices)
-	// An empty query is left UNFILTERED rather than filtered by "": list.Model treats an
-	// empty term as "everything matches" but still switches into its filtered projection,
-	// in which every row reports an unfiltered index of zero -- and Selected would then
-	// hand back the first choice whatever the cursor is on.
-	if q := strings.TrimSpace(query); q != "" {
-		tray.m.SetFilterText(q)
-	}
-	if len(tray.m.VisibleItems()) == 0 {
+	tray.SetFilterFunc(valueFilter(choices))
+	// trayList.Filter leaves a blank query UNFILTERED rather than applying "", which is what
+	// keeps UnfilteredCursor below honest; see its doc for why an empty term is not harmless.
+	tray.Filter(query)
+	if tray.Len() == 0 {
 		return nil
 	}
 	return &ValueComplete{list: tray, items: choices}
@@ -99,7 +93,7 @@ func valueFilter(items []ValueItem) list.FilterFunc {
 // Selected is the choice under the cursor. It resolves through the engine's UNFILTERED
 // index, so the opaque ID survives filtering however the matcher reordered the rows.
 func (v *ValueComplete) Selected() ValueItem {
-	i := v.list.m.GlobalIndex()
+	i := v.list.UnfilteredCursor()
 	if i < 0 || i >= len(v.items) {
 		return ValueItem{} // fail-safe: a tray can be emptied between a keypress and a render
 	}
@@ -110,7 +104,7 @@ func (v *ValueComplete) Selected() ValueItem {
 func (v *ValueComplete) Cursor() int { return v.list.Cursor() }
 
 // Len is how many choices matched, which is what the tray draws.
-func (v *ValueComplete) Len() int { return len(v.list.m.VisibleItems()) }
+func (v *ValueComplete) Len() int { return v.list.Len() }
 
 // Up and Down move the cursor, wrapping at both ends.
 func (v *ValueComplete) Up()   { v.list.Up() }

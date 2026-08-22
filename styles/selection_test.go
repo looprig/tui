@@ -67,7 +67,8 @@ func assertWellFormedEscapes(t *testing.T, got string) {
 
 // TestSelectionBgIsTheOneSemanticBlue pins the whole point of this file: the selection fill
 // IS CardBorderColor, the single semantic blue token. If someone re-points it at a private
-// shade (TraySelectedBg #3A526B was exactly that), selection drifts between surfaces again.
+// per-surface shade (the tray's retired #3A526B was exactly that), selection drifts between
+// surfaces again.
 func TestSelectionBgIsTheOneSemanticBlue(t *testing.T) {
 	t.Parallel()
 
@@ -89,7 +90,7 @@ func TestSelectionIsDark(t *testing.T) {
 		{name: "CardBorderColor #A2D2FF is light", bg: CardBorderColor, want: false},
 		{name: "white is light", bg: color.White, want: false},
 		{name: "a dark navy is dark", bg: lipgloss.Color("#1F2A44"), want: true},
-		{name: "retired TraySelectedBg is dark", bg: TraySelectedBg, want: true},
+		{name: "the tray's retired private fill is dark", bg: lipgloss.Color("#3A526B"), want: true},
 		{name: "black is dark", bg: color.Black, want: true},
 		{name: "degenerate NoColor reports dark (preserves inner styling)", bg: lipgloss.NoColor{}, want: true},
 	}

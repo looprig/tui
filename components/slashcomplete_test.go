@@ -242,13 +242,13 @@ func TestSlashCompleteViewWidthRendersContinuousTrayRail(t *testing.T) {
 		}
 	}
 
-	// The selected row is the shared band and nothing else: no tray-local fill, no
-	// highlighted rail, no bold label. Those were three ways for this surface to drift.
+	// The selected row is banded by the SHARED treatment, not by anything this surface
+	// owns. styles.SelectedRow strips inner styling on its light fill, so a tray-local rail
+	// color or bold label is not merely unwanted here -- it is unobservable, which is why
+	// there is no assertion against one. styles.TestSelectedRowDarkFillKeepsInnerStyling
+	// pins the branch where inner styling does survive.
 	if !strings.HasPrefix(lines[0], selectedBandOpen(t)) {
 		t.Errorf("selected row does not open with the shared selection band: %q", lines[0])
-	}
-	if strings.Contains(lines[0], strings.TrimSuffix(styles.CardRailStyle.Render(styles.AccentBar), "\x1b[m")) {
-		t.Errorf("selected row still paints its own rail color: %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], panelOpen) {
 		t.Errorf("unselected row does not open with PanelBg: %q", lines[1])

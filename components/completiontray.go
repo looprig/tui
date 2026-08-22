@@ -52,10 +52,6 @@ func completionTrayNaturalWidth(rows []completionTrayRow) int {
 	return width
 }
 
-func renderCompletionTray(rows []completionTrayRow, selected, width int) string {
-	return renderCompletionTrayBackground(rows, selected, width)
-}
-
 // trayRowRender holds everything the rows of ONE render share: the width they fill, the
 // column their secondaries align to, the inset their content is pushed in by, and the panel
 // fill's SGR pair -- derived once per render rather than once per row, per the note on
@@ -114,12 +110,17 @@ func (r trayRowRender) line(row completionTrayRow, selected bool) string {
 	return r.row(body, selected)
 }
 
-// renderCompletionTrayBackground renders every row at width columns and bands the selected
-// one with the shared selection treatment.
+// renderCompletionTray renders every row at width columns and bands the selected one with
+// the shared selection treatment.
 //
 // There is deliberately NO fill parameter: styles.SelectedRow is one-argument and owns the
 // selection fill, so no surface can drift to its own shade.
-func renderCompletionTrayBackground(rows []completionTrayRow, selected, width int) string {
+//
+// It is the batch renderer trayList is measured against: it draws a whole slice through the
+// same trayRowRender the engine's delegate composes a row with, which is what makes
+// TestTrayListMatchesTheHandRolledTray a real byte-identity gate rather than two renderers
+// agreeing by coincidence.
+func renderCompletionTray(rows []completionTrayRow, selected, width int) string {
 	if width <= 0 || len(rows) == 0 {
 		return ""
 	}
@@ -130,30 +131,4 @@ func renderCompletionTrayBackground(rows []completionTrayRow, selected, width in
 		rendered[i] = render.line(row, i == selected)
 	}
 	return strings.Join(rendered, "\n")
-}
-
-func renderCompletionTrayWindowBackgroundAt(rows []completionTrayRow, selected, width, maxRows, start int) string {
-	if maxRows <= 0 || len(rows) == 0 {
-		return ""
-	}
-	if maxRows >= len(rows) {
-		return renderCompletionTrayBackground(rows, selected, width)
-	}
-	start = max(0, min(start, len(rows)-maxRows))
-	return renderCompletionTrayBackground(rows[start:start+maxRows], selected-start, width)
-}
-
-func completionTrayWindowStart(rowCount, selected, maxRows int) int {
-	if rowCount <= 0 || maxRows <= 0 || maxRows >= rowCount {
-		return 0
-	}
-	selected = max(0, min(selected, rowCount-1))
-	start := selected - maxRows + 1
-	if start < 0 {
-		start = 0
-	}
-	if start+maxRows > rowCount {
-		start = rowCount - maxRows
-	}
-	return start
 }

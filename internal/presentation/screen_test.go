@@ -538,8 +538,11 @@ func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		open     func(*Screen)
+		name string
+		open func(*Screen)
+		// row is the tray row the pointer lands on, defaulting to 1: the second row is the
+		// second item in a one-row-per-item tray.
+		row      int
 		selected func(*Screen) string
 		want     string
 	}{
@@ -562,6 +565,36 @@ func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
 			selected: func(m *Screen) string { return m.interaction.files.Selected().Path },
 			want:     "second.go",
 		},
+		{
+			// The runtime tray is one row per item, like the two above, so the second
+			// row is the second choice.
+			name: "runtime value",
+			open: func(m *Screen) {
+				m.runtimeTray = components.NewValueComplete([]components.ValueItem{
+					{ID: "first", Label: "Sonnet"},
+					{ID: "second", Label: "Opus"},
+				}, "")
+			},
+			selected: func(m *Screen) string { return m.runtimeTray.Selected().ID },
+			want:     "second",
+		},
+		{
+			// The session tray is the odd one out: a record is a title row, a metadata
+			// row and a spacer, so the SECOND record starts three rows down, not one.
+			// That arithmetic is exactly what a shared row-to-item mapping has to get
+			// right, and this is the only test that exercises the session branch of
+			// trayMouse.
+			name: "session record",
+			row:  3,
+			open: func(m *Screen) {
+				m.sessionTray = components.NewSessionComplete([]components.SessionItem{
+					{ID: "first", Title: "First", LastUsed: "2026-07-15", ShortID: "aaaaaaaa"},
+					{ID: "second", Title: "Second", LastUsed: "2026-07-14", ShortID: "bbbbbbbb"},
+				})
+			},
+			selected: func(m *Screen) string { return m.sessionTray.Selected().ID },
+			want:     "second",
+		},
 	}
 
 	for _, tt := range tests {
@@ -573,9 +606,13 @@ func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
 			tt.open(&m)
 			lay := m.layout()
 
+			row := tt.row
+			if row == 0 {
+				row = 1
+			}
 			m, _ = updateScreen(t, m, tea.MouseMotionMsg{
 				X:      8,
-				Y:      lay.trayTop + 1,
+				Y:      lay.trayTop + row,
 				Button: tea.MouseNone,
 			})
 

@@ -26,8 +26,8 @@ var sessionTrayLayout = trayLayout{Stacked: true, PadV: 1}
 // SessionComplete is the /resume session picker, backed by the shared tray engine in its
 // stacked layout. It used to render itself through a bespoke renderSessionLine that duplicated
 // the rail, the background fill and the truncation; that renderer is gone, and with it the
-// panel's private styles.TraySelectedBg band. The selected record is now banded with
-// styles.SelectedRow like every other tray, which is a deliberate and visible change.
+// panel's private selection fill. The selected record is now banded with styles.SelectedRow
+// like every other tray, which is a deliberate and visible change.
 //
 // It keeps the SessionItem slice alongside the tray because the tray's rows are DISPLAY strings
 // only. Selected must hand back the record's ID for the caller to parse as a UUID, and an ID
