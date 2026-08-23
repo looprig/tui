@@ -13,6 +13,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/looprig/harness v0.27.1
 	github.com/yuin/goldmark v1.8.5
 )
@@ -34,7 +35,6 @@ require (
 	cloud.google.com/go/auth v0.23.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
-	github.com/alecthomas/chroma/v2 v2.27.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.62.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
