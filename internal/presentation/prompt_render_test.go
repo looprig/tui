@@ -2,6 +2,8 @@ package presentation
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -288,6 +290,143 @@ func TestPermissionBoxEscapesControlsInDiffPathLabel(t *testing.T) {
 	}
 	if got := stripANSI(out); !strings.Contains(got, `config\x1b[2J.yaml`) {
 		t.Errorf("diff path label did not visibly escape the control:\n%s", got)
+	}
+}
+
+func TestPermissionGoldenDiffReportsChangedAddedAndDeletedRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want string
+		got  string
+		diff string
+	}{
+		{
+			name: "changed row preserves visible padding",
+			want: "same\nold  \ntail",
+			got:  "same\nnew \ntail",
+			diff: "row 2:\n  want \"old  \"\n  got  \"new \"\n",
+		},
+		{
+			name: "added row",
+			want: "same\ntail",
+			got:  "same\nadded \ntail",
+			diff: "row 2:\n  want <missing>\n  got  \"added \"\n",
+		},
+		{
+			name: "deleted row",
+			want: "same\ndeleted \ntail",
+			got:  "same\ntail",
+			diff: "row 2:\n  want \"deleted \"\n  got  <missing>\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := permissionGoldenDiff(tt.want, tt.got); got != tt.diff {
+				t.Errorf("permissionGoldenDiff() = %q, want %q", got, tt.diff)
+			}
+		})
+	}
+}
+
+func permissionGoldenDiff(want, got string) string {
+	wantRows := strings.Split(want, "\n")
+	gotRows := strings.Split(got, "\n")
+	start := 0
+	for start < len(wantRows) && start < len(gotRows) && wantRows[start] == gotRows[start] {
+		start++
+	}
+	wantEnd, gotEnd := len(wantRows), len(gotRows)
+	for wantEnd > start && gotEnd > start && wantRows[wantEnd-1] == gotRows[gotEnd-1] {
+		wantEnd--
+		gotEnd--
+	}
+	wantRows = wantRows[start:wantEnd]
+	gotRows = gotRows[start:gotEnd]
+	rows := len(wantRows)
+	if len(gotRows) > rows {
+		rows = len(gotRows)
+	}
+	var diff strings.Builder
+	for i := 0; i < rows; i++ {
+		if i < len(wantRows) && i < len(gotRows) && wantRows[i] == gotRows[i] {
+			continue
+		}
+		fmt.Fprintf(&diff, "row %d:\n", start+i+1)
+		if i < len(wantRows) {
+			fmt.Fprintf(&diff, "  want %q\n", wantRows[i])
+		} else {
+			diff.WriteString("  want <missing>\n")
+		}
+		if i < len(gotRows) {
+			fmt.Fprintf(&diff, "  got  %q\n", gotRows[i])
+		} else {
+			diff.WriteString("  got  <missing>\n")
+		}
+	}
+	return diff.String()
+}
+
+func assertPermissionGolden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name+".golden")
+	if os.Getenv("UPDATE_PERMISSION_GOLDENS") == "1" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create golden directory for %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("update golden %s: %v", path, err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (set UPDATE_PERMISSION_GOLDENS=1 to create it)", path, err)
+	}
+	if got != string(want) {
+		t.Errorf("permission card changed (-want +got):\n--- %s\n+++ rendered\n%s", path, permissionGoldenDiff(string(want), got))
+	}
+}
+
+func TestPermissionBoxGoldenRenders(t *testing.T) {
+	base := func() prompt {
+		return promptFromPermission(callID(0xD3), toolRequest(
+			"EditFile",
+			"update the workspace configuration",
+			requirement("write config.yaml", "always allow writes under the workspace"),
+		), nil)
+	}
+	withDiff := func(diff string) prompt {
+		p := base()
+		p.DiffPath = "config.yaml"
+		p.Diff = diff
+		return p
+	}
+
+	create := withDiff("@@ -0,0 +1,2 @@\n+name: looprig\n+enabled: true\n")
+	create.DiffPath = "nested/new-config.yaml"
+	create.DiffCreates = true
+
+	tests := []struct {
+		name     string
+		prompt   prompt
+		expanded bool
+	}{
+		{name: "no-preview", prompt: base()},
+		{name: "create", prompt: create},
+		{name: "small-overwrite", prompt: withDiff("@@ -1,2 +1,2 @@\n-name: old\n-enabled: false\n+name: looprig\n+enabled: true\n")},
+		{name: "capped-diff", prompt: withDiff(manyLineDiff(40))},
+		{name: "expanded-diff", prompt: withDiff(manyLineDiff(40)), expanded: true},
+	}
+	for _, tt := range tests {
+		for _, width := range []int{60, 100} {
+			name := fmt.Sprintf("%s-width-%d", tt.name, width)
+			t.Run(name, func(t *testing.T) {
+				got := stripANSI(renderPermissionBox(tt.prompt, width, 1, tt.expanded, 0))
+				assertPermissionGolden(t, name, got)
+			})
+		}
 	}
 }
 

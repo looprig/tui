@@ -1,0 +1,12 @@
+▌                                                           
+▌ Approve EditFile?                                         
+▌                                                           
+▌ update the workspace configuration                        
+▌                                                           
+▌ • write config.yaml                                       
+▌     ↳ always allow writes under the workspace             
+▌                                                           
+▌  [y] Approve                                              
+▌  [a] Approve always for this workspace                    
+▌  [n] Deny                                                 
+▌                                                           

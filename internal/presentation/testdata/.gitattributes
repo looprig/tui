@@ -1,0 +1,2 @@
+# Fixed-width render goldens deliberately preserve trailing cell padding.
+*.golden -whitespace
