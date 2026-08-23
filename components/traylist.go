@@ -69,12 +69,23 @@ func (l trayLayout) singlePageHeight(items int) int { return max(1, items) * l.r
 // trayItem is one row's content in the list-backed tray. Its fields mirror
 // completionTrayRow's exactly, so the two convert directly and a row cannot pick up a field
 // the other lacks.
-type trayItem struct{ primary, secondary string }
+type trayItem struct {
+	primary, secondary string
+	filter             string
+	kind               trayRowKind
+}
+
+func (t trayItem) selectable() bool { return t.kind != trayRowHeading }
 
 // FilterValue is the PRIMARY only, so list.MatchesForItem's rune indices map 1:1 onto the
 // column trayDelegate underlines. Including the secondary would let a match land on a rune
 // that column never draws, and every underline after it would slide.
-func (t trayItem) FilterValue() string { return t.primary }
+func (t trayItem) FilterValue() string {
+	if t.filter != "" {
+		return t.filter
+	}
+	return t.primary
+}
 
 // trayMatchStyle marks the runes the active filter matched. Underline rather than a color:
 // the tray already spends color on the rail and the selection band, and an underline
@@ -128,10 +139,10 @@ func (d trayDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return // an item this delegate did not put in the list draws nothing
 	}
 
-	selected := index == m.Index()
+	selected := index == m.Index() && it.selectable()
 
 	primary := it.primary
-	if matches := m.MatchesForItem(index); len(matches) > 0 {
+	if matches := m.MatchesForItem(index); it.selectable() && len(matches) > 0 {
 		primary = lipgloss.StyleRunes(primary, matches, trayMatchStyle, lipgloss.NewStyle())
 	}
 
@@ -140,7 +151,7 @@ func (d trayDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		rows = append(rows, d.frame.render.row(primary, selected))
 		rows = append(rows, d.frame.render.row(styles.CardHintStyle.Render(it.secondary), selected))
 	} else {
-		rows = append(rows, d.frame.render.line(completionTrayRow{primary: primary, secondary: it.secondary}, selected))
+		rows = append(rows, d.frame.render.line(completionTrayRow{primary: primary, secondary: it.secondary, kind: it.kind}, selected))
 	}
 	// The pad belongs to the item, and is never banded: a spacer is not part of the
 	// selection, it is the gap beside it.
@@ -209,7 +220,9 @@ func newTrayList(rows []completionTrayRow, width int, layout trayLayout) *trayLi
 	// list.Model clamps at the ends by default. The trays wrap, matching the modulo cursor
 	// every hand-rolled panel already had.
 	l.InfiniteScrolling = true
-	return &trayList{m: l, layout: layout}
+	t := &trayList{m: l, layout: layout}
+	t.selectFirstSelectable()
+	return t
 }
 
 // Selected is the item under the cursor, or the zero trayItem when the list is empty. It is
@@ -231,6 +244,39 @@ func (t *trayList) UnfilteredCursor() int { return t.m.GlobalIndex() }
 
 // Len is how many items survived the filter: the rows the tray actually draws.
 func (t *trayList) Len() int { return len(t.m.VisibleItems()) }
+
+// ChoiceLen counts only selectable rows in the current projection. Group headings are visible
+// rows but never options, so a picker header must report models/sessions rather than chrome.
+func (t *trayList) ChoiceLen() int {
+	count := 0
+	for i := range t.m.VisibleItems() {
+		if t.itemAt(i).selectable() {
+			count++
+		}
+	}
+	return count
+}
+
+func (t *trayList) itemAt(index int) trayItem {
+	items := t.m.VisibleItems()
+	if index < 0 || index >= len(items) {
+		return trayItem{}
+	}
+	item, _ := items[index].(trayItem)
+	return item
+}
+
+// selectFirstSelectable moves an engine that was built or filtered onto the first real
+// choice. Group headings deliberately remain in the list so the renderer can draw them, but
+// they cannot become a live cursor position.
+func (t *trayList) selectFirstSelectable() {
+	for i := range t.m.VisibleItems() {
+		if t.itemAt(i).selectable() {
+			t.m.Select(i)
+			return
+		}
+	}
+}
 
 // Rows is the visible items as tray rows, for a panel that has to measure what it is about
 // to draw — a natural width, say — without reaching into the list.
@@ -258,19 +304,40 @@ func (t *trayList) Filter(query string) {
 		return
 	}
 	t.m.SetFilterText(query)
+	t.selectFirstSelectable()
+	t.pinned = false
+}
+
+// ResetFilter returns the engine to its original unfiltered projection. Unlike applying an
+// empty filter text, this preserves GlobalIndex's original-item mapping for payload pickers.
+func (t *trayList) ResetFilter() {
+	t.m.ResetFilter()
+	t.selectFirstSelectable()
 	t.pinned = false
 }
 
 // Up moves the cursor up, wrapping to the bottom.
 func (t *trayList) Up() {
-	t.m.CursorUp()
-	t.pinned = false
+	t.move(-1)
 }
 
 // Down moves the cursor down, wrapping to the top.
 func (t *trayList) Down() {
-	t.m.CursorDown()
-	t.pinned = false
+	t.move(1)
+}
+
+func (t *trayList) move(delta int) {
+	for range t.Len() {
+		if delta < 0 {
+			t.m.CursorUp()
+		} else {
+			t.m.CursorDown()
+		}
+		if t.itemAt(t.m.Index()).selectable() {
+			t.pinned = false
+			return
+		}
+	}
 }
 
 // Select moves the cursor to an absolute index and reports whether the cursor actually
@@ -285,7 +352,7 @@ func (t *trayList) Down() {
 // A move releases any pinned window: a pin exists to hold the tray still under a pointer, and
 // a cursor that has gone elsewhere is the signal that the window should follow it again.
 func (t *trayList) Select(index int) bool {
-	if index < 0 || index >= t.Len() || index == t.m.Index() {
+	if index < 0 || index >= t.Len() || index == t.m.Index() || !t.itemAt(index).selectable() {
 		return false
 	}
 	t.m.Select(index)

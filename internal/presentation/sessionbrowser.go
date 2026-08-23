@@ -12,8 +12,11 @@ type SessionID = uuid.UUID
 
 // SessionSummary is secret-free presentation metadata for one resumable session.
 type SessionSummary struct {
-	ID           SessionID
-	Title        string
+	ID    SessionID
+	Title string
+	// Description is optional, secret-free context shown by the session owner only through
+	// search. The compact picker keeps its two visible rows focused on recency and identity.
+	Description  string
 	State        string
 	CreatedAt    time.Time
 	LastActiveAt time.Time

@@ -7,9 +7,24 @@ import (
 	"github.com/looprig/tui/styles"
 )
 
+type trayRowKind uint8
+
+const (
+	// trayRowChoice is the ordinary interactive completion row. It is the zero value so
+	// every existing tray literal remains selectable without carrying extra boilerplate.
+	trayRowChoice trayRowKind = iota
+	// trayRowHeading is visual group chrome, such as a model provider. It renders in the
+	// panel but never takes the cursor or dispatches a selection.
+	trayRowHeading
+)
+
 type completionTrayRow struct {
 	primary   string
 	secondary string
+	// filter is the string whose indices safely map onto primary for match underlining.
+	// Empty falls back to primary, preserving every existing tray's behavior.
+	filter string
+	kind   trayRowKind
 }
 
 // completionTrayPrimaryColumn is the display width every primary is padded out to so the
@@ -103,11 +118,38 @@ func (r trayRowRender) row(body string, selected bool) string {
 // line renders a whole tray row: the primary, padded out to the shared column, then the
 // faint secondary beside it.
 func (r trayRowRender) line(row completionTrayRow, selected bool) string {
+	if row.kind == trayRowHeading {
+		return r.row(styles.HeadlineStyle.Render(row.primary), false)
+	}
 	body := row.primary
 	if row.secondary != "" {
 		body += completionTrayGap(row.primary, r.column) + styles.CardHintStyle.Render(row.secondary)
 	}
 	return r.row(body, selected)
+}
+
+const trayHeaderHeight = 3
+
+// renderTrayHeader makes a tray's title, muted count, and one-row breathing room part of the
+// same full-width panel as its choices. The blank rail row is deliberate: headers need a
+// visual separation from the first selectable record without breaking the tray's left edge.
+func renderTrayHeader(width int, title, summary string) string {
+	if width <= 0 {
+		return ""
+	}
+	render := newTrayRowRender(nil, width, 0)
+	return strings.Join([]string{
+		render.row(styles.HeadlineStyle.Render(title), false),
+		render.row(styles.StatusStyle.Render(summary), false),
+		render.row("", false),
+	}, "\n")
+}
+
+func renderTrayHint(width int, text string) string {
+	if width <= 0 {
+		return ""
+	}
+	return newTrayRowRender(nil, width, 0).row(styles.StatusStyle.Render(text), false)
 }
 
 // renderCompletionTray renders every row at width columns and bands the selected one with

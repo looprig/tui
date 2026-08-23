@@ -579,13 +579,13 @@ func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
 			want:     "second",
 		},
 		{
-			// The session tray is the odd one out: a record is a title row, a metadata
-			// row and a spacer, so the SECOND record starts three rows down, not one.
+			// The session tray adds its three-row title/count/spacer header before the
+			// two-row records and their spacer, so the SECOND record starts six rows down.
 			// That arithmetic is exactly what a shared row-to-item mapping has to get
 			// right, and this is the only test that exercises the session branch of
 			// trayMouse.
 			name: "session record",
-			row:  3,
+			row:  6,
 			open: func(m *Screen) {
 				m.sessionTray = components.NewSessionComplete([]components.SessionItem{
 					{ID: "first", Title: "First", LastUsed: "2026-07-15", ShortID: "aaaaaaaa"},

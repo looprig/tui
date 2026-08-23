@@ -23,6 +23,7 @@ type ModeOption struct {
 
 type ModelOption struct {
 	ID          ModelID
+	Provider    string
 	Label       string
 	Description string
 	Aliases     []string
@@ -97,7 +98,7 @@ func queryRuntimeChoices(ctx context.Context, catalog RuntimeCatalog, kind runti
 			}
 		case runtimeTrayModel:
 			for _, option := range options.Models {
-				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases})
+				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Provider: option.Provider, Label: option.Label, Description: option.Description, Aliases: option.Aliases})
 			}
 		case runtimeTrayEffort:
 			for _, option := range options.Efforts {

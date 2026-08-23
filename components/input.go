@@ -209,6 +209,14 @@ func (b *InputBox) SetValue(s string) {
 	b.capHeight()
 }
 
+// SetPlaceholder changes the empty-editor hint without changing its value. Pickers reuse the
+// existing bottom input box as their search field, so the hint has to describe that temporary
+// context rather than suggest a chat submission.
+func (b *InputBox) SetPlaceholder(s string) { b.ta.Placeholder = s }
+
+// ResetPlaceholder restores the ordinary compose hint after a temporary picker closes.
+func (b *InputBox) ResetPlaceholder() { b.ta.Placeholder = placeholder }
+
 // Resize sets the box width; the inner textarea is the box width minus the border's
 // horizontal frame. The height auto-grows with content, so it is not set here.
 func (b *InputBox) Resize(width int) {

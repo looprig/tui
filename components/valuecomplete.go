@@ -1,12 +1,16 @@
 package components
 
 import (
+	"fmt"
+	"strings"
+
 	"charm.land/bubbles/v2/list"
 )
 
 // ValueItem is one typed runtime choice. ID is the opaque payload returned on selection.
 type ValueItem struct {
 	ID          string
+	Provider    string
 	Label       string
 	Description string
 	Aliases     []string
@@ -20,36 +24,106 @@ type ValueItem struct {
 // stays a direct index rather than a second, parallel slice that could drift out of step
 // with the rows the engine is actually showing.
 type ValueComplete struct {
-	list  *trayList
-	items []ValueItem
+	list      *trayList
+	items     []ValueItem
+	rowToItem []int
+	title     string
+	query     string
 }
 
 // NewValueComplete builds the tray for items, narrowed to query. It returns nil when nothing
 // matches: nil means "no panel at all", and the caller commits a notice rather than showing
 // an empty tray that the arrow keys cannot move within.
 func NewValueComplete(items []ValueItem, query string) *ValueComplete {
+	return newValueComplete(items, query, false)
+}
+
+// NewModelComplete builds the grouped model picker. Provider headings are rows in the same
+// panel so they stay aligned with the selection, but the shared tray marks them inert: a
+// cursor or pointer may only select a model payload.
+func NewModelComplete(items []ValueItem) *ValueComplete {
+	return newValueComplete(items, "", true)
+}
+
+func newValueComplete(items []ValueItem, query string, grouped bool) *ValueComplete {
 	choices := make([]ValueItem, len(items))
-	rows := make([]completionTrayRow, len(items))
 	for i, item := range items {
 		// The aliases are copied because the tray outlives this call: the slice behind
 		// them belongs to whoever supplied the choices and a catalog refresh can rewrite
 		// it, and a live tray must not change what the next keystroke filters against.
 		item.Aliases = append([]string(nil), item.Aliases...)
 		choices[i] = item
-		rows[i] = completionTrayRow{primary: item.Label, secondary: item.Description}
+	}
+	if len(choices) == 0 {
+		return nil
+	}
+
+	rows := make([]completionTrayRow, 0, len(choices))
+	rowToItem := make([]int, 0, len(choices))
+	if grouped {
+		rows, rowToItem = groupedModelRows(choices)
+	} else {
+		for i, item := range choices {
+			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label})
+			rowToItem = append(rowToItem, i)
+		}
 	}
 
 	// Width zero: this panel is only ever drawn through ViewWindow, which is handed the
 	// terminal's width at render time, so there is no width worth guessing here.
 	tray := newTrayList(rows, 0, trayLayout{})
-	tray.SetFilterFunc(valueFilter(choices))
+	if grouped {
+		tray.SetFilterFunc(modelFilter(choices, rowToItem))
+	} else {
+		tray.SetFilterFunc(valueFilter(choices))
+	}
 	// trayList.Filter leaves a blank query UNFILTERED rather than applying "", which is what
 	// keeps UnfilteredCursor below honest; see its doc for why an empty term is not harmless.
 	tray.Filter(query)
-	if tray.Len() == 0 {
+	if tray.ChoiceLen() == 0 {
 		return nil
 	}
-	return &ValueComplete{list: tray, items: choices}
+	result := &ValueComplete{list: tray, items: choices, rowToItem: rowToItem}
+	if grouped {
+		result.title = "MODELS"
+	}
+	return result
+}
+
+func groupedModelRows(items []ValueItem) ([]completionTrayRow, []int) {
+	type providerGroup struct {
+		name    string
+		indices []int
+	}
+	groups := make([]providerGroup, 0, len(items))
+	byProvider := make(map[string]int, len(items))
+	for i, item := range items {
+		provider := strings.TrimSpace(item.Provider)
+		if provider == "" {
+			provider = "Other"
+		}
+		key := strings.ToLower(provider)
+		group, ok := byProvider[key]
+		if !ok {
+			group = len(groups)
+			byProvider[key] = group
+			groups = append(groups, providerGroup{name: provider})
+		}
+		groups[group].indices = append(groups[group].indices, i)
+	}
+
+	rows := make([]completionTrayRow, 0, len(items)+len(groups))
+	rowToItem := make([]int, 0, len(items)+len(groups))
+	for _, group := range groups {
+		rows = append(rows, completionTrayRow{primary: strings.ToUpper(group.name), filter: group.name, kind: trayRowHeading})
+		rowToItem = append(rowToItem, -1)
+		for _, index := range group.indices {
+			item := items[index]
+			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label})
+			rowToItem = append(rowToItem, index)
+		}
+	}
+	return rows, rowToItem
 }
 
 // valueFilter is the picker's match rule: fuzzy over the LABEL, falling back to fuzzy over
@@ -90,10 +164,54 @@ func valueFilter(items []ValueItem) list.FilterFunc {
 	}
 }
 
+// modelFilter keeps provider headings only when that provider or one of its models matches.
+// A provider hit keeps its entire group, while name hits preserve useful underlines and alias
+// or opaque-ID hits deliberately carry no underline because those strings are not on the row.
+func modelFilter(items []ValueItem, rowToItem []int) list.FilterFunc {
+	return func(term string, labels []string) []list.Rank {
+		var ranks []list.Rank
+		for start := 0; start < len(rowToItem); {
+			if rowToItem[start] >= 0 {
+				start++
+				continue
+			}
+			head := start
+			end := start + 1
+			for end < len(rowToItem) && rowToItem[end] >= 0 {
+				end++
+			}
+			providerMatch := len(list.DefaultFilter(term, []string{labels[head]})) > 0
+			groupRanks := make([]list.Rank, 0, end-head-1)
+			for row := head + 1; row < end; row++ {
+				item := items[rowToItem[row]]
+				name := list.DefaultFilter(term, []string{item.Label})
+				switch {
+				case providerMatch:
+					groupRanks = append(groupRanks, list.Rank{Index: row})
+				case len(name) > 0:
+					groupRanks = append(groupRanks, list.Rank{Index: row, MatchedIndexes: name[0].MatchedIndexes})
+				case len(list.DefaultFilter(term, item.Aliases)) > 0 || len(list.DefaultFilter(term, []string{item.ID})) > 0:
+					groupRanks = append(groupRanks, list.Rank{Index: row})
+				}
+			}
+			if len(groupRanks) > 0 {
+				ranks = append(ranks, list.Rank{Index: head})
+				ranks = append(ranks, groupRanks...)
+			}
+			start = end
+		}
+		return ranks
+	}
+}
+
 // Selected is the choice under the cursor. It resolves through the engine's UNFILTERED
 // index, so the opaque ID survives filtering however the matcher reordered the rows.
 func (v *ValueComplete) Selected() ValueItem {
-	i := v.list.UnfilteredCursor()
+	row := v.list.UnfilteredCursor()
+	if row < 0 || row >= len(v.rowToItem) {
+		return ValueItem{}
+	}
+	i := v.rowToItem[row]
 	if i < 0 || i >= len(v.items) {
 		return ValueItem{} // fail-safe: a tray can be emptied between a keypress and a render
 	}
@@ -104,19 +222,62 @@ func (v *ValueComplete) Selected() ValueItem {
 func (v *ValueComplete) Cursor() int { return v.list.Cursor() }
 
 // Len is how many choices matched, which is what the tray draws.
-func (v *ValueComplete) Len() int { return v.list.Len() }
+func (v *ValueComplete) Len() int { return v.list.ChoiceLen() }
 
 // Up and Down move the cursor, wrapping at both ends.
 func (v *ValueComplete) Up()   { v.list.Up() }
 func (v *ValueComplete) Down() { v.list.Down() }
 
+// Filter updates a live model search without recreating the picker. Plain runtime pickers use
+// the same method when a caller wants it, while their existing constructor query remains valid.
+func (v *ValueComplete) Filter(query string) {
+	v.query = query
+	if strings.TrimSpace(query) == "" {
+		v.list.ResetFilter()
+		return
+	}
+	v.list.Filter(query)
+}
+
+func (v *ValueComplete) summary() string {
+	matched, total := v.Len(), len(v.items)
+	noun := "models"
+	if total == 1 {
+		noun = "model"
+	}
+	if strings.TrimSpace(v.query) == "" {
+		return fmt.Sprintf("%d %s", total, noun)
+	}
+	return fmt.Sprintf("%d of %d %s", matched, total, noun)
+}
+
 // SelectWindowRow moves the cursor to a visual row of the rendered window and reports
 // whether the selection changed.
 func (v *ValueComplete) SelectWindowRow(row, maxRows int) bool {
+	if v.title != "" {
+		if row < trayHeaderHeight || maxRows <= trayHeaderHeight {
+			return false
+		}
+		return v.list.SelectWindowRow(row-trayHeaderHeight, maxRows-trayHeaderHeight)
+	}
 	return v.list.SelectWindowRow(row, maxRows)
 }
 
 // ViewWindow renders at most maxRows rows at width columns, keeping the selection on screen.
 func (v *ValueComplete) ViewWindow(width, maxRows int) string {
-	return v.list.ViewWindow(width, maxRows)
+	if v.title == "" {
+		return v.list.ViewWindow(width, maxRows)
+	}
+	if width <= 0 || maxRows < trayHeaderHeight {
+		return ""
+	}
+	header := renderTrayHeader(width, v.title, v.summary())
+	bodyRows := maxRows - trayHeaderHeight
+	if body := v.list.ViewWindow(width, bodyRows); body != "" {
+		return header + "\n" + body
+	}
+	if strings.TrimSpace(v.query) != "" && bodyRows > 0 {
+		return header + "\n" + renderTrayHint(width, "No matching models")
+	}
+	return header
 }

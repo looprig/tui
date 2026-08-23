@@ -58,6 +58,38 @@ func TestTrayListCursorWraps(t *testing.T) {
 	}
 }
 
+// TestTrayListSkipsNonSelectableRows is the provider-group invariant for the model picker:
+// group headings are visible structure, never values an operator can select. The shared tray
+// has to enforce it so keyboard and pointer navigation agree instead of letting Enter land on
+// a provider heading with no model payload behind it.
+func TestTrayListSkipsNonSelectableRows(t *testing.T) {
+	t.Parallel()
+
+	tray := newTrayList([]completionTrayRow{
+		{primary: "ANTHROPIC", kind: trayRowHeading},
+		{primary: "Claude Sonnet 4.5"},
+		{primary: "Claude Opus 4.1"},
+	}, 60, trayLayout{})
+
+	if got := tray.Selected().primary; got != "Claude Sonnet 4.5" {
+		t.Fatalf("initial selection = %q, want first model rather than the provider heading", got)
+	}
+	tray.Up()
+	if got := tray.Selected().primary; got != "Claude Opus 4.1" {
+		t.Fatalf("Up() selected %q, want wrapped model and no provider heading", got)
+	}
+	tray.Down()
+	if got := tray.Selected().primary; got != "Claude Sonnet 4.5" {
+		t.Fatalf("Down() selected %q, want first model and no provider heading", got)
+	}
+	if tray.SelectWindowRow(0, 3) {
+		t.Fatal("SelectWindowRow(provider heading) reported a move, want provider headings inert")
+	}
+	if !tray.SelectWindowRow(2, 3) || tray.Selected().primary != "Claude Opus 4.1" {
+		t.Fatalf("SelectWindowRow(model) selected %q, want Claude Opus 4.1", tray.Selected().primary)
+	}
+}
+
 // TestTrayListStackedLayout covers the session tray's shape: two rows per item, PadV spacers
 // between entries but not after the last, and a band that covers BOTH of the selected item's
 // rows. A band on only the title row would read as a one-row entry with an orphan beneath it.

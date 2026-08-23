@@ -3,16 +3,21 @@ package components
 import (
 	"fmt"
 	"strings"
+
+	"charm.land/bubbles/v2/list"
 )
 
 // SessionItem is the already-formatted, secret-free view data for one session record.
 type SessionItem struct {
-	ID       string
-	Title    string
-	State    string
-	Activity string
-	LastUsed string
-	ShortID  string
+	ID    string
+	Title string
+	// Description is filter-only session context. It stays out of the compact two-row
+	// picker so the visible row remains a quick scan of title, activity, date, and short ID.
+	Description string
+	State       string
+	Activity    string
+	LastUsed    string
+	ShortID     string
 }
 
 // sessionTrayLayout is the picker's shape: each record is two STACKED rows -- the title, then
@@ -35,6 +40,7 @@ var sessionTrayLayout = trayLayout{Stacked: true, PadV: 1}
 type SessionComplete struct {
 	tray  *trayList
 	items []SessionItem
+	query string
 }
 
 // NewSessionComplete builds the picker, or returns nil when there is nothing to pick. Nil means
@@ -50,22 +56,20 @@ func NewSessionComplete(items []SessionItem) *SessionComplete {
 		rows[i] = completionTrayRow{
 			primary:   item.Title + joinMetadata(item.State, item.Activity),
 			secondary: fmt.Sprintf("%s · %s", item.LastUsed, item.ShortID),
+			filter:    item.Title,
 		}
 	}
 	// Width zero: every render supplies its own width, and this panel never calls the
 	// width-less View.
-	return &SessionComplete{tray: newTrayList(rows, 0, sessionTrayLayout), items: kept}
+	tray := newTrayList(rows, 0, sessionTrayLayout)
+	tray.SetFilterFunc(sessionFilter(kept))
+	return &SessionComplete{tray: tray, items: kept}
 }
 
-// Selected is the record under the cursor. It indexes the ORIGINAL slice by the tray's cursor,
-// which is sound because this picker never filters, so the tray's visible items and its items
-// are the same list in the same order.
-//
-// The bounds check is not that invariant guarded twice: trayList.Selected is itself fail-safe,
-// and a panel that panicked where its engine returns a zero value would be the more surprising
-// of the two.
+// Selected resolves through the tray's original-item cursor so filtering may reorder or hide
+// records without changing the opaque session ID that resume receives.
 func (s *SessionComplete) Selected() SessionItem {
-	i := s.tray.Cursor()
+	i := s.tray.UnfilteredCursor()
 	if i < 0 || i >= len(s.items) {
 		return SessionItem{}
 	}
@@ -82,6 +86,30 @@ func (s *SessionComplete) Up() { s.tray.Up() }
 // Down moves to the next record, wrapping to the first.
 func (s *SessionComplete) Down() { s.tray.Down() }
 
+// Filter applies the inline search text. A blank query restores the unfiltered projection
+// rather than asking Bubbles to filter on "", whose cursor mapping is unsuitable for payload
+// selection (see trayList.ResetFilter).
+func (s *SessionComplete) Filter(query string) {
+	s.query = query
+	if strings.TrimSpace(query) == "" {
+		s.tray.ResetFilter()
+		return
+	}
+	s.tray.Filter(query)
+}
+
+func (s *SessionComplete) summary() string {
+	matched, total := s.tray.Len(), len(s.items)
+	noun := "sessions"
+	if total == 1 {
+		noun = "session"
+	}
+	if strings.TrimSpace(s.query) == "" {
+		return fmt.Sprintf("%d %s", total, noun)
+	}
+	return fmt.Sprintf("%d of %d %s", matched, total, noun)
+}
+
 // SelectWindowRow moves the cursor to the record occupying a clicked VISUAL row of the current
 // maxRows window, reporting whether the selection changed.
 //
@@ -90,7 +118,10 @@ func (s *SessionComplete) Down() { s.tray.Down() }
 // date it is. The spacer between records is inert, because it belongs to neither neighbour and
 // picking one would move the cursor somewhere the user did not point.
 func (s *SessionComplete) SelectWindowRow(row, maxRows int) bool {
-	return s.tray.SelectWindowRow(row, maxRows)
+	if row < trayHeaderHeight || maxRows <= trayHeaderHeight {
+		return false
+	}
+	return s.tray.SelectWindowRow(row-trayHeaderHeight, maxRows-trayHeaderHeight)
 }
 
 // ViewWindow renders the picker into at most maxRows SCREEN rows, not maxRows records: two
@@ -98,7 +129,46 @@ func (s *SessionComplete) SelectWindowRow(row, maxRows int) bool {
 // BETWEEN records carry a spacer. A maxRows too small for one record's two content rows renders
 // nothing rather than a title with its metadata cut off.
 func (s *SessionComplete) ViewWindow(width, maxRows int) string {
-	return s.tray.ViewWindow(width, maxRows)
+	if width <= 0 || maxRows < trayHeaderHeight {
+		return ""
+	}
+	header := renderTrayHeader(width, "SESSIONS", s.summary())
+	bodyRows := maxRows - trayHeaderHeight
+	if body := s.tray.ViewWindow(width, bodyRows); body != "" {
+		return header + "\n" + body
+	}
+	if strings.TrimSpace(s.query) != "" && bodyRows > 0 {
+		return header + "\n" + renderTrayHint(width, "No matching sessions")
+	}
+	return header
+}
+
+// sessionFilter keeps title hits on the engine's ordinary fuzzy matcher, whose indices map
+// safely onto the rendered title, and adds description or identifier substring hits without
+// indices. Those fields are intentionally not drawn, so underlining a title rune for them
+// would be a lie.
+func sessionFilter(items []SessionItem) list.FilterFunc {
+	return func(term string, labels []string) []list.Rank {
+		ranks := list.DefaultFilter(term, labels)
+		matched := make(map[int]bool, len(ranks))
+		for _, rank := range ranks {
+			matched[rank.Index] = true
+		}
+		needle := strings.ToLower(strings.TrimSpace(term))
+		if needle == "" {
+			return ranks
+		}
+		for i, item := range items {
+			if matched[i] {
+				continue
+			}
+			haystack := strings.ToLower(strings.Join([]string{item.Description, item.ID, item.ShortID}, "\n"))
+			if strings.Contains(haystack, needle) {
+				ranks = append(ranks, list.Rank{Index: i})
+			}
+		}
+		return ranks
+	}
 }
 
 // joinMetadata appends the non-empty parts to the title row as " · "-separated trailers. It

@@ -19,11 +19,11 @@ func TestSessionCompleteRowTwoShowsLastUsedAndShortIDOnly(t *testing.T) {
 	tray := NewSessionComplete([]SessionItem{
 		{ID: "one", Title: "First", LastUsed: "2026-07-15", ShortID: "12345678"},
 	})
-	lines := strings.Split(tray.ViewWindow(80, 3), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("row count = %d, want at least 2", len(lines))
+	lines := strings.Split(tray.ViewWindow(80, 5), "\n")
+	if len(lines) < trayHeaderHeight+2 {
+		t.Fatalf("row count = %d, want header plus two record rows", len(lines))
 	}
-	row2 := ansi.Strip(lines[1])
+	row2 := ansi.Strip(lines[trayHeaderHeight+1])
 	if !strings.Contains(row2, "2026-07-15") || !strings.Contains(row2, "12345678") {
 		t.Fatalf("row 2 = %q, want the last-used date and short id", row2)
 	}
@@ -37,9 +37,9 @@ func TestSessionCompleteRendersTwoRowsWithContinuousUnboxedRail(t *testing.T) {
 		{ID: "one", Title: "First", State: "idle", Activity: "2m ago", LastUsed: "2026-07-15", ShortID: "12345678"},
 		{ID: "two", Title: "Second", State: "stopped", LastUsed: "2026-07-14", ShortID: "87654321"},
 	})
-	lines := strings.Split(tray.ViewWindow(80, 6), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("row count = %d, want 5 (two + padding + two)", len(lines))
+	lines := strings.Split(tray.ViewWindow(80, 8), "\n")
+	if len(lines) != 8 {
+		t.Fatalf("row count = %d, want header + two + padding + two", len(lines))
 	}
 	for i, line := range lines {
 		plain := ansi.Strip(line)
@@ -50,8 +50,8 @@ func TestSessionCompleteRendersTwoRowsWithContinuousUnboxedRail(t *testing.T) {
 			t.Errorf("row %d contains a box corner: %q", i, plain)
 		}
 	}
-	if strings.TrimSpace(strings.TrimPrefix(ansi.Strip(lines[2]), styles.AccentBar)) != "" {
-		t.Fatalf("padding row contains content: %q", ansi.Strip(lines[2]))
+	if strings.TrimSpace(strings.TrimPrefix(ansi.Strip(lines[5]), styles.AccentBar)) != "" {
+		t.Fatalf("record padding row contains content: %q", ansi.Strip(lines[5]))
 	}
 }
 
@@ -65,11 +65,46 @@ func TestSessionCompleteNavigatesByRecord(t *testing.T) {
 	if got := tray.Selected().ID; got != "one" {
 		t.Fatalf("wrapped Down selected %q, want one", got)
 	}
-	if tray.SelectWindowRow(2, 6) {
+	if tray.SelectWindowRow(5, 8) {
 		t.Fatal("padding row changed the selected session")
 	}
-	if !tray.SelectWindowRow(3, 6) || tray.Selected().ID != "two" {
+	if !tray.SelectWindowRow(6, 8) || tray.Selected().ID != "two" {
 		t.Fatalf("second record mouse selection = %q, want two", tray.Selected().ID)
+	}
+}
+
+func TestSessionCompleteFiltersDescriptionAndIDBelowAHeader(t *testing.T) {
+	t.Parallel()
+
+	tray := NewSessionComplete([]SessionItem{
+		{ID: "aaaaaaaa-0000-4000-8000-000000000001", Title: "Migration", Description: "billing data backfill", LastUsed: "2026-08-23", ShortID: "aaaaaaaa"},
+		{ID: "bbbbbbbb-0000-4000-8000-000000000002", Title: "Release", Description: "deployment verification", LastUsed: "2026-08-22", ShortID: "bbbbbbbb"},
+	})
+
+	tray.Filter("billing")
+	if got := tray.Selected().ID; got != "aaaaaaaa-0000-4000-8000-000000000001" {
+		t.Fatalf("description match selected %q, want the original Migration payload", got)
+	}
+	lines := strings.Split(tray.ViewWindow(80, 8), "\n")
+	if got, want := len(lines), 5; got != want {
+		t.Fatalf("filtered tray rendered %d rows, want header + spacer + one record = %d:\n%q", got, want, ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if title := strings.TrimSpace(strings.TrimPrefix(ansi.Strip(lines[0]), styles.AccentBar)); title != "SESSIONS" {
+		t.Errorf("header title = %q, want SESSIONS", title)
+	}
+	if count := ansi.Strip(lines[1]); !strings.Contains(count, "1 of 2 sessions") {
+		t.Errorf("header count = %q, want the matching and total session counts", count)
+	}
+	if spacer := strings.TrimSpace(strings.TrimPrefix(ansi.Strip(lines[2]), styles.AccentBar)); spacer != "" {
+		t.Errorf("header spacer = %q, want an empty rail-carrying row", spacer)
+	}
+	if got := ansi.Strip(strings.Join(lines[3:], "\n")); !strings.Contains(got, "Migration") || strings.Contains(got, "Release") {
+		t.Errorf("filtered records = %q, want Migration only", got)
+	}
+
+	tray.Filter("bbbbbbbb-0000")
+	if got := tray.Selected().ID; got != "bbbbbbbb-0000-4000-8000-000000000002" {
+		t.Errorf("full ID match selected %q, want the original Release payload", got)
 	}
 }
 
@@ -98,12 +133,12 @@ func TestSessionCompleteRowsCarryTitleThenMetadata(t *testing.T) {
 	tray := NewSessionComplete([]SessionItem{
 		{ID: "6f1c4e2a-0000-4000-8000-000000000001", Title: "First", State: "idle", Activity: "2m ago", LastUsed: "2026-07-15", ShortID: "12345678"},
 	})
-	lines := strings.Split(tray.ViewWindow(80, 3), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("one record rendered %d rows, want 2:\n%q", len(lines), lines)
+	lines := strings.Split(tray.ViewWindow(80, 5), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("one record rendered %d rows, want header + 2:\n%q", len(lines), lines)
 	}
 
-	title, meta := ansi.Strip(lines[0]), ansi.Strip(lines[1])
+	title, meta := ansi.Strip(lines[trayHeaderHeight]), ansi.Strip(lines[trayHeaderHeight+1])
 	for _, want := range []string{"First", "idle", "2m ago"} {
 		if !strings.Contains(title, want) {
 			t.Errorf("title row = %q, want it to contain %q", title, want)
@@ -118,7 +153,7 @@ func TestSessionCompleteRowsCarryTitleThenMetadata(t *testing.T) {
 	if strings.Contains(meta, "idle") {
 		t.Errorf("metadata row = %q, want the state left on the title row", meta)
 	}
-	if view := ansi.Strip(tray.ViewWindow(80, 3)); strings.Contains(view, "6f1c4e2a-0000") {
+	if view := ansi.Strip(tray.ViewWindow(80, 5)); strings.Contains(view, "6f1c4e2a-0000") {
 		t.Errorf("view leaks the full session id: %q", view)
 	}
 }
@@ -134,16 +169,16 @@ func TestSessionCompleteBandsBothRowsOfTheSelectedRecord(t *testing.T) {
 		{ID: "one", Title: "First", LastUsed: "2026-07-15", ShortID: "12345678"},
 		{ID: "two", Title: "Second", LastUsed: "2026-07-14", ShortID: "87654321"},
 	})
-	tray.Down() // select the second record: rows 3 and 4
+	tray.Down() // select the second record: rows 6 and 7 after the header
 
-	lines := strings.Split(tray.ViewWindow(80, 6), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("two records rendered %d rows, want 5:\n%q", len(lines), lines)
+	lines := strings.Split(tray.ViewWindow(80, 8), "\n")
+	if len(lines) != 8 {
+		t.Fatalf("two records rendered %d rows, want header + 5:\n%q", len(lines), lines)
 	}
 	band := selectedBandOpen(t)
 	for i, line := range lines {
 		banded := strings.HasPrefix(line, band)
-		want := i == 3 || i == 4
+		want := i == 6 || i == 7
 		if banded != want {
 			t.Errorf("row %d banded = %v, want %v: %q", i, banded, want, line)
 		}
@@ -170,15 +205,17 @@ func TestSessionCompleteViewWindowCountsScreenRowsNotRecords(t *testing.T) {
 	}{
 		{maxRows: 0, wantRows: 0},
 		{maxRows: 1, wantRows: 0},
-		{maxRows: 2, wantRows: 2},
-		{maxRows: 3, wantRows: 2},
-		{maxRows: 4, wantRows: 2},
+		{maxRows: 2, wantRows: 0},
+		{maxRows: 3, wantRows: 3},
+		{maxRows: 4, wantRows: 3},
 		{maxRows: 5, wantRows: 5},
 		{maxRows: 6, wantRows: 5},
+		{maxRows: 7, wantRows: 5},
 		{maxRows: 8, wantRows: 8},
 		{maxRows: 9, wantRows: 8},
 		{maxRows: 11, wantRows: 11},
-		{maxRows: 99, wantRows: 11},
+		{maxRows: 14, wantRows: 14},
+		{maxRows: 99, wantRows: 14},
 	} {
 		view := NewSessionComplete(items).ViewWindow(80, tc.maxRows)
 		got := 0
@@ -212,8 +249,9 @@ func TestSessionCompleteSelectWindowRowMapsRowsToRecords(t *testing.T) {
 		{ID: "two", Title: "Second", LastUsed: "2026-07-14", ShortID: "bbbbbbbb"},
 		{ID: "three", Title: "Third", LastUsed: "2026-07-13", ShortID: "cccccccc"},
 	}
-	// Rows: 0,1 = first | 2 = spacer | 3,4 = second | 5 = spacer | 6,7 = third.
-	const maxRows = 8
+	// Rows: 0-2 header | 3,4 = first | 5 = spacer | 6,7 = second | 8 = spacer |
+	// 9,10 = third.
+	const maxRows = 11
 	if got := len(strings.Split(NewSessionComplete(items).ViewWindow(80, maxRows), "\n")); got != maxRows {
 		t.Fatalf("the window under test renders %d rows, want %d", got, maxRows)
 	}
@@ -223,15 +261,18 @@ func TestSessionCompleteSelectWindowRowMapsRowsToRecords(t *testing.T) {
 		wantID   string // the record selected afterwards
 		wantMove bool
 	}{
-		{row: 0, wantID: "one", wantMove: true},    // title of the first
-		{row: 1, wantID: "one", wantMove: true},    // its date row selects it too
-		{row: 2, wantID: "three", wantMove: false}, // spacer: inert
-		{row: 3, wantID: "two", wantMove: true},
-		{row: 4, wantID: "two", wantMove: true},    // date row of the second
+		{row: 0, wantID: "three", wantMove: false}, // header title: inert
+		{row: 1, wantID: "three", wantMove: false}, // header count: inert
+		{row: 2, wantID: "three", wantMove: false}, // header spacer: inert
+		{row: 3, wantID: "one", wantMove: true},    // title of the first
+		{row: 4, wantID: "one", wantMove: true},    // its date row selects it too
 		{row: 5, wantID: "three", wantMove: false}, // spacer: inert
-		{row: 6, wantID: "three", wantMove: false}, // already selected: no change
-		{row: 7, wantID: "three", wantMove: false}, // its date row, likewise no change
-		{row: 8, wantID: "three", wantMove: false}, // past the window
+		{row: 6, wantID: "two", wantMove: true},
+		{row: 7, wantID: "two", wantMove: true},     // date row of the second
+		{row: 8, wantID: "three", wantMove: false},  // spacer: inert
+		{row: 9, wantID: "three", wantMove: false},  // already selected: no change
+		{row: 10, wantID: "three", wantMove: false}, // its date row, likewise no change
+		{row: 8, wantID: "three", wantMove: false},  // past the window
 		{row: 99, wantID: "three", wantMove: false},
 		{row: -1, wantID: "three", wantMove: false},
 	} {
@@ -292,11 +333,11 @@ func TestSessionCompleteFillsItsBudgetOnTheLastRecord(t *testing.T) {
 		t.Fatalf("Up() from the first record selected %q, want Rec4", got)
 	}
 
-	// 11 rows is exactly four records: 2 + 1 + 2 + 1 + 2 + 1 + 2.
-	view := tray.ViewWindow(80, 11)
+	// 14 rows is the three-row header plus exactly four records: 3 + 2 + 1 + 2 + 1 + 2 + 1 + 2.
+	view := tray.ViewWindow(80, 14)
 	lines := strings.Split(view, "\n")
-	if len(lines) != 11 {
-		t.Fatalf("ViewWindow(80, 11) rendered %d rows, want 11:\n%q", len(lines), ansi.Strip(view))
+	if len(lines) != 14 {
+		t.Fatalf("ViewWindow(80, 14) rendered %d rows, want 14:\n%q", len(lines), ansi.Strip(view))
 	}
 	plain := ansi.Strip(view)
 	for _, want := range []string{"Rec1", "Rec2", "Rec3", "Rec4"} {

@@ -197,6 +197,22 @@ func TestRuntimeCommandsCaptureFocusedLoopAndReturnTypedChoice(t *testing.T) {
 	}
 }
 
+func TestRuntimeModelChoicesKeepProviderForGrouping(t *testing.T) {
+	t.Parallel()
+
+	catalog := runtimeModelCatalogFake{runtimeCatalogFake: &runtimeCatalogFake{fakeAgent: &fakeAgent{activeLoopID: callID(1)}}}
+	msg := queryRuntimeChoices(context.Background(), &catalog, runtimeTrayModel, callID(1))().(runtimeChoicesMsg)
+	if got, want := msg.items[0].Provider, "OpenAI"; got != want {
+		t.Errorf("model provider = %q, want %q for the grouped model tray", got, want)
+	}
+}
+
+type runtimeModelCatalogFake struct{ *runtimeCatalogFake }
+
+func (*runtimeModelCatalogFake) LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error) {
+	return LoopRuntimeOptions{Models: []ModelOption{{ID: "gpt-5.4", Provider: "OpenAI", Label: "GPT-5.4"}}}, nil
+}
+
 var _ Agent = (*fakeAgent)(nil)
 var _ RuntimeCatalog = (*runtimeCatalogFake)(nil)
 var _ RuntimeController = (*runtimeControllerFake)(nil)

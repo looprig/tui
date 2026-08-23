@@ -70,8 +70,11 @@ type Screen struct {
 	presentation   SessionPresentation
 	sessionBrowser SessionBrowser
 	sessionTray    *components.SessionComplete
-	pendingResume  SessionID
-	resuming       bool
+	// trayDraft is the compose text displaced while the bottom editor is temporarily a
+	// session/model search field. It is restored unchanged when the picker closes.
+	trayDraft     string
+	pendingResume SessionID
+	resuming      bool
 
 	viewport viewportModel // the scrollable/selectable content window
 	collapse collapseState // the retroactive thinking-fold state (ctrl+t + header-click)
@@ -476,6 +479,9 @@ func (m *Screen) handleRuntimeChoices(msg runtimeChoicesMsg) tea.Cmd {
 		return nil
 	}
 	tray := components.NewValueComplete(msg.items, "")
+	if msg.kind == runtimeTrayModel {
+		tray = components.NewModelComplete(msg.items)
+	}
 	if tray == nil {
 		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "No choices are available")
 		m.rerender()
@@ -484,6 +490,9 @@ func (m *Screen) handleRuntimeChoices(msg runtimeChoicesMsg) tea.Cmd {
 	m.runtimeTray = tray
 	m.runtimeTrayKind = msg.kind
 	m.runtimeTrayLoopID = msg.loopID
+	if msg.kind == runtimeTrayModel {
+		m.openTraySearch("Search models…")
+	}
 	m.resize()
 	return nil
 }
@@ -517,12 +526,13 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 			shortID = shortID[:8]
 		}
 		items = append(items, components.SessionItem{
-			ID:       id,
-			Title:    title,
-			State:    session.State,
-			Activity: relativeActivity(now, session.LastActiveAt),
-			LastUsed: lastUsedDate(session),
-			ShortID:  shortID,
+			ID:          id,
+			Title:       title,
+			Description: session.Description,
+			State:       session.State,
+			Activity:    relativeActivity(now, session.LastActiveAt),
+			LastUsed:    lastUsedDate(session),
+			ShortID:     shortID,
 		})
 	}
 	m.sessionTray = components.NewSessionComplete(items)
@@ -531,6 +541,7 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 		m.rerender()
 		return nil
 	}
+	m.openTraySearch("Search sessions…")
 	m.resize()
 	return nil
 }
@@ -1142,6 +1153,44 @@ func (m *Screen) beginGracefulQuit() tea.Cmd {
 // prompt, Esc interrupts a running turn; (4) the viewport consumes ONLY its non-conflicting
 // nav keys (PageUp/PageDown/Home/End); (5) everything else — the arrow keys and printable
 // input — falls through to the composer.
+// traySearchOpen reports the two picker states that repurpose the bottom editor into a search
+// field. Mode and effort retain their existing selection-only trays.
+func (m Screen) traySearchOpen() bool {
+	return m.sessionTray != nil || (m.runtimeTray != nil && m.runtimeTrayKind == runtimeTrayModel)
+}
+
+func (m *Screen) openTraySearch(placeholder string) {
+	m.trayDraft = m.interaction.input.Value()
+	m.interaction.input.Reset()
+	m.interaction.input.SetPlaceholder(placeholder)
+}
+
+func (m *Screen) closeTraySearch() {
+	m.interaction.input.SetValue(m.trayDraft)
+	m.interaction.input.ResetPlaceholder()
+	m.trayDraft = ""
+}
+
+func (m *Screen) applyTraySearch() {
+	query := m.interaction.input.Value()
+	switch {
+	case m.sessionTray != nil:
+		m.sessionTray.Filter(query)
+	case m.runtimeTray != nil && m.runtimeTrayKind == runtimeTrayModel:
+		m.runtimeTray.Filter(query)
+	}
+}
+
+func (m *Screen) forwardToTraySearch(msg tea.Msg) tea.Cmd {
+	before := m.interaction.input.Value()
+	cmd := m.interaction.input.Update(msg)
+	if m.interaction.input.Value() != before {
+		m.applyTraySearch()
+		m.resize()
+	}
+	return cmd
+}
+
 // routeToEditor delivers a NON-keypress message to the composer. It serves the explicit
 // tea.PasteMsg arm and the trailing default of Update, which together cover every way
 // text can reach the editor without arriving as a keypress:
@@ -1161,9 +1210,8 @@ func (m *Screen) beginGracefulQuit() tea.Cmd {
 //
 //   - quitting wins first, exactly as in handleKey: once the bounded agent close is in
 //     flight no input may mutate state or dispatch work.
-//   - an open runtime/session tray owns the keyboard and offers no text field, so the
-//     message is inert (matching those trays' `default: return m, nil` key arms) rather
-//     than leaking into the composer hidden behind the tray.
+//   - an open session/model tray turns the bottom editor into its search field. Other runtime
+//     trays remain selection-only and therefore keep these messages inert.
 //   - otherwise the interaction model decides by mode (see ForwardToEditor): the
 //     composer takes it, a free-text answer prompt takes it, every other prompt ignores it.
 //
@@ -1173,6 +1221,9 @@ func (m *Screen) beginGracefulQuit() tea.Cmd {
 func (m Screen) routeToEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.quitting {
 		return m, nil
+	}
+	if m.traySearchOpen() {
+		return m, m.forwardToTraySearch(msg)
 	}
 	if m.runtimeTray != nil || m.sessionTray != nil {
 		return m, nil
@@ -1234,8 +1285,12 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.runtimeTray != nil {
 		switch msg.String() {
 		case "esc":
+			searching := m.runtimeTrayKind == runtimeTrayModel
 			m.runtimeTray = nil
 			m.runtimeTrayKind = runtimeTrayNone
+			if searching {
+				m.closeTraySearch()
+			}
 			m.resize()
 			return m, nil
 		case "up":
@@ -1249,9 +1304,15 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			kind, loopID := m.runtimeTrayKind, m.runtimeTrayLoopID
 			m.runtimeTray = nil
 			m.runtimeTrayKind = runtimeTrayNone
+			if kind == runtimeTrayModel {
+				m.closeTraySearch()
+			}
 			m.resize()
 			return m, mutateRuntime(m.appCtx, m.runtimeController, kind, loopID, selected.ID)
 		default:
+			if m.runtimeTrayKind == runtimeTrayModel {
+				return m, m.forwardToTraySearch(msg)
+			}
 			return m, nil
 		}
 	}
@@ -1259,6 +1320,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.sessionTray = nil
+			m.closeTraySearch()
 			m.resize()
 			return m, nil
 		case "up":
@@ -1270,6 +1332,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			id, err := uuid.Parse(m.sessionTray.Selected().ID)
 			m.sessionTray = nil
+			m.closeTraySearch()
 			m.resize()
 			if err != nil {
 				m.transcript = m.transcript.CommitGlobalError(fmt.Errorf("resume session: %w", err))
@@ -1286,7 +1349,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.beginSessionResume(id)
 		default:
-			return m, nil
+			return m, m.forwardToTraySearch(msg)
 		}
 	}
 	// Precedence (2): an active prompt consumes its own approve/deny/choice/answer keys.
@@ -2307,12 +2370,28 @@ func (m Screen) footerView() string {
 // never as a mutable control (there is no way to change it from the TUI). Product
 // branding remains in the startup banner rather than repeating in every frame.
 func (m Screen) footer() loopFooter {
-	parts := m.presentation.footerParts()
-	header := ""
-	if len(parts) > 0 {
-		header = strings.Join(parts, " ")
+	header := m.trayFooterHelp()
+	if header == "" {
+		parts := m.presentation.footerParts()
+		if len(parts) > 0 {
+			header = strings.Join(parts, " ")
+		}
 	}
 	return loopFooter{header: header, bar: m.bar()}
+}
+
+// trayFooterHelp occupies the footer header while a searchable tray is open. The ordinary
+// workspace/profile metadata returns on dismissal; while choosing a different session or
+// model, controls that explain the active surface are more useful in that exact slot.
+func (m Screen) trayFooterHelp() string {
+	switch {
+	case m.sessionTray != nil:
+		return "SESSIONS · search description or ID · ↑↓ select · Enter resume · Esc close"
+	case m.runtimeTray != nil && m.runtimeTrayKind == runtimeTrayModel:
+		return "MODELS · search provider or name · ↑↓ select · Enter choose · Esc close"
+	default:
+		return ""
+	}
 }
 
 // compile-time assertion that Screen is a tea.Model (Init/Update/View, value receiver).

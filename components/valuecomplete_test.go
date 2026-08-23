@@ -40,6 +40,53 @@ func TestValueCompleteNavigationWrapsAndViewClamps(t *testing.T) {
 	}
 }
 
+func TestModelCompleteGroupsProvidersWithoutSelectingThem(t *testing.T) {
+	t.Parallel()
+
+	tray := NewModelComplete([]ValueItem{
+		{ID: "gpt-5.4", Provider: "OpenAI", Label: "GPT-5.4", Description: "coding and reasoning", Aliases: []string{"gpt"}},
+		{ID: "claude-sonnet-4.5", Provider: "Anthropic", Label: "Claude Sonnet 4.5", Description: "balanced everyday work", Aliases: []string{"sonnet"}},
+	})
+	if tray == nil {
+		t.Fatal("NewModelComplete() = nil, want two choices")
+	}
+	if got := tray.Selected().ID; got != "gpt-5.4" {
+		t.Fatalf("initial selection = %q, want first model rather than OPENAI", got)
+	}
+
+	lines := strings.Split(tray.ViewWindow(100, 9), "\n")
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansi.Strip(line)
+	}
+	if !strings.Contains(plain[0], "MODELS") || !strings.Contains(plain[1], "2 models") {
+		t.Fatalf("model header = %q, want bold MODELS with a muted count", plain[:2])
+	}
+	if !strings.Contains(plain[3], "OPENAI") || !strings.Contains(plain[5], "ANTHROPIC") {
+		t.Fatalf("provider headings = %q, want OPENAI then ANTHROPIC", plain)
+	}
+	if !strings.Contains(plain[4], "GPT-5.4") || !strings.Contains(plain[4], "coding and reasoning") {
+		t.Errorf("OpenAI model row = %q, want the compact name and description", plain[4])
+	}
+
+	if tray.SelectWindowRow(3, 9) {
+		t.Fatal("provider heading selection reported a move, want headings inert")
+	}
+	tray.Down()
+	if got := tray.Selected().ID; got != "claude-sonnet-4.5" {
+		t.Fatalf("Down() selected %q, want the next model rather than ANTHROPIC", got)
+	}
+
+	tray.Filter("openai")
+	if got := tray.Selected().ID; got != "gpt-5.4" {
+		t.Errorf("provider filter selected %q, want gpt-5.4", got)
+	}
+	tray.Filter("sonnet")
+	if got := tray.Selected().ID; got != "claude-sonnet-4.5" {
+		t.Errorf("alias filter selected %q, want claude-sonnet-4.5", got)
+	}
+}
+
 // valueModels is the tray's real subject: a model list whose names are long, hyphenated and
 // near-identical, which is precisely why nobody types them in full.
 var valueModels = []ValueItem{
