@@ -69,12 +69,18 @@ func NewSessionComplete(items []SessionItem) *SessionComplete {
 // Selected resolves through the tray's original-item cursor so filtering may reorder or hide
 // records without changing the opaque session ID that resume receives.
 func (s *SessionComplete) Selected() SessionItem {
+	if s.tray.ChoiceLen() == 0 {
+		return SessionItem{}
+	}
 	i := s.tray.UnfilteredCursor()
 	if i < 0 || i >= len(s.items) {
 		return SessionItem{}
 	}
 	return s.items[i]
 }
+
+// Len is the number of sessions that can currently be selected.
+func (s *SessionComplete) Len() int { return s.tray.ChoiceLen() }
 
 // Cursor is the selected RECORD's index, not its row. A record spans two rows plus a spacer, so
 // the two numbers diverge as soon as the cursor leaves the first record.

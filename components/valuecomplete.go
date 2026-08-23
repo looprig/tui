@@ -207,6 +207,9 @@ func modelFilter(items []ValueItem, rowToItem []int) list.FilterFunc {
 // Selected is the choice under the cursor. It resolves through the engine's UNFILTERED
 // index, so the opaque ID survives filtering however the matcher reordered the rows.
 func (v *ValueComplete) Selected() ValueItem {
+	if v.list.ChoiceLen() == 0 {
+		return ValueItem{}
+	}
 	row := v.list.UnfilteredCursor()
 	if row < 0 || row >= len(v.rowToItem) {
 		return ValueItem{}

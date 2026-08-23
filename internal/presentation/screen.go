@@ -1300,6 +1300,9 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.runtimeTray.Down()
 			return m, nil
 		case "enter":
+			if m.runtimeTray.Len() == 0 {
+				return m, nil
+			}
 			selected := m.runtimeTray.Selected()
 			kind, loopID := m.runtimeTrayKind, m.runtimeTrayLoopID
 			m.runtimeTray = nil
@@ -1330,6 +1333,9 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.sessionTray.Down()
 			return m, nil
 		case "enter":
+			if m.sessionTray.Len() == 0 {
+				return m, nil
+			}
 			id, err := uuid.Parse(m.sessionTray.Selected().ID)
 			m.sessionTray = nil
 			m.closeTraySearch()

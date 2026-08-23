@@ -76,6 +76,43 @@ func TestModelTraySearchUsesInputAndReplacesWorkspaceFooter(t *testing.T) {
 	}
 }
 
+func TestNoMatchTraySearchLeavesEnterInert(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sessions", func(t *testing.T) {
+		m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 80, 24)
+		m, _ = updateScreen(t, m, sessionsListedMsg{sessions: []SessionSummary{
+			{ID: callID(2), Title: "Migration", CreatedAt: time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)},
+		}})
+		m, _ = updateScreen(t, m, tea.PasteMsg{Content: "no such session"})
+		if got := m.sessionTray.Selected(); got.ID != "" {
+			t.Fatalf("no-match session selection = %#v, want zero value", got)
+		}
+
+		m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if m.sessionTray == nil {
+			t.Fatal("Enter closed a zero-match session tray, want it to remain open")
+		}
+	})
+
+	t.Run("models", func(t *testing.T) {
+		m := newScreenSized(t, &fakeAgent{activeLoopID: callID(1)}, 80, 24)
+		m.runtimeTray = components.NewModelComplete([]components.ValueItem{{
+			ID: "gpt-5.4", Provider: "OpenAI", Label: "GPT-5.4",
+		}})
+		m.runtimeTrayKind = runtimeTrayModel
+		m, _ = updateScreen(t, m, tea.PasteMsg{Content: "no such model"})
+		if got := m.runtimeTray.Selected(); got.ID != "" {
+			t.Fatalf("no-match model selection = %#v, want zero value", got)
+		}
+
+		m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if m.runtimeTray == nil {
+			t.Fatal("Enter closed a zero-match model tray, want it to remain open")
+		}
+	})
+}
+
 func TestNonModelRuntimeTrayDismissalPreservesComposerDraft(t *testing.T) {
 	t.Parallel()
 
