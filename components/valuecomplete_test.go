@@ -54,22 +54,22 @@ func TestModelCompleteGroupsProvidersWithoutSelectingThem(t *testing.T) {
 		t.Fatalf("initial selection = %q, want first model rather than OPENAI", got)
 	}
 
-	lines := strings.Split(tray.ViewWindow(100, 9), "\n")
+	lines := strings.Split(tray.ViewWindow(100, 10), "\n")
 	plain := make([]string, len(lines))
 	for i, line := range lines {
 		plain[i] = ansi.Strip(line)
 	}
-	if !strings.Contains(plain[0], "MODELS") || !strings.Contains(plain[1], "2 models") {
-		t.Fatalf("model header = %q, want bold MODELS with a muted count", plain[:2])
+	if !strings.Contains(plain[1], "MODELS") || !strings.Contains(plain[2], "2 models") {
+		t.Fatalf("model header = %q, want a top spacer then bold MODELS with a muted count", plain[:3])
 	}
-	if !strings.Contains(plain[3], "OPENAI") || !strings.Contains(plain[5], "ANTHROPIC") {
+	if !strings.Contains(plain[4], "OPENAI") || !strings.Contains(plain[6], "ANTHROPIC") {
 		t.Fatalf("provider headings = %q, want OPENAI then ANTHROPIC", plain)
 	}
-	if !strings.Contains(plain[4], "GPT-5.4") || !strings.Contains(plain[4], "coding and reasoning") {
-		t.Errorf("OpenAI model row = %q, want the compact name and description", plain[4])
+	if !strings.Contains(plain[5], "GPT-5.4") || !strings.Contains(plain[5], "coding and reasoning") {
+		t.Errorf("OpenAI model row = %q, want the compact name and description", plain[5])
 	}
 
-	if tray.SelectWindowRow(3, 9) {
+	if tray.SelectWindowRow(4, 10) {
 		t.Fatal("provider heading selection reported a move, want headings inert")
 	}
 	tray.Down()

@@ -128,17 +128,19 @@ func (r trayRowRender) line(row completionTrayRow, selected bool) string {
 	return r.row(body, selected)
 }
 
-const trayHeaderHeight = 3
+const trayHeaderHeight = 4
 
-// renderTrayHeader makes a tray's title, muted count, and one-row breathing room part of the
-// same full-width panel as its choices. The blank rail row is deliberate: headers need a
-// visual separation from the first selectable record without breaking the tray's left edge.
+// renderTrayHeader makes a tray's top breathing room, title, muted count, and one-row
+// separator part of the same full-width panel as its choices. The blank rail rows preserve a
+// clear edge while keeping the header distinct from both the rest of the screen and its first
+// selectable record.
 func renderTrayHeader(width int, title, summary string) string {
 	if width <= 0 {
 		return ""
 	}
 	render := newTrayRowRender(nil, width, 0)
 	return strings.Join([]string{
+		render.row("", false),
 		render.row(styles.HeadlineStyle.Render(title), false),
 		render.row(styles.StatusStyle.Render(summary), false),
 		render.row("", false),
