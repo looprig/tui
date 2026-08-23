@@ -41,18 +41,20 @@ func liveTailCap(term, statusH, reservedH, contentH int) int {
 // surfaceInputs is the synthetic, agent-free snapshot surfaceView composes from:
 // the interaction model (mode + active prompt + composer + slash), the unprinted
 // startup block, the rendered live-tail string, the session status and its live
-// signals, and the terminal dimensions. It carries no agent and is never mutated —
-// surfaceView is pure.
+// signals, the global permission-diff expansion state, and the terminal dimensions.
+// It carries no agent and is never mutated — surfaceView is pure.
 type surfaceInputs struct {
-	Interaction   interactionModel
-	Startup       string // committed startup entries not yet printed to native scrollback
-	LiveTail      string // pre-rendered live thinking/text/tool ⋯ lines
-	Queued        string // pre-rendered dim queued-input affordance lines (below the live tail)
-	Status        Status
-	StatusState   statusInputs
-	Phase         uint   // live animation frame; flows the status-line gradient (label + dot) while a turn runs (0 at rest)
-	Tip           string // the rotating hint shown faint on the Tips line at the very bottom
-	Width, Height int
+	Interaction          interactionModel
+	Startup              string // committed startup entries not yet printed to native scrollback
+	LiveTail             string // pre-rendered live thinking/text/tool ⋯ lines
+	Queued               string // pre-rendered dim queued-input affordance lines (below the live tail)
+	Status               Status
+	StatusState          statusInputs
+	Phase                uint   // live animation frame; flows the status-line gradient (label + dot) while a turn runs (0 at rest)
+	Tip                  string // the rotating hint shown faint on the Tips line at the very bottom
+	ExpandPermissionDiff bool   // ctrl+t global expanded state for the active permission card
+	PermissionCardHeight int    // whole-card row budget after production frame chrome; 0 means unbounded
+	Width, Height        int
 }
 
 // surfaceView composes the active surface top to bottom: any unprinted startup entries,
@@ -239,7 +241,7 @@ func bottomBox(in surfaceInputs) string {
 	switch m.mode {
 	case modePermissionPrompt:
 		if p != nil {
-			return renderPermissionBox(*p, in.Width, m.PendingCount())
+			return renderPermissionBox(*p, in.Width, m.PendingCount(), in.ExpandPermissionDiff, in.PermissionCardHeight)
 		}
 	case modeChoicePrompt:
 		if p != nil {

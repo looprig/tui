@@ -9,6 +9,7 @@ import (
 
 	"github.com/looprig/core/content"
 	"github.com/looprig/harness/pkg/event"
+	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/styles"
 )
 
@@ -279,6 +280,35 @@ func TestSurfaceViewNeverExceedsHeight(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSurfaceHeightFailSafePreservesPermissionActions(t *testing.T) {
+	t.Parallel()
+
+	im := newInteractionModel().ApplyEvent(event.PermissionRequested{
+		ToolExecutionID: callID(0xD6),
+		Request: toolRequest(
+			"EditFile",
+			"update config.yaml",
+			requirement("write config.yaml", "always allow writes under the workspace"),
+		),
+		Preview: &tool.MutationPreview{Path: "config.yaml", UnifiedDiff: manyLineDiff(40)},
+	})
+	out := stripANSI(surfaceView(surfaceInputs{
+		Interaction:          im,
+		Status:               StatusIdle,
+		ExpandPermissionDiff: true,
+		Width:                80,
+		Height:               14,
+	}))
+	for _, action := range []string{"[y]", "[a]", "[n]"} {
+		if !strings.Contains(out, action) {
+			t.Errorf("height-clamped permission surface dropped action %q:\n%s", action, out)
+		}
+	}
+	if strings.Contains(out, "+line-00") {
+		t.Errorf("height fail-safe retained the early diff instead of the trailing actions:\n%s", out)
 	}
 }
 

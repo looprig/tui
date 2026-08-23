@@ -1,11 +1,13 @@
 package presentation
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/alecthomas/chroma/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -62,6 +64,58 @@ func TestRenderDiffDoesNotMistakeChangedContentForHeaders(t *testing.T) {
 		t.Fatalf("changed content that resembles a file header was dropped: %q", joined)
 	}
 }
+
+func TestPermissionDiffWindowSelectsRawRowsBeforeRendering(t *testing.T) {
+	diff := "--- a/config.go\n+++ b/config.go\n@@ -1 +1 @@\n"
+	for i := 0; i < 20; i++ {
+		prefix := "+"
+		if i == 15 {
+			prefix = "--- " // header-like changed content after the first hunk is data.
+		}
+		diff += prefix + "row-" + strconv.Itoa(i) + "\n"
+	}
+
+	window := permissionDiffWindow(diff, permissionDiffLineCap)
+	if got := len(window.rows); got != permissionDiffLineCap {
+		t.Fatalf("visible raw rows = %d, want %d", got, permissionDiffLineCap)
+	}
+	if got, want := window.omitted, 9; got != want {
+		t.Errorf("omitted rows = %d, want %d (headers/trailing newline are not renderable rows)", got, want)
+	}
+	lexer := &countingDiffLexer{}
+	visible := ansi.Strip(strings.Join(renderDiffRowsWithLexer(window.rows, lexer, 80), "\n"))
+	if strings.Contains(visible, "row-15") || strings.Contains(visible, "row-19") {
+		t.Errorf("hidden raw rows reached the styling seam: %q", visible)
+	}
+	if !strings.Contains(visible, "@@ -1 +1 @@") || !strings.Contains(visible, "row-10") {
+		t.Errorf("visible window lost expected rows: %q", visible)
+	}
+	if got, want := len(lexer.tokenized), permissionDiffLineCap-1; got != want {
+		t.Fatalf("tokenized rows = %d, want %d visible changed rows", got, want)
+	}
+	for _, body := range lexer.tokenized {
+		if strings.Contains(body, "row-15") || strings.Contains(body, "row-19") {
+			t.Errorf("hidden body was tokenized: %q", body)
+		}
+	}
+}
+
+type countingDiffLexer struct {
+	tokenized []string
+}
+
+func (l *countingDiffLexer) Config() *chroma.Config {
+	return &chroma.Config{Name: "counting-diff-test"}
+}
+
+func (l *countingDiffLexer) Tokenise(_ *chroma.TokeniseOptions, text string) (chroma.Iterator, error) {
+	l.tokenized = append(l.tokenized, text)
+	return chroma.Literator(chroma.Token{Type: chroma.Text, Value: text}), nil
+}
+
+func (l *countingDiffLexer) SetRegistry(_ *chroma.LexerRegistry) chroma.Lexer { return l }
+func (l *countingDiffLexer) SetAnalyser(_ func(string) float32) chroma.Lexer  { return l }
+func (l *countingDiffLexer) AnalyseText(string) float32                       { return 0 }
 
 func TestRenderDiffEmptyInputYieldsNoLines(t *testing.T) {
 	if lines := renderDiff("", "a.go", 60); len(lines) != 0 {

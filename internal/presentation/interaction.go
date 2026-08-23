@@ -588,6 +588,18 @@ func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, 
 	return m, noop
 }
 
+// permissionDenyOnlyKey routes a permission card whose complete authorization context
+// does not fit the current frame. The visible control is Deny, so Enter resolves Deny
+// regardless of a cursor retained from a larger frame. Approval accelerators and arrows
+// are inert until Screen can render every requirement and candidate again.
+func (m interactionModel) permissionDenyOnlyKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+	head := *m.ActivePrompt()
+	if msg.Code == tea.KeyEsc || isEnter(msg) || accelerator(msg) == "n" {
+		return m.resolveApproval(head, gate.ApprovalDeny)
+	}
+	return m, noop
+}
+
 // resolveApproval pops the head and turns action into the request Screen dispatches.
 //
 // It is the ONE place an approval decision becomes a uiAction, so the direct y/a/n

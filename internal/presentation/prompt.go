@@ -736,31 +736,289 @@ var approvalHints = []approvalHint{
 const (
 	requirementBullet = "• "
 	candidateBullet   = "    ↳ "
+	// permissionDiffLineCap bounds the pending mutation shown while the global
+	// ctrl+t fold is collapsed. The upstream preview is already byte-bounded;
+	// this separate row cap keeps the interactive actions on screen.
+	permissionDiffLineCap = 12
 )
 
 // renderPermissionBox renders the ONE combined tool-preparation approval prompt as a
-// blue-panel card: a bold "Approve <ToolName>?" title, the request summary, then EVERY
-// unmet requirement's description with its exact persisted rule candidates beneath it,
-// and then one SELECTABLE row per action gate.ApprovalControls declares (Approve / Approve
-// always for this workspace / Deny), keyed y/a/n. When pending > 1 a faint "(+N more
-// pending)" note trails the card. It renders the typed payload only — no agent, no
-// mutation, no rule reconstruction.
+// blue-panel card: a bold "Approve <ToolName>?" title, the request summary, the optional
+// already-rendered mutation diff, then the unmet requirements and their exact persisted
+// rule candidates, and finally one SELECTABLE row per action
+// gate.ApprovalControls declares (Approve / Approve always for this workspace / Deny),
+// keyed y/a/n. expanded controls only the permission diff's row fold. When pending > 1 a
+// faint "(+N more pending)" note trails the card. It renders the typed payload only — no
+// agent, no mutation, no rule reconstruction.
+//
+// A positive heightBudget is the whole card's production-frame allowance. Authorization
+// consequences outrank every optional display row: the allocator first reserves the title,
+// EVERY wrapped requirement/candidate row, and every action. It then compacts the summary,
+// diff, and section gaps in that order. If even the complete authorization tree cannot fit,
+// the card switches to an explicit warning and a deny-only control. A zero budget is
+// intentionally unbounded for pure renderer tests and non-production callers.
 //
 // The rows carry no per-action consequence note. The labels ARE the gate.ApprovalAction
-// values and the requirement tree above already lists, candidate by candidate, exactly what
-// an "always" approval persists — a note beside the row would restate it less precisely.
-func renderPermissionBox(p prompt, width, pending int) string {
-	textW := cardTextWidth(width)
-	sections := make([]string, 0, 4)
-	sections = append(sections, styles.CardTitleStyle.Render("Approve "+p.ToolName+"?"))
-	if p.Summary != "" {
-		sections = append(sections, strings.Join(wrapToWidth(p.Summary, textW), "\n"))
+// values and, when the frame can carry it, the requirement tree above lists candidate by
+// candidate exactly what an "always" approval persists — a note beside the row would restate
+// it less precisely.
+func renderPermissionBox(p prompt, width, pending int, expanded bool, heightBudget int) string {
+	plan := planPermissionCard(p, width, pending, expanded, heightBudget)
+	if !plan.authorizationComplete {
+		return renderIncompletePermissionBox(p, width, pending, heightBudget)
 	}
-	if body := permissionRequirementsBody(p, textW); body != "" {
+
+	sections := make([]string, 0, 5)
+	sections = append(sections, styles.CardTitleStyle.Render("Approve "+visibleTerminalText(p.ToolName)+"?"))
+	if body := boundedPermissionRows(plan.summary, plan.summaryBudget, plan.textWidth, "summary"); body != "" {
 		sections = append(sections, body)
 	}
-	sections = append(sections, permissionActionRows(p, textW))
-	return cardFrame(cardSections(sections...), width, pending)
+	if body := permissionDiffBody(p, plan.diff, plan.textWidth, expanded, plan.diffBudget); body != "" {
+		sections = append(sections, body)
+	}
+	if len(plan.requirements) > 0 {
+		sections = append(sections, strings.Join(plan.requirements, "\n"))
+	}
+	sections = append(sections, permissionActionRows(p, plan.textWidth))
+	return cardFrame(joinPermissionSections(sections, plan.sectionGaps), width, pending)
+}
+
+type permissionRenderPlan struct {
+	authorizationComplete bool
+	textWidth             int
+	summary               []string
+	requirements          []string
+	diff                  []diffRow
+	summaryBudget         int
+	diffBudget            int
+	sectionGaps           int
+}
+
+// planPermissionCard is the single authorization-completeness decision shared by
+// rendering and Screen's production key router. Completeness means the title, every
+// wrapped requirement/candidate row, and all approval actions physically fit. Optional
+// summary and diff rows can never buy space by hiding authorization context.
+func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudget int) permissionRenderPlan {
+	textW := cardTextWidth(width)
+	var summaryRows []string
+	if p.Summary != "" {
+		summaryRows = wrapToWidth(visibleTerminalText(p.Summary), textW)
+	}
+	requirementRows := permissionTextRows(permissionRequirementsBody(p, textW), textW)
+	rawDiffRows := parseDiffRows(p.Diff)
+	plan := permissionRenderPlan{
+		textWidth:    textW,
+		summary:      summaryRows,
+		requirements: requirementRows,
+		diff:         rawDiffRows,
+	}
+	if width <= cardRailWidth {
+		return plan // the rail consumes the frame: no authorization text column is visible
+	}
+	if heightBudget <= 0 {
+		plan.authorizationComplete = true
+		plan.summaryBudget = len(summaryRows)
+		plan.diffBudget = -1
+		plan.sectionGaps = -1
+		return plan
+	}
+	contentBudget := permissionCardContentBudget(heightBudget, pending)
+	essentialRows := 1 + len(requirementRows) + len(approvalHints) // title + authorization + actions
+	if contentBudget < essentialRows {
+		return plan
+	}
+
+	plan.authorizationComplete = true
+	plan.summaryBudget = len(summaryRows)
+	plan.diffBudget = desiredPermissionDiffRows(len(rawDiffRows), expanded)
+	plan.sectionGaps = 4
+	total := func() int {
+		sections := 2 // title + actions
+		if len(requirementRows) > 0 {
+			sections++
+		}
+		if plan.summaryBudget > 0 {
+			sections++
+		}
+		if plan.diffBudget > 0 {
+			sections++
+		}
+		gaps := plan.sectionGaps
+		if maxGaps := sections - 1; gaps > maxGaps {
+			gaps = maxGaps
+		}
+		return essentialRows + plan.summaryBudget + plan.diffBudget + gaps
+	}
+	for total() > contentBudget && plan.summaryBudget > 0 {
+		plan.summaryBudget--
+	}
+	for total() > contentBudget && plan.diffBudget > 0 {
+		plan.diffBudget--
+	}
+	for total() > contentBudget && plan.sectionGaps > 0 {
+		plan.sectionGaps--
+	}
+	return plan
+}
+
+func permissionTextRows(body string, width int) []string {
+	if body == "" || width <= 0 {
+		return nil
+	}
+	return strings.Split(body, "\n")
+}
+
+func permissionCardContentBudget(heightBudget, pending int) int {
+	if heightBudget <= 0 {
+		return -1
+	}
+	budget := heightBudget - 2 // cardFrame's top and bottom pad rows
+	if pending > 1 {
+		budget-- // the pending note trails the framed card
+	}
+	if budget < 0 {
+		return 0
+	}
+	return budget
+}
+
+func desiredPermissionDiffRows(rawRows int, expanded bool) int {
+	if rawRows <= 0 {
+		return 0
+	}
+	visible := rawRows
+	if !expanded && visible > permissionDiffLineCap {
+		visible = permissionDiffLineCap
+	}
+	rows := 1 + visible // label + rendered rows
+	if visible < rawRows {
+		rows++ // truthful omitted marker
+	}
+	return rows
+}
+
+func joinPermissionSections(sections []string, gapBudget int) string {
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if section != "" {
+			parts = append(parts, section)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if gapBudget < 0 || gapBudget >= len(parts)-1 {
+		return strings.Join(parts, "\n\n")
+	}
+	var b strings.Builder
+	firstGap := len(parts) - 1 - gapBudget
+	for i, part := range parts {
+		if i > 0 {
+			b.WriteByte('\n')
+			if i-1 >= firstGap {
+				b.WriteByte('\n')
+			}
+		}
+		b.WriteString(part)
+	}
+	return b.String()
+}
+
+const incompletePermissionWarning = "Approval disabled: resize to review all authorization details."
+
+func renderIncompletePermissionBox(p prompt, width, pending, heightBudget int) string {
+	textW := cardTextWidth(width)
+	contentBudget := permissionCardContentBudget(heightBudget, pending)
+	if contentBudget < 1 {
+		contentBudget = 1
+	}
+	deny := permissionDenyActionRow(textW)
+	warningRows := wrapToWidth(incompletePermissionWarning, textW)
+	sections := []string{deny}
+	used := 1
+	if contentBudget-used > 0 && len(warningRows) > 0 {
+		warningBudget := contentBudget - used
+		if warningBudget > len(warningRows) {
+			warningBudget = len(warningRows)
+		}
+		sections = append([]string{strings.Join(warningRows[:warningBudget], "\n")}, sections...)
+		used += warningBudget
+	}
+	if contentBudget-used > 0 {
+		sections = append([]string{styles.CardTitleStyle.Render("Approve " + visibleTerminalText(p.ToolName) + "?")}, sections...)
+		used++
+	}
+	gaps := contentBudget - used
+	return cardFrame(joinPermissionSections(sections, gaps), width, pending)
+}
+
+func boundedPermissionRows(rows []string, budget, width int, noun string) string {
+	if budget <= 0 || len(rows) == 0 {
+		return ""
+	}
+	if len(rows) <= budget {
+		return strings.Join(rows, "\n")
+	}
+	if budget == 1 {
+		row := truncate(rows[0], width-2) + " …"
+		return truncate(row, width)
+	}
+	shown := append([]string(nil), rows[:budget-1]...)
+	omitted := len(rows) - len(shown)
+	marker := "… " + strconv.Itoa(omitted) + " more " + noun + " lines"
+	shown = append(shown, styles.CardHintStyle.Render(truncate(marker, width)))
+	return strings.Join(shown, "\n")
+}
+
+// permissionDiffBody labels and renders the already-produced mutation preview. It
+// selects the raw row window first, then delegates sanitizing, syntax color and
+// display-width clipping to the shared diff row renderer.
+func permissionDiffBody(p prompt, rawRows []diffRow, textW int, expanded bool, rowBudget int) string {
+	if len(rawRows) == 0 || rowBudget == 0 {
+		return ""
+	}
+
+	verb := "Change"
+	if p.DiffCreates {
+		verb = "Create"
+	}
+	label := verb
+	if p.DiffPath != "" {
+		label += " " + visibleTerminalText(p.DiffPath)
+	}
+	visible := len(rawRows)
+	if !expanded && visible > permissionDiffLineCap {
+		visible = permissionDiffLineCap
+	}
+	if rowBudget > 0 {
+		if rowBudget == 1 {
+			label += " · " + strconv.Itoa(len(rawRows)) + " diff lines hidden"
+			return styles.CardHintStyle.Render(truncate(label, textW))
+		}
+		available := rowBudget - 1 // label
+		if visible > available || visible < len(rawRows) {
+			available-- // truthful omitted marker
+		}
+		if available < 0 {
+			available = 0
+		}
+		if visible > available {
+			visible = available
+		}
+	}
+	window := permissionDiffWindowFromRows(rawRows, visible)
+	var lines []string
+	if len(window.rows) > 0 {
+		lines = renderDiffRowsWithLexer(window.rows, lexerForDiffPath(p.DiffPath), textW)
+	}
+	rows := make([]string, 0, len(lines)+2)
+	rows = append(rows, styles.CardHintStyle.Render(truncate(label, textW)))
+	rows = append(rows, lines...)
+	if window.omitted > 0 {
+		marker := "… " + strconv.Itoa(window.omitted) + " more lines"
+		rows = append(rows, styles.CardHintStyle.Render(truncate(marker, textW)))
+	}
+	return strings.Join(rows, "\n")
 }
 
 // permissionActionRows renders the approval actions as one keyRow per hint, the row at
@@ -779,6 +1037,15 @@ func permissionActionRows(p prompt, textW int) string {
 	return strings.Join(rows, "\n")
 }
 
+func permissionDenyActionRow(textW int) string {
+	for _, h := range approvalHints {
+		if h.action == gate.ApprovalDeny {
+			return styles.SelectedRow(keyRow("["+h.key+"]", string(h.action), textW), textW)
+		}
+	}
+	return styles.SelectedRow(keyRow("[n]", string(gate.ApprovalDeny), textW), textW)
+}
+
 // permissionRequirementsBody renders every unmet requirement and, indented beneath
 // each, its exact persisted rule candidates — all display-ready strings straight from
 // the typed payload. An empty requirement list yields "" (a pure tool with nothing to
@@ -789,9 +1056,9 @@ func permissionRequirementsBody(p prompt, textW int) string {
 	}
 	rows := make([]string, 0, len(p.Requirements))
 	for _, requirement := range p.Requirements {
-		rows = append(rows, strings.Join(wrapToWidth(requirementBullet+requirement.Description, textW), "\n"))
+		rows = append(rows, strings.Join(wrapToWidth(requirementBullet+visibleTerminalText(requirement.Description), textW), "\n"))
 		for _, candidate := range requirement.Candidates {
-			rows = append(rows, strings.Join(wrapToWidth(candidateBullet+candidate, textW), "\n"))
+			rows = append(rows, strings.Join(wrapToWidth(candidateBullet+visibleTerminalText(candidate), textW), "\n"))
 		}
 	}
 	return strings.Join(rows, "\n")
