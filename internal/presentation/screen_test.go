@@ -18,6 +18,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
+	"github.com/looprig/harness/pkg/tool"
 	contextcount "github.com/looprig/inference/contextcount"
 	model "github.com/looprig/inference/model"
 	"github.com/looprig/tui/components"
@@ -1939,6 +1940,177 @@ func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
 	if len(committed) != 1 || committedText(committed[0]) != "once" {
 		t.Fatalf("committed duplicate replay = %+v, want one row", committed)
 	}
+}
+
+func TestModernRestoreReconcilesLiveOnlyPermissionPreview(t *testing.T) {
+	t.Parallel()
+
+	loopID, eventID, toolExecutionID := callID(0xD1), callID(0xD2), callID(0xD3)
+	h := hdr(loopID)
+	h.EventID = eventID
+	durable := event.PermissionRequested{
+		Header:          h,
+		ToolExecutionID: toolExecutionID,
+		Request:         toolRequest("EditFile", "durable edit summary"),
+	}
+	preview := &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+		Creates:     true,
+	}
+	live := durable
+	live.Request = toolRequest("EditFile", "live duplicate must not replace durable state")
+	live.Preview = preview
+
+	agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+	m = feed(t, m, live)
+	m = feedRestored(t, m, msg)
+
+	if got := m.interaction.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount = %d, want exactly one restored permission prompt", got)
+	}
+	p := m.activePrompt()
+	if p == nil {
+		t.Fatal("ActivePrompt = nil, want restored permission prompt")
+	}
+	if p.DiffPath != preview.Path || p.Diff != preview.UnifiedDiff || p.DiffCreates != preview.Creates {
+		t.Fatalf("live-only preview was lost at restore barrier: %+v", *p)
+	}
+	if p.Summary != durable.Request.Summary {
+		t.Errorf("Summary = %q, want durable %q; reconciliation replayed journaled state", p.Summary, durable.Request.Summary)
+	}
+	restoredPrompt := msg.interaction.ActivePrompt()
+	if restoredPrompt == nil || restoredPrompt.Diff != "" || restoredPrompt.DiffPath != "" || restoredPrompt.DiffCreates {
+		t.Fatalf("reconciliation mutated the caller's restored interaction: %+v", restoredPrompt)
+	}
+	_, transcriptLive := m.transcript.projectionFor(loopID)
+	if len(transcriptLive.gateDecisions) != 1 || len(transcriptLive.gateDescriptions) != 1 {
+		t.Fatalf("permission transcript state duplicated: decisions=%+v descriptions=%+v", transcriptLive.gateDecisions, transcriptLive.gateDescriptions)
+	}
+	if got := transcriptLive.gateDescriptions[toolExecutionID]; got != durable.Request.Summary {
+		t.Errorf("gate description = %q, want durable %q", got, durable.Request.Summary)
+	}
+
+	preview.Path = "mutated.yaml"
+	preview.UnifiedDiff = "mutated"
+	preview.Creates = false
+	if p.DiffPath != "config.yaml" || p.Diff != "@@ -1 +1 @@\n-old\n+new\n" || !p.DiffCreates {
+		t.Fatalf("prompt retained the caller's preview pointer: %+v", *p)
+	}
+}
+
+func TestModernRestorePermissionPreviewReconciliationKeepsFirst(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		buffered []*tool.MutationPreview
+	}{
+		{
+			name: "exact live duplicate remains one prompt",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first"},
+				{Path: "first.go", UnifiedDiff: "first"},
+			},
+		},
+		{
+			name: "nil duplicate cannot erase first preview",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first", Creates: true},
+				nil,
+			},
+		},
+		{
+			name: "conflicting duplicate cannot replace first preview",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first", Creates: true},
+				{Path: "conflict.go", UnifiedDiff: "conflict"},
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			loopID := callID(byte(0xE0 + i))
+			h := hdr(loopID)
+			h.EventID = callID(byte(0xF0 + i))
+			durable := event.PermissionRequested{
+				Header:          h,
+				ToolExecutionID: callID(0xD4),
+				Request:         toolRequest("EditFile", "durable"),
+			}
+			agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+			m := newScreenSized(t, agent, 80, 24)
+			m.restoring = true
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+			for _, preview := range tt.buffered {
+				live := durable
+				live.Preview = preview
+				m = feed(t, m, live)
+			}
+			m = feedRestored(t, m, msg)
+
+			if got := m.interaction.PendingCount(); got != 1 {
+				t.Fatalf("PendingCount = %d, want exactly one", got)
+			}
+			p := m.activePrompt()
+			first := tt.buffered[0]
+			if p == nil || p.DiffPath != first.Path || p.Diff != first.UnifiedDiff || p.DiffCreates != first.Creates {
+				t.Fatalf("active prompt = %+v, want first preview %+v", p, first)
+			}
+		})
+	}
+}
+
+func TestModernRestorePreviewReconciliationLeavesOtherGateKindsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	t.Run("AskUser duplicate retains durable prompt", func(t *testing.T) {
+		t.Parallel()
+
+		loopID := callID(0xC1)
+		h := hdr(loopID)
+		h.EventID = callID(0xC2)
+		durable := event.UserInputRequested{Header: h, ToolExecutionID: callID(0xC3), Question: "durable question"}
+		live := durable
+		live.Question = "live duplicate"
+		agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+		m := newScreenSized(t, agent, 80, 24)
+		m.restoring = true
+		msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+		m = feed(t, m, live)
+		m = feedRestored(t, m, msg)
+
+		p := m.activePrompt()
+		if m.interaction.PendingCount() != 1 || p == nil || p.Question != durable.Question {
+			t.Fatalf("AskUser overlap changed: pending=%d prompt=%+v", m.interaction.PendingCount(), p)
+		}
+	})
+
+	t.Run("form duplicate retains durable prompt", func(t *testing.T) {
+		t.Parallel()
+
+		durable := formGateOpened(formSchema(), gate.FormActionAccept)
+		durable.EventID = callID(0xC4)
+		live := durable
+		live.Gate.Prompt.Title = "live duplicate"
+		agent := &fakeAgent{activeLoopID: formLoopID, backlog: []event.Event{durable}}
+		m := newScreenSized(t, agent, 80, 24)
+		m.restoring = true
+		msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+		m = feed(t, m, live)
+		m = feedRestored(t, m, msg)
+
+		p := m.activePrompt()
+		if m.interaction.PendingCount() != 1 || p == nil || p.Title != durable.Gate.Prompt.Title {
+			t.Fatalf("form overlap changed: pending=%d prompt=%+v", m.interaction.PendingCount(), p)
+		}
+	})
 }
 
 func TestModernRestoreDeduplicatesCompactionCompletionOverlap(t *testing.T) {

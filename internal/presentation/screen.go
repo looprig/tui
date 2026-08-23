@@ -830,9 +830,11 @@ func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
 
 // handleRestored releases the initial replay barrier. A non-empty historical fold installs
 // first, preserving shell-global startup/error rows and composer draft; buffered subscription
-// events then pass through the normal reducers in arrival order. Empty/error replay also drains
-// the buffer. Startup flags are deliberately untouched so message ordering cannot duplicate or
-// suppress the banner.
+// events then pass through the normal reducers in arrival order. An EventID overlap keeps the
+// durable fold authoritative; the sole exception is a PermissionRequested's live-only mutation
+// preview, which is reconciled into its restored prompt without replaying any reducer. Empty/error
+// replay also drains the buffer. Startup flags are deliberately untouched so message ordering
+// cannot duplicate or suppress the banner.
 func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	buffered := m.restoreBuffer
 	m.restoreBuffer = nil
@@ -851,6 +853,9 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 			ev := stampEphemeralClock(input.delivery.ev, m.now)
 			if id := ev.EventHeader().EventID; !id.IsZero() {
 				if _, replayed := msg.eventIDs[id]; replayed {
+					if permission, ok := ev.(event.PermissionRequested); ok {
+						m.interaction = m.interaction.reconcilePermissionPreview(permission)
+					}
 					continue
 				}
 			}

@@ -210,6 +210,12 @@ type prompt struct {
 	// Summary is the promptPermission one-line request summary (tool.Request.Summary),
 	// shown under the header. It is a display-ready string from the wire.
 	Summary string
+	// Diff fields carry the live-only mutation preview projected by Harness when the
+	// permission gate opens. They are copied values: the TUI neither retains the
+	// preview pointer nor derives file content itself.
+	Diff        string
+	DiffPath    string
+	DiffCreates bool
 	// Requirements is the promptPermission list of EVERY unmet capability the one
 	// combined prompt must show, each with its exact persisted rule candidates. Every
 	// string here is a display-ready description from the typed gate payload
@@ -584,13 +590,18 @@ type requirementLine struct {
 // The action cursor starts on Deny rather than at index zero. Fail secure: the card can
 // appear under a user's hands mid-typing, so the row a blind enter resolves must be the
 // one that blocks the call.
-func promptFromPermission(callID uuid.UUID, req tool.Request) prompt {
+func promptFromPermission(callID uuid.UUID, req tool.Request, preview *tool.MutationPreview) prompt {
 	p := prompt{
 		ToolExecutionID: callID,
 		Kind:            promptPermission,
 		ToolName:        req.ToolName,
 		Summary:         req.Summary,
 		approval:        denyHintIndex(approvalHints),
+	}
+	if preview != nil {
+		p.Diff = preview.UnifiedDiff
+		p.DiffPath = preview.Path
+		p.DiffCreates = preview.Creates
 	}
 	for _, requirement := range req.Requirements {
 		line := requirementLine{Description: requirement.Description}

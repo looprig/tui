@@ -100,7 +100,7 @@ func TestRenderPermissionBoxCombinedMultiCapability(t *testing.T) {
 		requirement("write /etc/hosts", "always allow writes under /etc"),
 		requirement("connect api.example.com:443", "always allow api.example.com:443"),
 	)
-	p := promptFromPermission(callID(1), req)
+	p := promptFromPermission(callID(1), req, nil)
 	rendered := renderPermissionBox(p, 100, 1)
 	got := stripANSI(rendered)
 
@@ -144,12 +144,12 @@ func TestRenderPermissionBoxCombinedMultiCapability(t *testing.T) {
 func TestRenderPermissionBoxPendingAndPure(t *testing.T) {
 	t.Parallel()
 
-	deep := renderPermissionBox(promptFromPermission(callID(1), bashPermission("rm -rf /")), 80, 3)
+	deep := renderPermissionBox(promptFromPermission(callID(1), bashPermission("rm -rf /"), nil), 80, 3)
 	if got := stripANSI(deep); !strings.Contains(got, "Approve Bash?") || !strings.Contains(got, "(+2 more pending)") {
 		t.Errorf("deep-queue prompt = %q, want header + (+2 more pending)", got)
 	}
 
-	pure := renderPermissionBox(promptFromPermission(callID(2), toolRequest("Mystery", "does a thing")), 80, 1)
+	pure := renderPermissionBox(promptFromPermission(callID(2), toolRequest("Mystery", "does a thing"), nil), 80, 1)
 	got := stripANSI(pure)
 	assertPanelFramed(t, pure)
 	if !strings.Contains(got, "Approve Mystery?") || !strings.Contains(got, "does a thing") {
@@ -623,7 +623,7 @@ func TestPermissionBandFollowsTheCursor(t *testing.T) {
 func TestPermissionCursorFailsSecure(t *testing.T) {
 	t.Parallel()
 
-	p := promptFromPermission(callID(1), bashPermission("rm -rf /"))
+	p := promptFromPermission(callID(1), bashPermission("rm -rf /"), nil)
 	if got := approvalAt(p.approval); got != gate.ApprovalDeny {
 		t.Errorf("fresh permission prompt selects %q, want %q", got, gate.ApprovalDeny)
 	}
