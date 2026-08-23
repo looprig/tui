@@ -229,16 +229,15 @@ var AccentBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
 // AccentBarStyle bar on user rows, so the input reads as the same accent.
 var InputAccent = lipgloss.Color("#737373")
 
-// PanelBg is the subtle dark-gray fill painted behind MODERN mode's user-message
-// rows and its composer panel — a quiet block that sets the user's own input apart from
-// the assistant narration without competing with the accent bar. It sits in the same
-// neutral family as AccentBarStyle's #737373 and is dark enough that both bold text and
-// the dim placeholder stay readable on a dark terminal. MODERN-ONLY: the scrollback rows
-// and the scrollback composer never paint a background (see BoxStyle's rationale) — the
-// fill is safe in the alt-screen viewport because it re-renders the whole frame each tick.
-var PanelBg = lipgloss.Color("#303030")
+// PanelBg is the shared darker-gray fill behind MODERN mode's user-message rows, composer
+// panel, and unselected completion-tray rows. It aliases CardPanelBg rather than spelling
+// another hex value so the three related surfaces cannot drift apart. MODERN-ONLY: the
+// scrollback rows and the scrollback composer never paint a background (see BoxStyle's
+// rationale) — the fill is safe in the alt-screen viewport because it re-renders the whole
+// frame each tick.
+var PanelBg = CardPanelBg
 
-// UserBgStyle is the background-only style the modern gray fill is derived from (its SGR
+// UserBgStyle is the background-only style the shared darker-gray fill is derived from (its SGR
 // open/close pair). It carries no foreground, so a filled row's own accent bar and markdown
 // keep their colors on top of the fill.
 var UserBgStyle = lipgloss.NewStyle().Background(PanelBg)
@@ -251,7 +250,7 @@ const (
 	sgrResetShort = "\x1b[m"
 )
 
-// bgOpen / bgReset are the SGR pair that turns the ModernPanelBg fill on and
+// bgOpen / bgReset are the SGR pair that turns the PanelBg fill on and
 // off, derived ONCE from UserBgStyle so the color has a single source of truth and no
 // escape is hardcoded here.
 var bgOpen, bgReset = DeriveBackgroundSGR(PanelBg)
@@ -270,10 +269,10 @@ func DeriveBackgroundSGR(bg color.Color) (open, reset string) {
 	return "", sgrResetShort
 }
 
-// FillLineBackground paints the ModernPanelBg gray fill behind one already-styled line to
-// width display columns — the convenience over FillLineBackgroundWith for the one shared
-// gray. See FillLineBackgroundWith for the fill semantics. MODERN-ONLY: scrollback never
-// fills a background (see BoxStyle).
+// FillLineBackground paints the shared darker-gray PanelBg fill behind one already-styled line
+// to width display columns — the convenience over FillLineBackgroundWith for the one shared
+// fill. See FillLineBackgroundWith for the fill semantics. MODERN-ONLY: scrollback never fills
+// a background (see BoxStyle).
 func FillLineBackground(line string, width int) string {
 	return FillLineBackgroundWith(line, width, bgOpen, bgReset)
 }
@@ -286,7 +285,7 @@ func FillLineBackground(line string, width int) string {
 // with a reset. An empty open returns the line unchanged (fail-safe: a degenerate
 // derivation must never emit a broken escape). A width at or below the line's own display
 // width adds no padding (the fill still spans the content). It is the shared primitive
-// behind MODERN mode's gray user rows and its gray composer panel.
+// behind MODERN mode's darker-gray user rows and composer panel.
 func FillLineBackgroundWith(line string, width int, open, reset string) string {
 	if open == "" {
 		return line

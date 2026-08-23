@@ -1,20 +1,19 @@
-# Selection-blue panel surfaces design
+# Darker-gray panel surfaces design
 
 ## Goal
 
-Use the established selection blue, `#A2D2FF`, as the background for the modern composer, unselected completion-tray rows, and modern user-message rows.
+Darken the modern composer, unselected completion-tray rows, and modern user-message rows from `#303030` to the existing near-neutral gray `#242527`.
 
 ## Design
 
-Keep one shared token: change `styles.PanelBg` from neutral gray to the existing
-`CardBorderColor` selection-blue token. The modern composer, unselected tray rows,
-and user-message rows already consume `PanelBg`, so this changes exactly the three
-requested surfaces without adding another mutable color token.
+Keep one shared token: point `styles.PanelBg` at the existing `CardPanelBg` dark-gray token.
+The modern composer, unselected tray rows, and user-message rows already consume `PanelBg`, so
+this changes exactly the three requested surfaces without adding another mutable color token.
 
-Selected tray rows continue to render through `styles.SelectedRow`; their near-black
-foreground treatment remains the contrast treatment for the same light blue fill.
+Selected tray rows continue to render through `styles.SelectedRow`; their existing selection blue
+and near-black foreground treatment are unchanged.
 
 ## Verification
 
-Update explicit `#303030` assertions and the tray render golden to `#A2D2FF`, then
+Update explicit `#303030` assertions and the tray render golden to `#242527`, then
 run the focused components and presentation tests plus standalone package tests.

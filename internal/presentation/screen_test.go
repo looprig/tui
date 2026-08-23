@@ -4426,7 +4426,7 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 func TestModernUserRowGrayBackground(t *testing.T) {
 	t.Parallel()
 
-	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+	const bgSGR = "\x1b[48;2;36;37;39m" // PanelBg (shared darker gray) truecolor background open
 	const width = 40
 
 	primary := callID(1)
@@ -4524,7 +4524,7 @@ func TestModernComposerDoesNotRenderFocusedLoopMode(t *testing.T) {
 func TestModernComposerVerticalPadding(t *testing.T) {
 	t.Parallel()
 
-	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) fill open
+	const bgSGR = "\x1b[48;2;36;37;39m" // PanelBg (shared darker gray) fill open
 	const accentBar = "▌"               // styles.AccentBar — the composer's left edge glyph
 
 	agent := &fakeAgent{activeLoopID: callID(1)}

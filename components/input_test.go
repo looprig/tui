@@ -8,6 +8,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/looprig/tui/styles"
 )
 
 // ansiEscape matches ANSI CSI/SGR escape sequences (e.g. "\x1b[7;37m"). v2's focused
@@ -439,7 +441,7 @@ func TestInputBoxBackground(t *testing.T) {
 	t.Parallel()
 
 	const width = 40
-	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+	const bgSGR = "\x1b[48;2;36;37;39m" // PanelBg (shared darker gray) truecolor background open
 
 	// Default (scrollback) composer: no background anywhere.
 	def := NewInputBox()
@@ -451,7 +453,7 @@ func TestInputBoxBackground(t *testing.T) {
 	// Modern composer: gray fill on every rendered row, each padded to the box width.
 	mod := NewInputBox()
 	mod.Resize(width)
-	mod.SetBackground(lipgloss.Color("#303030"))
+	mod.SetBackground(styles.PanelBg)
 	view := mod.View()
 	if !strings.Contains(view, bgSGR) {
 		t.Fatalf("modern composer View missing the gray fill; view=%q", view)
@@ -475,7 +477,7 @@ func TestInputBoxVerticalPadding(t *testing.T) {
 	t.Parallel()
 
 	const width = 40
-	const bgSGR = "\x1b[48;2;48;48;48m" // ModernPanelBg (#303030) truecolor background open
+	const bgSGR = "\x1b[48;2;36;37;39m" // PanelBg (shared darker gray) truecolor background open
 
 	// Default composer: no padding rows (View height is just the content height).
 	def := NewInputBox()
@@ -495,7 +497,7 @@ func TestInputBoxVerticalPadding(t *testing.T) {
 	// Modern composer: gray fill + one padding row above and below the single text row.
 	mod := NewInputBox()
 	mod.Resize(width)
-	mod.SetBackground(lipgloss.Color("#303030"))
+	mod.SetBackground(styles.PanelBg)
 	mod.SetVerticalPadding(1)
 	lines := strings.Split(mod.View(), "\n")
 	if len(lines) != minInputLines+2 { // 1 text row + 2 padding rows

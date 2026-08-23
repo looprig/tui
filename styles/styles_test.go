@@ -569,27 +569,39 @@ func TestFillLineBackgroundWith(t *testing.T) {
 	}
 }
 
-// TestFillLineBackgroundModernPanel pins the ModernPanelBg convenience: FillLineBackground
-// derives its open from ModernPanelBg (DeriveBackgroundSGR) and re-opens it after an inner
-// reset, exactly like FillLineBackgroundWith. It guards that the shared gray user rows and
+// TestFillLineBackgroundPanelBg pins the shared PanelBg convenience: FillLineBackground
+// derives its open from PanelBg (DeriveBackgroundSGR) and re-opens it after an inner
+// reset, exactly like FillLineBackgroundWith. It guards that the shared darker-gray user rows and
 // composer are filled with the same, correctly-re-opened background.
-func TestFillLineBackgroundModernPanel(t *testing.T) {
+func TestFillLineBackgroundPanelBg(t *testing.T) {
 	t.Parallel()
 
 	open, _ := DeriveBackgroundSGR(PanelBg)
 	if open == "" {
-		t.Fatal("DeriveBackgroundSGR(ModernPanelBg) returned an empty open")
+		t.Fatal("DeriveBackgroundSGR(PanelBg) returned an empty open")
 	}
 	line := "x" + "\x1b[0m" + "y"
 	got := FillLineBackground(line, 10)
 	if !strings.HasPrefix(got, open) {
-		t.Errorf("FillLineBackground does not open with the ModernPanelBg SGR; got %q", got)
+		t.Errorf("FillLineBackground does not open with the PanelBg SGR; got %q", got)
 	}
 	if !strings.Contains(got, "\x1b[0m"+open) {
-		t.Errorf("FillLineBackground did not re-open the ModernPanelBg fill after the inner reset; got %q", got)
+		t.Errorf("FillLineBackground did not re-open the PanelBg fill after the inner reset; got %q", got)
 	}
 	if w := lipgloss.Width(got); w != 10 {
 		t.Errorf("FillLineBackground display width = %d, want 10; got %q", w, got)
+	}
+}
+
+// TestPanelBgMatchesCardPanelBg pins the single shared darker-gray token used by the modern
+// composer, user-message rows, and unselected completion-tray rows.
+func TestPanelBgMatchesCardPanelBg(t *testing.T) {
+	t.Parallel()
+
+	got, _ := DeriveBackgroundSGR(PanelBg)
+	want, _ := DeriveBackgroundSGR(CardPanelBg)
+	if got != want {
+		t.Errorf("PanelBg background SGR = %q, want CardPanelBg's %q", got, want)
 	}
 }
 

@@ -33,7 +33,7 @@ func selectedBandOpen(t *testing.T) string {
 // (its fill and near-black text replaced the tray's own private fill and the bold blue
 // label), and "/clear" now carries two extra spaces so its description starts at the same
 // column as "/compact"'s.
-const trayGolden = "\x1b[48;2;48;48;48m\x1b[38;2;115;115;115m▌\x1b[m\x1b[48;2;48;48;48m /clear    \x1b[2mstart a new conversation\x1b[m\x1b[48;2;48;48;48m        \x1b[m\n\x1b[48;2;162;210;255m\x1b[38;2;16;16;16m▌ /compact  compact the current conversation\x1b[m\x1b[48;2;162;210;255m\x1b[m"
+const trayGolden = "\x1b[48;2;36;37;39m\x1b[38;2;115;115;115m▌\x1b[m\x1b[48;2;36;37;39m /clear    \x1b[2mstart a new conversation\x1b[m\x1b[48;2;36;37;39m        \x1b[m\n\x1b[48;2;162;210;255m\x1b[38;2;16;16;16m▌ /compact  compact the current conversation\x1b[m\x1b[48;2;162;210;255m\x1b[m"
 
 func TestTrayRenderIsStable(t *testing.T) {
 	rows := []completionTrayRow{
