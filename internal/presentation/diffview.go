@@ -134,6 +134,75 @@ func permissionDiffWindowFromRows(rows []diffRow, visibleRows int) permissionDif
 	return permissionDiffRows{rows: rows[:visibleRows], omitted: len(rows) - visibleRows}
 }
 
+// parsedMutationRowIndex returns the first added/deleted content row inside a unified-diff
+// hunk. A leading +/- line without a hunk is not enough: arbitrary text and file headers
+// must not turn an unparseable preview into approvable mutation evidence.
+func parsedMutationRowIndex(rows []diffRow) int {
+	inHunk := false
+	for i, row := range rows {
+		switch row.kind {
+		case diffRowHunk:
+			inHunk = validUnifiedHunkHeader(row.text)
+		case diffRowAddition, diffRowDeletion:
+			if inHunk {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func validUnifiedHunkHeader(line string) bool {
+	if !strings.HasPrefix(line, "@@ ") {
+		return false
+	}
+	body := strings.TrimPrefix(line, "@@ ")
+	end := strings.Index(body, " @@")
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(body[:end])
+	return len(fields) == 2 && validUnifiedRange(fields[0], '-') && validUnifiedRange(fields[1], '+')
+}
+
+func validUnifiedRange(field string, prefix byte) bool {
+	if len(field) < 2 || field[0] != prefix {
+		return false
+	}
+	parts := strings.Split(field[1:], ",")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// permissionDiffReviewWindow preserves the ordinary leading window when it already
+// contains the exact in-hunk mutation row validated by parsedMutationRowIndex. At the
+// minimum disclosure budget, where a hunk header or lexical +/- preamble would otherwise
+// consume the sole content row, it substitutes that validated row. The omitted count
+// remains exact because the window still contains the same number of rows.
+func permissionDiffReviewWindow(rows []diffRow, visibleRows int) permissionDiffRows {
+	window := permissionDiffWindowFromRows(rows, visibleRows)
+	if len(window.rows) == 0 || window.omitted == 0 {
+		return window
+	}
+	mutation := parsedMutationRowIndex(rows)
+	if mutation < len(window.rows) || mutation < 0 {
+		return window
+	}
+	window.rows = append([]diffRow(nil), window.rows...)
+	window.rows[len(window.rows)-1] = rows[mutation]
+	return window
+}
+
 // visibleTerminalText is the trust boundary between untrusted display text and terminal
 // markup. Every terminal control becomes a printable Go-style escape before Chroma or
 // lipgloss can add trusted ANSI. Unicode's narrow Bidi_Control set is escaped too so text

@@ -752,11 +752,12 @@ const (
 // agent, no mutation, no rule reconstruction.
 //
 // A positive heightBudget is the whole card's production-frame allowance. Authorization
-// consequences outrank every optional display row: the allocator first reserves the title,
-// EVERY wrapped requirement/candidate row, and every action. It then compacts the summary,
-// diff, and section gaps in that order. If even the complete authorization tree cannot fit,
-// the card switches to an explicit warning and a deny-only control. A zero budget is
-// intentionally unbounded for pure renderer tests and non-production callers.
+// consequences outrank optional display rows: the allocator first reserves the title,
+// EVERY wrapped requirement/candidate row, every intelligible action, and one truthful row
+// for any non-empty diff. It then compacts the summary, remaining diff, and section gaps in
+// that order. If that review context cannot fit, the card switches to an explicit warning
+// and a deny-only control. A zero budget is intentionally unbounded for pure renderer tests
+// and non-production callers.
 //
 // The rows carry no per-action consequence note. The labels ARE the gate.ApprovalAction
 // values and, when the frame can carry it, the requirement tree above lists candidate by
@@ -769,7 +770,7 @@ func renderPermissionBox(p prompt, width, pending int, expanded bool, heightBudg
 	}
 
 	sections := make([]string, 0, 5)
-	sections = append(sections, styles.CardTitleStyle.Render("Approve "+visibleTerminalText(p.ToolName)+"?"))
+	sections = append(sections, permissionTitle(p, plan.textWidth))
 	if body := boundedPermissionRows(plan.summary, plan.summaryBudget, plan.textWidth, "summary"); body != "" {
 		sections = append(sections, body)
 	}
@@ -796,8 +797,10 @@ type permissionRenderPlan struct {
 
 // planPermissionCard is the single authorization-completeness decision shared by
 // rendering and Screen's production key router. Completeness means the title, every
-// wrapped requirement/candidate row, and all approval actions physically fit. Optional
-// summary and diff rows can never buy space by hiding authorization context.
+// wrapped requirement/candidate row, intelligible approval actions, and the minimum truthful
+// mutation disclosure physically fit. That disclosure is a label, a real +/- content row,
+// and a separate omitted count when anything is hidden. Optional summary and expanded diff
+// rows can never buy space by hiding that review context.
 func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudget int) permissionRenderPlan {
 	textW := cardTextWidth(width)
 	var summaryRows []string
@@ -812,8 +815,11 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 		requirements: requirementRows,
 		diff:         rawDiffRows,
 	}
-	if width <= cardRailWidth {
-		return plan // the rail consumes the frame: no authorization text column is visible
+	if textW < minimumPermissionActionTextWidth() {
+		return plan // the action labels cannot communicate every distinct authorization choice
+	}
+	if p.Diff != "" && parsedMutationRowIndex(rawDiffRows) < 0 {
+		return plan // non-empty but malformed/header-only text is not reviewable mutation evidence
 	}
 	if heightBudget <= 0 {
 		plan.authorizationComplete = true
@@ -823,7 +829,15 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 		return plan
 	}
 	contentBudget := permissionCardContentBudget(heightBudget, pending)
-	essentialRows := 1 + len(requirementRows) + len(approvalHints) // title + authorization + actions
+	fixedRows := 1 + len(requirementRows) + len(approvalHints) // title + authorization + actions
+	minimumDiffRows := 0
+	if p.Diff != "" {
+		// Label + at least one actual +/- row + a separate omitted-count marker. A
+		// minimal valid hunk has only two raw rows, so the same three-row budget shows
+		// both in full and needs no marker.
+		minimumDiffRows = 3
+	}
+	essentialRows := fixedRows + minimumDiffRows
 	if contentBudget < essentialRows {
 		return plan
 	}
@@ -831,6 +845,9 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 	plan.authorizationComplete = true
 	plan.summaryBudget = len(summaryRows)
 	plan.diffBudget = desiredPermissionDiffRows(len(rawDiffRows), expanded)
+	if minimumDiffRows > plan.diffBudget {
+		plan.diffBudget = minimumDiffRows
+	}
 	plan.sectionGaps = 4
 	total := func() int {
 		sections := 2 // title + actions
@@ -847,12 +864,12 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 		if maxGaps := sections - 1; gaps > maxGaps {
 			gaps = maxGaps
 		}
-		return essentialRows + plan.summaryBudget + plan.diffBudget + gaps
+		return fixedRows + plan.summaryBudget + plan.diffBudget + gaps
 	}
 	for total() > contentBudget && plan.summaryBudget > 0 {
 		plan.summaryBudget--
 	}
-	for total() > contentBudget && plan.diffBudget > 0 {
+	for total() > contentBudget && plan.diffBudget > minimumDiffRows {
 		plan.diffBudget--
 	}
 	for total() > contentBudget && plan.sectionGaps > 0 {
@@ -924,7 +941,7 @@ func joinPermissionSections(sections []string, gapBudget int) string {
 	return b.String()
 }
 
-const incompletePermissionWarning = "Approval disabled: resize to review all authorization details."
+const incompletePermissionWarning = "Approval disabled: resize to review all permission details."
 
 func renderIncompletePermissionBox(p prompt, width, pending, heightBudget int) string {
 	textW := cardTextWidth(width)
@@ -945,11 +962,16 @@ func renderIncompletePermissionBox(p prompt, width, pending, heightBudget int) s
 		used += warningBudget
 	}
 	if contentBudget-used > 0 {
-		sections = append([]string{styles.CardTitleStyle.Render("Approve " + visibleTerminalText(p.ToolName) + "?")}, sections...)
+		sections = append([]string{permissionTitle(p, textW)}, sections...)
 		used++
 	}
 	gaps := contentBudget - used
 	return cardFrame(joinPermissionSections(sections, gaps), width, pending)
+}
+
+func permissionTitle(p prompt, textW int) string {
+	title := truncate("Approve "+visibleTerminalText(p.ToolName)+"?", textW)
+	return styles.CardTitleStyle.Render(title)
 }
 
 func boundedPermissionRows(rows []string, budget, width int, noun string) string {
@@ -974,7 +996,7 @@ func boundedPermissionRows(rows []string, budget, width int, noun string) string
 // selects the raw row window first, then delegates sanitizing, syntax color and
 // display-width clipping to the shared diff row renderer.
 func permissionDiffBody(p prompt, rawRows []diffRow, textW int, expanded bool, rowBudget int) string {
-	if len(rawRows) == 0 || rowBudget == 0 {
+	if p.Diff == "" || rowBudget == 0 {
 		return ""
 	}
 
@@ -992,7 +1014,9 @@ func permissionDiffBody(p prompt, rawRows []diffRow, textW int, expanded bool, r
 	}
 	if rowBudget > 0 {
 		if rowBudget == 1 {
-			label += " · " + strconv.Itoa(len(rawRows)) + " diff lines hidden"
+			if len(rawRows) > 0 {
+				label += " · " + strconv.Itoa(len(rawRows)) + " diff lines hidden"
+			}
 			return styles.CardHintStyle.Render(truncate(label, textW))
 		}
 		available := rowBudget - 1 // label
@@ -1006,7 +1030,7 @@ func permissionDiffBody(p prompt, rawRows []diffRow, textW int, expanded bool, r
 			visible = available
 		}
 	}
-	window := permissionDiffWindowFromRows(rawRows, visible)
+	window := permissionDiffReviewWindow(rawRows, visible)
 	var lines []string
 	if len(window.rows) > 0 {
 		lines = renderDiffRowsWithLexer(window.rows, lexerForDiffPath(p.DiffPath), textW)
@@ -1035,6 +1059,50 @@ func permissionActionRows(p prompt, textW int) string {
 		rows = append(rows, row)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// minimumPermissionActionTextWidth derives the narrowest content width at which every
+// approval row still communicates a distinct meaning. Each label must expose a complete
+// word prefix that distinguishes it from the other actions; a clipped prefix also needs
+// one cell for the ellipsis that says more consequence text exists. The row then adds its
+// rendered " [key] " chrome. For today's controls this makes "Approve always…" the
+// limiting label, rather than relying on a magic terminal-width cutoff.
+func minimumPermissionActionTextWidth() int {
+	labels := make([]string, len(approvalHints))
+	for i, hint := range approvalHints {
+		labels[i] = string(hint.action)
+	}
+	minimum := 0
+	for i, hint := range approvalHints {
+		labelWidth := minimumDistinctActionLabelWidth(labels[i], labels)
+		rowWidth := keyRowGap + ansi.StringWidth("["+hint.key+"]") + labelWidth
+		if rowWidth > minimum {
+			minimum = rowWidth
+		}
+	}
+	return minimum
+}
+
+func minimumDistinctActionLabelWidth(label string, labels []string) int {
+	words := strings.Fields(label)
+	for wordCount := 1; wordCount <= len(words); wordCount++ {
+		prefix := strings.Join(words[:wordCount], " ")
+		unique := true
+		for _, other := range labels {
+			if other != label && strings.HasPrefix(other, prefix) {
+				unique = false
+				break
+			}
+		}
+		if unique || prefix == label {
+			width := ansi.StringWidth(prefix)
+			if prefix != label {
+				width++ // truncate's visible ellipsis
+			}
+			return width
+		}
+	}
+	return ansi.StringWidth(label)
 }
 
 func permissionDenyActionRow(textW int) string {
