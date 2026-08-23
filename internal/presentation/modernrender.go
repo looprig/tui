@@ -46,11 +46,11 @@ const userPadRows = 1
 // padUserCard brackets a user entry's rendered lines with userPadRows rail pad row(s) above and
 // below so the MODERN gray panel reads as a padded card rather than text flush to the panel edge.
 // A pad row carries the accent bar in styled (the rail runs unbroken top-to-bottom, so the card
-// reads as one block once paintUserBackground fills it gray) but NO plain text — it is vertical
+// reads as one block once paintPanelBackground fills it gray) but NO plain text — it is vertical
 // whitespace, so nothing extra reaches the clipboard. Every line's sub is reassigned 0-based
 // across the padded block so provenance (selection anchoring) stays unique and ordered. Empty
 // input is returned unchanged (a zero-line entry has nothing to bracket). MODERN-ONLY: it runs
-// before paintUserBackground so the pad rows pick up the same gray fill; scrollback never pads.
+// before paintPanelBackground so the pad rows pick up the same gray fill; scrollback never pads.
 func padUserCard(lines []renderedLine) []renderedLine {
 	if len(lines) == 0 {
 		return lines
@@ -71,14 +71,14 @@ func padUserCard(lines []renderedLine) []renderedLine {
 	return out
 }
 
-// paintUserBackground is the MODERN-ONLY post-process that paints the gray panel behind a
-// user entry's rendered lines: it replaces each line's styled form with a full-width
-// gray-filled version (styles.FillLineBackground) and leaves plain/entry/sub untouched, so
-// selection, copy, and the click-to-collapse provenance are unaffected — the fill is
-// display-only and never reaches the clipboard. The scrollback Screen renders the SAME
+// paintPanelBackground is the MODERN-ONLY post-process that paints the shared gray panel
+// behind a user entry or startup banner's rendered lines. It replaces each line's styled form
+// with a full-width gray-filled version (styles.FillLineBackground) and leaves
+// plain/entry/sub untouched, so selection, copy, and click provenance are unaffected — the
+// fill is display-only and never reaches the clipboard. The scrollback Screen renders the same
 // entry through renderEntry with no fill (see styles.BoxStyle); this transform runs only in
 // renderFocused.
-func paintUserBackground(lines []renderedLine, width int) []renderedLine {
+func paintPanelBackground(lines []renderedLine, width int) []renderedLine {
 	out := make([]renderedLine, len(lines))
 	for i, ln := range lines {
 		out[i] = renderedLine{

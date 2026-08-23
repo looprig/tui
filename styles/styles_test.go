@@ -605,6 +605,27 @@ func TestPanelBgMatchesCardPanelBg(t *testing.T) {
 	}
 }
 
+func TestPanelRailsUseSharedDarkNeutral(t *testing.T) {
+	t.Parallel()
+
+	const railSGR = "\x1b[38;2;80;80;80m" // #505050
+	tests := []struct {
+		name     string
+		rendered string
+	}{
+		{name: "user and tray rail", rendered: AccentBarStyle.Render(AccentBar)},
+		{name: "composer rail", rendered: lipgloss.NewStyle().Foreground(InputAccent).Render(AccentBar)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.HasPrefix(tt.rendered, railSGR) {
+				t.Errorf("rail = %q, want foreground %q", tt.rendered, railSGR)
+			}
+		})
+	}
+}
+
 // stripANSI removes SGR escape sequences so a test can assert on visible glyphs.
 func stripANSI(s string) string {
 	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(s, "")

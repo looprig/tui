@@ -40,6 +40,8 @@ func renderEntry(e entry, expand bool, width int) []string {
 		return renderPromptRecord(e.Prompt, width)
 	case kindNotice:
 		return renderNotice(e.Level, firstText(e.Blocks), width)
+	case kindBanner:
+		return renderStartupBanner(firstText(e.Blocks), width)
 	case kindInterrupted:
 		return []string{styles.InterruptedStyle.Render(interruptedTombstone)}
 	case kindSubagent:
@@ -111,6 +113,17 @@ func renderNotice(level noticeLevel, text string, width int) []string {
 	return out
 }
 
+// renderStartupBanner renders the session/agent identity header with the normal panel's
+// quiet rail and neutral info text. Its background is applied only by the modern viewport
+// (paintPanelBackground), preserving scrollback's background-free rendering.
+func renderStartupBanner(text string, width int) []string {
+	out := barWrapWithStyles(styles.AccentBarStyle, styles.NoticeInfoStyle, strings.Split(text, "\n"), width)
+	if len(out) == 0 {
+		out = append(out, styles.AccentBarStyle.Render(styles.AccentBarPrompt))
+	}
+	return out
+}
+
 // barWrap renders each raw line as a "▌ "-bar-prefixed, width-wrapped row in style:
 // the accent bar and the wrapped text share one style so the rows read as a single
 // coherent colored unit (the leveled-notice / info-notification layout). Every wrapped
@@ -118,11 +131,18 @@ func renderNotice(level noticeLevel, text string, width int) []string {
 // shared bar-rendering primitive reused by renderNotice and the scrollback prompt
 // record so neither duplicates the bar layout.
 func barWrap(style lipgloss.Style, rawLines []string, width int) []string {
-	bar := style.Render(styles.AccentBarPrompt)
+	return barWrapWithStyles(style, style, rawLines, width)
+}
+
+// barWrapWithStyles renders each raw line with an independently styled "▌ " bar and
+// text. It is used by the startup banner, whose panel rail shares the composer/user/tray
+// dark neutral while its identity text retains the normal info-notice color.
+func barWrapWithStyles(barStyle, textStyle lipgloss.Style, rawLines []string, width int) []string {
+	bar := barStyle.Render(styles.AccentBarPrompt)
 	var out []string
 	for _, raw := range rawLines {
 		for _, line := range wrapToWidth(raw, width-barWidth) {
-			out = append(out, bar+style.Render(line))
+			out = append(out, bar+textStyle.Render(line))
 		}
 	}
 	return out

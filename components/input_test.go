@@ -28,6 +28,8 @@ func stripANSI(s string) string { return ansiEscape.ReplaceAllString(s, "") }
 func TestInputBoxAppearance(t *testing.T) {
 	t.Parallel()
 
+	const railSGR = "\x1b[38;2;80;80;80m" // shared darker panel rail (#505050)
+
 	b := NewInputBox()
 	b.Resize(40)
 	v := b.View()
@@ -45,6 +47,9 @@ func TestInputBoxAppearance(t *testing.T) {
 	}
 	if !strings.Contains(plain, "▌") {
 		t.Errorf("View() missing the \"▌\" accent bar:\n%q", v)
+	}
+	if !strings.Contains(v, railSGR) {
+		t.Errorf("View() rail does not use the shared darker neutral; view=%q", v)
 	}
 	if !strings.Contains(plain, "Type a message") {
 		t.Errorf("View() missing the placeholder text:\n%q", v)

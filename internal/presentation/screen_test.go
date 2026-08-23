@@ -4426,7 +4426,8 @@ func TestModernLiveThinkingAlwaysExpanded(t *testing.T) {
 func TestModernUserRowGrayBackground(t *testing.T) {
 	t.Parallel()
 
-	const bgSGR = "\x1b[48;2;36;37;39m" // PanelBg (shared darker gray) truecolor background open
+	const bgSGR = "\x1b[48;2;36;37;39m"   // PanelBg (shared darker gray) truecolor background open
+	const railSGR = "\x1b[38;2;80;80;80m" // shared darker panel rail (#505050)
 	const width = 40
 
 	primary := callID(1)
@@ -4448,6 +4449,9 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 		if !strings.Contains(ln.styled, bgSGR) {
 			t.Errorf("modern user line missing gray background; styled=%q", ln.styled)
 		}
+		if !strings.Contains(ln.styled, railSGR) {
+			t.Errorf("modern user line missing the darker panel rail; styled=%q", ln.styled)
+		}
 		if got := lipgloss.Width(ln.styled); got != width {
 			t.Errorf("modern user line width = %d, want %d (padded to content width)", got, width)
 		}
@@ -4466,6 +4470,41 @@ func TestModernUserRowGrayBackground(t *testing.T) {
 	for _, line := range renderEntry(userEntry, true, width) {
 		if strings.Contains(line, bgSGR) {
 			t.Errorf("scrollback user line unexpectedly carries the gray background; line=%q", line)
+		}
+	}
+}
+
+func TestModernStartupBannerUsesPanelTreatment(t *testing.T) {
+	t.Parallel()
+
+	const width = 80
+	const bgSGR = "\x1b[48;2;36;37;39m"   // PanelBg (#242527)
+	const railSGR = "\x1b[38;2;80;80;80m" // shared darker panel rail (#505050)
+	primary := callID(1)
+	agent := &fakeAgent{sessionID: callID(2), activeLoopID: primary}
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{Name: "Carbon", Description: "coding rig"})
+	m.restoring = false
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
+	m, _ = updateScreen(t, m, systemReadyMsg{})
+
+	var bannerLines []renderedLine
+	for _, ln := range m.viewport.lines {
+		if strings.Contains(ln.plain, "Carbon") || strings.Contains(ln.plain, "Session: #") {
+			bannerLines = append(bannerLines, ln)
+		}
+	}
+	if len(bannerLines) != 2 {
+		t.Fatalf("startup banner lines = %d, want 2; viewport=%q", len(bannerLines), plainAll(m.viewport.lines))
+	}
+	for _, ln := range bannerLines {
+		if !strings.Contains(ln.styled, bgSGR) {
+			t.Errorf("startup banner line missing PanelBg; styled=%q", ln.styled)
+		}
+		if !strings.Contains(ln.styled, railSGR) {
+			t.Errorf("startup banner line missing the darker panel rail; styled=%q", ln.styled)
+		}
+		if got := lipgloss.Width(ln.styled); got != width {
+			t.Errorf("startup banner line width = %d, want %d (full panel width)", got, width)
 		}
 	}
 }

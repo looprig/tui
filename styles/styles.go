@@ -44,7 +44,7 @@ var (
 var (
 	codeKeywordColor = "#A2D2FF" // keywords, types, builtins, function/class names — brand blue
 	codeStringColor  = "#D4F84D" // string literals — lime accent (matches the assistant dot)
-	codeCommentColor = "#737373" // comments — faint gray (matches the input/accent bars)
+	codeCommentColor = "#737373" // comments — faint gray
 	codeBgColor      = "#373737" // code-block fill — dark gray (glamour's default block bg)
 )
 
@@ -221,13 +221,13 @@ var (
 	ToolResultStyle = lipgloss.NewStyle().Faint(true) // indented result-preview lines
 )
 
-// AccentBarStyle colors the left accent bar ("▌") on user rows (and the queued-input
-// echo) a mid gray (#737373).
-var AccentBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
+// AccentBarStyle colors the left accent bar ("▌") on user rows, the startup banner,
+// and unselected trays with the shared quiet dark neutral (RailColor, #505050).
+var AccentBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(RailColor))
 
-// InputAccent colors the composer's left ▌ edge — the same mid gray as the
-// AccentBarStyle bar on user rows, so the input reads as the same accent.
-var InputAccent = lipgloss.Color("#737373")
+// InputAccent colors the composer's left ▌ edge — the same quiet dark neutral as
+// AccentBarStyle, so every normal panel keeps one shared rail color.
+var InputAccent = lipgloss.Color(RailColor)
 
 // PanelBg is the shared darker-gray fill behind MODERN mode's user-message rows, composer
 // panel, and unselected completion-tray rows. It aliases CardPanelBg rather than spelling
@@ -348,9 +348,9 @@ var SubagentStyle = lipgloss.NewStyle().Faint(true)
 // non-italic rail renders as a clean, unbroken vertical line.
 var ThinkingStyle = lipgloss.NewStyle().Faint(true)
 
-// RailColor is the quiet dark-neutral foreground used only for the assistant-step
-// timeline. It keeps the structural "│" visible enough to follow without competing
-// with reasoning, narration, result text, or the status-colored node glyphs.
+// RailColor is the quiet dark-neutral foreground shared by normal-panel rails and the
+// assistant-step timeline. It keeps structural markers visible without competing with
+// the content or the status-colored node glyphs.
 const RailColor = "#505050"
 
 // RailStyle renders timeline spines and connectors independently from ThinkingStyle,

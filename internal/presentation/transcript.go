@@ -118,11 +118,15 @@ const (
 	kindTool
 	kindPromptRecord
 	kindInterrupted
-	// kindNotice is a leveled, out-of-band notification line (the startup banner, the
-	// /help listing, a non-fatal error, a turn failure). It carries a single TextBlock
+	// kindNotice is a leveled, out-of-band notification line (the /help listing, a
+	// non-fatal error, a turn failure). It carries a single TextBlock
 	// and a noticeLevel; renderEntry renders it with the shared "▌ " accent bar colored
 	// per level (see noticeLevel and styles.NoticeStyle).
 	kindNotice
+	// kindBanner is the session/agent identity header committed once at startup. It is
+	// distinct from a generic info notice because the modern viewport paints it with the
+	// shared PanelBg treatment while warnings and errors remain ordinary notices.
+	kindBanner
 	// kindSubagent is the legacy collapsed activity line for a subagent loop:
 	// one compact "▸ <agent>: <verb>" row attributing
 	// the step to the agent driving that loop (the agent name learned from the loop's
@@ -888,6 +892,13 @@ func (m transcriptModel) CommitGlobalUserText(text string) transcriptModel {
 	return m
 }
 
+func (m transcriptModel) CommitGlobalBanner(text string) transcriptModel {
+	m.nextID++
+	e := entry{ID: m.nextID, Kind: kindBanner, Blocks: []content.Block{&content.TextBlock{Text: text}}}
+	m.global = append(m.global, e)
+	return m
+}
+
 func (m transcriptModel) CommitGlobalNotice(level noticeLevel, text string) transcriptModel {
 	m.nextID++
 	e := entry{ID: m.nextID, Kind: kindNotice, Level: level, Blocks: []content.Block{&content.TextBlock{Text: text}}}
@@ -1038,10 +1049,9 @@ func rejectReasonText(reason event.RejectReason) string {
 
 // CommitNotice appends a leveled, out-of-band notification as one kindNotice entry
 // carrying level + text with a fresh stable ID, and returns the next model. It is the
-// single notice-commit primitive — the startup banner and /help (info), and the
-// error paths (error) all route through it. It does NOT touch the live segment: a
-// notice is out-of-band from the assistant's in-progress output. An empty text still
-// commits one entry (the bar marks the event).
+// single notice-commit primitive for /help (info) and error paths (error). It does
+// NOT touch the live segment: a notice is out-of-band from the assistant's in-progress
+// output. An empty text still commits one entry (the bar marks the event).
 func (m transcriptModel) CommitNotice(level noticeLevel, text string) transcriptModel {
 	m.nextID++
 	m.appendCommitted(entry{

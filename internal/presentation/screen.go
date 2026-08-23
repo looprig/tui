@@ -639,7 +639,7 @@ func (m *Screen) commitStartup() {
 	}
 	m.startupPending = false
 	m.startupCommitted = true
-	m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, m.banner.bannerText(m.agent.SessionID()))
+	m.transcript = m.transcript.CommitGlobalBanner(m.banner.bannerText(m.agent.SessionID()))
 	// Permission diagnostics for manual, out-of-catalog allow families are surfaced in
 	// the startup metadata area — committed HERE, at the opening banner, so they are
 	// visible BEFORE the first permission gate can ever arrive (interactive consumers
@@ -1755,7 +1755,7 @@ func (m *Screen) rerender() {
 // spacing and is untouched.
 //
 // MODERN-ONLY USER CARD: a kindUser entry is first bracketed with rail pad rows (padUserCard)
-// and then gray-filled (paintUserBackground) so its message reads as a padded card — the pad
+// and then gray-filled (paintPanelBackground) so its message reads as a padded card — the pad
 // rows are part of the entry (gray, rail-continued), distinct from the transparent blank
 // separator that still follows the whole card.
 // endsInThinkingGap reports whether a committed assistant entry renders as thinking with
@@ -1817,10 +1817,13 @@ func (m Screen) renderFocused() []renderedLine {
 			lines = markClickableHeader(lines)
 		}
 		// MODERN-ONLY: bracket the user row with rail pad rows (a padded card), then paint the
-		// gray panel behind the whole block — pads included (scrollback keeps user rows bare).
+		// gray panel behind the whole block — pads included. The session/agent banner uses the
+		// same fill without the user-card padding; scrollback keeps both backgrounds bare.
 		if committed[i].Kind == kindUser {
 			lines = padUserCard(lines)
-			lines = paintUserBackground(lines, width)
+		}
+		if committed[i].Kind == kindUser || committed[i].Kind == kindBanner {
+			lines = paintPanelBackground(lines, width)
 		}
 		out = append(out, lines...)
 		// A zero-line entry (an unknown/empty kind) has no last sub and nothing to set off, so it
@@ -1922,7 +1925,7 @@ func markClickableHeader(lines []renderedLine) []renderedLine {
 // displayID and sub (the entry's last sub + 1, i.e. lineCount), so the gap "belongs" to the
 // entry above it: a selection spanning entries naturally includes the newline (plain is empty),
 // and a collapse-click that lands on it resolves to a non-header sub (>= 1) and never toggles.
-// It carries NO styled bytes, so it never picks up the user gray fill (paintUserBackground has
+// It carries NO styled bytes, so it never picks up the user gray fill (paintPanelBackground has
 // already run on the entry's own lines before this blank is appended).
 func blankSeparator(id displayID, lineCount int) renderedLine {
 	return renderedLine{styled: "", plain: "", entry: id, sub: lineCount}
