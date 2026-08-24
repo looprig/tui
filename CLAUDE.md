@@ -50,6 +50,7 @@ runtime contracts, and Harness never imports TUI.
 - `github.com/sahilm/fuzzy` — will become a transitive (indirect) dep when `bubbles/list` is adopted, which imports it for `DefaultFilter`; approved as part of `list`, not chosen directly
 - `github.com/charmbracelet/lipgloss` — terminal styling/layout for the TUI. **v2 approved (2026-06-15)** (co-required by Bubble Tea v2). v2 import path: `charm.land/lipgloss/v2`.
 - `github.com/charmbracelet/glamour` — markdown → ANSI rendering for the TUI transcript; pin a version compatible with Lipgloss v2. v2 import path: `charm.land/glamour/v2` (styles subpackage `charm.land/glamour/v2/styles`).
+- `github.com/alecthomas/chroma/v2` — syntax highlighting for diff bodies on the permission gate card. Already present in the module graph as a transitive dependency of glamour; **promoted to a direct dependency 2026-08-23** so the diff renderer can select a lexer by file extension rather than going through markdown.
 - `github.com/atotto/clipboard` — transitive (indirect) dep of `bubbles/textarea`, which imports it unconditionally for paste; approved as part of textarea, not chosen directly
 
 ## Secure Coding Patterns

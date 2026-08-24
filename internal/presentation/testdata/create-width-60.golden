@@ -1,0 +1,17 @@
+▌                                                           
+▌ Approve EditFile?                                         
+▌                                                           
+▌ update the workspace configuration                        
+▌                                                           
+▌ Create nested/new-config.yaml                             
+▌ @@ -0,0 +1,2 @@                                           
+▌ +name: looprig                                            
+▌ +enabled: true                                            
+▌                                                           
+▌ • write config.yaml                                       
+▌     ↳ always allow writes under the workspace             
+▌                                                           
+▌  [y] Approve                                              
+▌  [a] Approve always for this workspace                    
+▌  [n] Deny                                                 
+▌                                                           

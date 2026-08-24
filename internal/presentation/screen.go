@@ -830,9 +830,11 @@ func (m *Screen) handleHoverGlow(msg hoverGlowMsg) tea.Cmd {
 
 // handleRestored releases the initial replay barrier. A non-empty historical fold installs
 // first, preserving shell-global startup/error rows and composer draft; buffered subscription
-// events then pass through the normal reducers in arrival order. Empty/error replay also drains
-// the buffer. Startup flags are deliberately untouched so message ordering cannot duplicate or
-// suppress the banner.
+// events then pass through the normal reducers in arrival order. An EventID overlap keeps the
+// durable fold authoritative; the sole exception is a PermissionRequested's live-only mutation
+// preview, which is reconciled into its restored prompt without replaying any reducer. Empty/error
+// replay also drains the buffer. Startup flags are deliberately untouched so message ordering
+// cannot duplicate or suppress the banner.
 func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 	buffered := m.restoreBuffer
 	m.restoreBuffer = nil
@@ -851,6 +853,9 @@ func (m *Screen) handleRestored(msg restoredMsg) tea.Cmd {
 			ev := stampEphemeralClock(input.delivery.ev, m.now)
 			if id := ev.EventHeader().EventID; !id.IsZero() {
 				if _, replayed := msg.eventIDs[id]; replayed {
+					if permission, ok := ev.(event.PermissionRequested); ok {
+						m.interaction = m.interaction.reconcilePermissionPreview(permission)
+					}
 					continue
 				}
 			}
@@ -1242,6 +1247,11 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.quitting {
 		return m, nil
 	}
+	// Snapshot the authorization state of the frame the user actually saw. A transient
+	// key-panel dismissal returns rows to the permission card before this key is routed;
+	// recomputing after that mutation could let the dismissing y/a authorize details that
+	// only become visible on the NEXT frame.
+	permissionComplete := m.permissionAuthorizationComplete()
 	// Precedence (0): the transient key panel. `?` on an empty composer toggles it (see
 	// keyPanelToggles for why that guard is the whole feature). Once it is open the NEXT key
 	// of any kind DISMISSES it and then falls through to do its normal job — it is a peek,
@@ -1360,13 +1370,13 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	// Precedence (2): an active prompt consumes its own approve/deny/choice/answer keys.
 	if m.activePrompt() != nil {
-		return m.routeToInteraction(msg)
+		return m.routeToInteraction(msg, permissionComplete)
 	}
 	// Precedence (3): an open completion tray consumes Esc before the global interrupt,
 	// preserving the draft. With no tray, Esc keeps its legacy interrupt meaning.
 	if msg.String() == "esc" {
 		if m.interaction.slash != nil || m.interaction.files != nil {
-			return m.routeToInteraction(msg)
+			return m.routeToInteraction(msg, permissionComplete)
 		}
 		return m, m.sessionCore.interruptRunning(m.focusedLoopID)
 	}
@@ -1377,7 +1387,7 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	// Precedence (5): everything else — the arrow keys and printable input — falls through to
 	// the composer.
-	return m.routeToInteraction(msg)
+	return m.routeToInteraction(msg, permissionComplete)
 }
 
 // routeToInteraction delegates a key to the interaction model and maps the resulting typed
@@ -1394,10 +1404,14 @@ func (m Screen) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // uiSubmit is intercepted; every other action kind (approve/deny/answer/slash/
 // edit/interrupt) still routes through the shared core's mapAction unchanged, so Screen's
 // default submit path (mapAction → submit → Submit) is untouched.
-func (m Screen) routeToInteraction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Screen) routeToInteraction(msg tea.KeyPressMsg, permissionComplete bool) (tea.Model, tea.Cmd) {
 	var action uiAction
 	var blink tea.Cmd
-	m.interaction, action, blink = m.interaction.Update(msg)
+	if p := m.activePrompt(); p != nil && p.Kind == promptPermission && !permissionComplete {
+		m.interaction, action = m.interaction.permissionDenyOnlyKey(msg)
+	} else {
+		m.interaction, action, blink = m.interaction.Update(msg)
+	}
 	if m.restoring && action.Kind == uiRunSlash && action.Slash == "/clear" {
 		m.transcript = m.transcript.CommitGlobalNotice(noticeInfo, "restore in progress; /clear is unavailable")
 		m.rerender()
@@ -1651,6 +1665,12 @@ type screenLayout struct {
 	barH     int // wrapped footer row count
 }
 
+const (
+	screenPadHeight    = 1
+	screenStatusHeight = 1
+	screenGapHeight    = 1
+)
+
 // layout derives the region geometry from the current frame: the bottom box is measured
 // first (its height varies with the composer/prompt). The fixed chrome is reserved before the
 // optional completion tray receives its remaining-row budget; the viewport content gets
@@ -1673,7 +1693,6 @@ type screenLayout struct {
 // Tea's single model goroutine (never concurrently — see the serial subtest note in the
 // tests).
 func (m Screen) layout() screenLayout {
-	const padH, statusH, gapH = 1, 1, 1
 	barH := lipgloss.Height(m.footerView())
 	if barH < 1 {
 		barH = 1
@@ -1682,7 +1701,7 @@ func (m Screen) layout() screenLayout {
 	if boxH < 1 {
 		boxH = 1
 	}
-	fixedH := padH + statusH + gapH + boxH + gapH + barH
+	fixedH := screenPadHeight + screenStatusHeight + screenGapHeight + boxH + screenGapHeight + barH
 	trayBudget := m.height - fixedH
 	if trayBudget < 0 {
 		trayBudget = 0
@@ -1701,13 +1720,13 @@ func (m Screen) layout() screenLayout {
 		contentH = 0
 	}
 	padTopY := contentH
-	statusY := padTopY + padH
-	gapTopY := statusY + statusH
-	trayTop := gapTopY + gapH
+	statusY := padTopY + screenPadHeight
+	gapTopY := statusY + screenStatusHeight
+	trayTop := gapTopY + screenGapHeight
 	boxTop := trayTop + trayH
 	panelTop := boxTop + boxH
 	gapBotY := panelTop + panelH
-	barY := gapBotY + gapH
+	barY := gapBotY + screenGapHeight
 	return screenLayout{
 		contentH: contentH,
 		padTopY:  padTopY,
@@ -2166,12 +2185,53 @@ func (m Screen) completionTrayView(maxRows int) string {
 // dimensions.
 func (m Screen) surfaceInputs() surfaceInputs {
 	return surfaceInputs{
-		Interaction: m.interaction,
-		Status:      m.focusedStatus(),
-		StatusState: m.statusInputs(),
-		Width:       m.width,
-		Height:      m.height,
+		Interaction:          m.interaction,
+		Status:               m.focusedStatus(),
+		StatusState:          m.statusInputs(),
+		ExpandPermissionDiff: !m.collapse.GloballyCollapsed(),
+		PermissionCardHeight: m.permissionCardHeightBudget(),
+		Width:                m.width,
+		Height:               m.height,
 	}
+}
+
+// permissionCardHeightBudget reserves every production-frame row outside the bottom
+// box before layout measures it: content/status padding, both chrome gaps, the wrapped
+// footer/bar, and a transient key panel if one survived a compose→gate transition.
+// Completion trays are suppressed in prompt modes. The result is deterministic from
+// model state and does not measure the card itself, avoiding a layout/render cycle.
+func (m Screen) permissionCardHeightBudget() int {
+	if m.interaction.mode != modePermissionPrompt {
+		return 0
+	}
+	barH := lipgloss.Height(m.footerView())
+	if barH < 1 {
+		barH = 1
+	}
+	panelH := m.keyPanelHeight(m.height)
+	budget := m.height - screenPadHeight - screenStatusHeight - 2*screenGapHeight - barH - panelH
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+// permissionAuthorizationComplete repeats no policy of its own: it asks the same pure
+// render planner used by renderPermissionBox whether every wrapped requirement/candidate
+// row and the full approval control set fit this exact production frame. Key routing and
+// display therefore change together on resize; optional summary/diff rows never authorize.
+func (m Screen) permissionAuthorizationComplete() bool {
+	p := m.activePrompt()
+	if p == nil || p.Kind != promptPermission {
+		return true
+	}
+	return planPermissionCard(
+		*p,
+		m.width,
+		m.interaction.PendingCount(),
+		!m.collapse.GloballyCollapsed(),
+		m.permissionCardHeightBudget(),
+	).authorizationComplete
 }
 
 // focusedStatus is the turn-lifecycle Status the status line reflects for the FOCUSED loop

@@ -131,6 +131,14 @@ const (
 // failure reads red against the neon assistant bullet.
 var FailColor = lipgloss.Color("#FF6B6B")
 
+// DiffDeletionBackgroundColor and DiffAdditionBackgroundColor tint changed rows in a
+// permission-gate diff. Both are deliberately dark so syntax-highlighted foregrounds
+// remain readable while the mutation direction is still visible at a glance.
+var (
+	DiffDeletionBackgroundColor = lipgloss.Color("#4A2028")
+	DiffAdditionBackgroundColor = lipgloss.Color("#203D2A")
+)
+
 // ToolNode returns the COLORED node glyph (glyph + trailing space, 2 columns wide like
 // LitDot) for a tool/subagent node at the given status.
 func ToolNode(s NodeStatus) string {

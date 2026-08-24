@@ -1,13 +1,18 @@
 package presentation
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/looprig/harness/pkg/gate"
+	"github.com/looprig/harness/pkg/tool"
 	"github.com/looprig/tui/styles"
 )
 
@@ -100,8 +105,8 @@ func TestRenderPermissionBoxCombinedMultiCapability(t *testing.T) {
 		requirement("write /etc/hosts", "always allow writes under /etc"),
 		requirement("connect api.example.com:443", "always allow api.example.com:443"),
 	)
-	p := promptFromPermission(callID(1), req)
-	rendered := renderPermissionBox(p, 100, 1)
+	p := promptFromPermission(callID(1), req, nil)
+	rendered := renderPermissionBox(p, 100, 1, false, 0)
 	got := stripANSI(rendered)
 
 	assertPanelFramed(t, rendered)
@@ -144,12 +149,12 @@ func TestRenderPermissionBoxCombinedMultiCapability(t *testing.T) {
 func TestRenderPermissionBoxPendingAndPure(t *testing.T) {
 	t.Parallel()
 
-	deep := renderPermissionBox(promptFromPermission(callID(1), bashPermission("rm -rf /")), 80, 3)
+	deep := renderPermissionBox(promptFromPermission(callID(1), bashPermission("rm -rf /"), nil), 80, 3, false, 0)
 	if got := stripANSI(deep); !strings.Contains(got, "Approve Bash?") || !strings.Contains(got, "(+2 more pending)") {
 		t.Errorf("deep-queue prompt = %q, want header + (+2 more pending)", got)
 	}
 
-	pure := renderPermissionBox(promptFromPermission(callID(2), toolRequest("Mystery", "does a thing")), 80, 1)
+	pure := renderPermissionBox(promptFromPermission(callID(2), toolRequest("Mystery", "does a thing"), nil), 80, 1, false, 0)
 	got := stripANSI(pure)
 	assertPanelFramed(t, pure)
 	if !strings.Contains(got, "Approve Mystery?") || !strings.Contains(got, "does a thing") {
@@ -160,6 +165,268 @@ func TestRenderPermissionBoxPendingAndPure(t *testing.T) {
 	}
 	if !strings.Contains(got, string(gate.ApprovalApprove)) || !strings.Contains(got, string(gate.ApprovalDeny)) {
 		t.Errorf("pure-tool prompt missing the approval actions in:\n%s", got)
+	}
+}
+
+func permissionPromptWithDiff(diff string) prompt {
+	return promptFromPermission(callID(0xD1), toolRequest(
+		"EditFile",
+		"update config.yaml",
+		requirement("write config.yaml", "always allow writes under the workspace"),
+	), &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: diff,
+	})
+}
+
+func manyLineDiff(lineCount int) string {
+	var diff strings.Builder
+	diff.WriteString("@@ -1 +1 @@\n")
+	for i := 0; i < lineCount; i++ {
+		fmt.Fprintf(&diff, "+line-%02d\n", i)
+	}
+	return diff.String()
+}
+
+func TestPermissionBoxShowsDiffAboveRequirementsAndActions(t *testing.T) {
+	t.Parallel()
+
+	out := stripANSI(renderPermissionBox(permissionPromptWithDiff("@@ -1 +1 @@\n-old\n+new\n"), 80, 1, false, 0))
+	diffAt := strings.Index(out, "@@ -1 +1 @@")
+	requirementsAt := strings.Index(out, "write config.yaml")
+	actionsAt := strings.Index(out, "[y]")
+	if diffAt < 0 || requirementsAt < 0 || actionsAt < 0 || diffAt > requirementsAt || requirementsAt > actionsAt {
+		t.Fatalf("diff must precede requirements and action rows:\n%s", out)
+	}
+}
+
+func TestPermissionBoxCapsDiffWhenCollapsed(t *testing.T) {
+	t.Parallel()
+
+	p := permissionPromptWithDiff(manyLineDiff(40))
+	out := stripANSI(renderPermissionBox(p, 80, 1, false, 0))
+	renderedRows := len(renderDiff(p.Diff, p.DiffPath, cardTextWidth(80)))
+	omitted := renderedRows - permissionDiffLineCap
+	marker := fmt.Sprintf("… %d more lines", omitted)
+
+	if !strings.Contains(out, marker) {
+		t.Errorf("collapsed diff missing exact marker %q:\n%s", marker, out)
+	}
+	if strings.Contains(out, "+line-39") {
+		t.Errorf("collapsed diff leaked a later row:\n%s", out)
+	}
+	if lines := strings.Count(out, "\n") + 1; lines > 30 {
+		t.Errorf("card is %d lines tall; the cap is not holding", lines)
+	}
+}
+
+func TestPermissionBoxExpandsDiff(t *testing.T) {
+	t.Parallel()
+
+	p := permissionPromptWithDiff(manyLineDiff(40))
+	out := stripANSI(renderPermissionBox(p, 80, 1, true, 0))
+	if !strings.Contains(out, "+line-39") {
+		t.Errorf("expanded diff omitted a later row:\n%s", out)
+	}
+	if strings.Contains(out, "more lines") {
+		t.Errorf("expanded diff retained a collapsed marker:\n%s", out)
+	}
+}
+
+func TestPermissionBoxDiffNeverOverflowsCard(t *testing.T) {
+	t.Parallel()
+
+	p := permissionPromptWithDiff("@@ -1 +1 @@\n-" + strings.Repeat("x", 400) + "\n")
+	p.DiffPath = strings.Repeat("nested/", 40) + "config.yaml"
+	for _, width := range []int{40, 60, 80, 120} {
+		out := renderPermissionBox(p, width, 1, false, 0)
+		for _, line := range strings.Split(out, "\n") {
+			if got := ansi.StringWidth(line); got > width {
+				t.Errorf("width %d: line is %d columns: %q", width, got, line)
+			}
+		}
+	}
+}
+
+func TestPermissionBoxCreateLabelAndNoPreviewStability(t *testing.T) {
+	t.Parallel()
+
+	create := permissionPromptWithDiff("@@ -0,0 +1 @@\n+new\n")
+	create.DiffPath = "nested/new-config.yaml"
+	create.DiffCreates = true
+	got := stripANSI(renderPermissionBox(create, 60, 1, false, 0))
+	if !strings.Contains(got, "Create nested/new-config.yaml") {
+		t.Errorf("create preview missing its compact path label:\n%s", got)
+	}
+
+	without := promptFromPermission(callID(0xD2), toolRequest("EditFile", "edit without preview"), nil)
+	collapsed := renderPermissionBox(without, 60, 1, false, 0)
+	expanded := renderPermissionBox(without, 60, 1, true, 0)
+	if collapsed != expanded {
+		t.Errorf("ctrl+t changed a no-preview permission card:\ncollapsed:\n%s\nexpanded:\n%s", collapsed, expanded)
+	}
+
+	emptyPath := permissionPromptWithDiff("@@ -1 +1 @@\n-old\n+new\n")
+	emptyPath.DiffPath = ""
+	if got := stripANSI(renderPermissionBox(emptyPath, 60, 1, false, 0)); !strings.Contains(got, "Change") || !strings.Contains(got, "@@ -1 +1 @@") {
+		t.Errorf("preview with an empty path did not render safely:\n%s", got)
+	}
+
+	emptyDiff := permissionPromptWithDiff("")
+	emptyDiff.DiffPath = "ignored.yaml"
+	if got := stripANSI(renderPermissionBox(emptyDiff, 60, 1, false, 0)); strings.Contains(got, "Change ignored.yaml") {
+		t.Errorf("empty diff rendered a label-only section:\n%s", got)
+	}
+}
+
+func TestPermissionBoxEscapesControlsInDiffPathLabel(t *testing.T) {
+	t.Parallel()
+
+	p := permissionPromptWithDiff("@@ -1 +1 @@\n-old\n+new\n")
+	p.DiffPath = "config\x1b[2J.yaml"
+	out := renderPermissionBox(p, 80, 1, false, 0)
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("diff path label emitted a terminal control:\n%q", out)
+	}
+	if got := stripANSI(out); !strings.Contains(got, `config\x1b[2J.yaml`) {
+		t.Errorf("diff path label did not visibly escape the control:\n%s", got)
+	}
+}
+
+func TestPermissionGoldenDiffReportsChangedAddedAndDeletedRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want string
+		got  string
+		diff string
+	}{
+		{
+			name: "changed row preserves visible padding",
+			want: "same\nold  \ntail",
+			got:  "same\nnew \ntail",
+			diff: "row 2:\n  want \"old  \"\n  got  \"new \"\n",
+		},
+		{
+			name: "added row",
+			want: "same\ntail",
+			got:  "same\nadded \ntail",
+			diff: "row 2:\n  want <missing>\n  got  \"added \"\n",
+		},
+		{
+			name: "deleted row",
+			want: "same\ndeleted \ntail",
+			got:  "same\ntail",
+			diff: "row 2:\n  want \"deleted \"\n  got  <missing>\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := permissionGoldenDiff(tt.want, tt.got); got != tt.diff {
+				t.Errorf("permissionGoldenDiff() = %q, want %q", got, tt.diff)
+			}
+		})
+	}
+}
+
+func permissionGoldenDiff(want, got string) string {
+	wantRows := strings.Split(want, "\n")
+	gotRows := strings.Split(got, "\n")
+	start := 0
+	for start < len(wantRows) && start < len(gotRows) && wantRows[start] == gotRows[start] {
+		start++
+	}
+	wantEnd, gotEnd := len(wantRows), len(gotRows)
+	for wantEnd > start && gotEnd > start && wantRows[wantEnd-1] == gotRows[gotEnd-1] {
+		wantEnd--
+		gotEnd--
+	}
+	wantRows = wantRows[start:wantEnd]
+	gotRows = gotRows[start:gotEnd]
+	rows := len(wantRows)
+	if len(gotRows) > rows {
+		rows = len(gotRows)
+	}
+	var diff strings.Builder
+	for i := 0; i < rows; i++ {
+		if i < len(wantRows) && i < len(gotRows) && wantRows[i] == gotRows[i] {
+			continue
+		}
+		fmt.Fprintf(&diff, "row %d:\n", start+i+1)
+		if i < len(wantRows) {
+			fmt.Fprintf(&diff, "  want %q\n", wantRows[i])
+		} else {
+			diff.WriteString("  want <missing>\n")
+		}
+		if i < len(gotRows) {
+			fmt.Fprintf(&diff, "  got  %q\n", gotRows[i])
+		} else {
+			diff.WriteString("  got  <missing>\n")
+		}
+	}
+	return diff.String()
+}
+
+func assertPermissionGolden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name+".golden")
+	if os.Getenv("UPDATE_PERMISSION_GOLDENS") == "1" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create golden directory for %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("update golden %s: %v", path, err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (set UPDATE_PERMISSION_GOLDENS=1 to create it)", path, err)
+	}
+	if got != string(want) {
+		t.Errorf("permission card changed (-want +got):\n--- %s\n+++ rendered\n%s", path, permissionGoldenDiff(string(want), got))
+	}
+}
+
+func TestPermissionBoxGoldenRenders(t *testing.T) {
+	base := func() prompt {
+		return promptFromPermission(callID(0xD3), toolRequest(
+			"EditFile",
+			"update the workspace configuration",
+			requirement("write config.yaml", "always allow writes under the workspace"),
+		), nil)
+	}
+	withDiff := func(diff string) prompt {
+		p := base()
+		p.DiffPath = "config.yaml"
+		p.Diff = diff
+		return p
+	}
+
+	create := withDiff("@@ -0,0 +1,2 @@\n+name: looprig\n+enabled: true\n")
+	create.DiffPath = "nested/new-config.yaml"
+	create.DiffCreates = true
+
+	tests := []struct {
+		name     string
+		prompt   prompt
+		expanded bool
+	}{
+		{name: "no-preview", prompt: base()},
+		{name: "create", prompt: create},
+		{name: "small-overwrite", prompt: withDiff("@@ -1,2 +1,2 @@\n-name: old\n-enabled: false\n+name: looprig\n+enabled: true\n")},
+		{name: "capped-diff", prompt: withDiff(manyLineDiff(40))},
+		{name: "expanded-diff", prompt: withDiff(manyLineDiff(40)), expanded: true},
+	}
+	for _, tt := range tests {
+		for _, width := range []int{60, 100} {
+			name := fmt.Sprintf("%s-width-%d", tt.name, width)
+			t.Run(name, func(t *testing.T) {
+				got := stripANSI(renderPermissionBox(tt.prompt, width, 1, tt.expanded, 0))
+				assertPermissionGolden(t, name, got)
+			})
+		}
 	}
 }
 
@@ -586,7 +853,7 @@ func TestPermissionRowsAreSelectable(t *testing.T) {
 	t.Parallel()
 
 	p := prompt{ToolName: "Bash", approval: 1}
-	rendered := renderPermissionBox(p, 60, 1)
+	rendered := renderPermissionBox(p, 60, 1, false, 0)
 	got := stripANSI(rendered)
 
 	for _, want := range []string{
@@ -612,7 +879,7 @@ func TestPermissionBandFollowsTheCursor(t *testing.T) {
 
 	for i, h := range approvalHints {
 		p := prompt{ToolName: "Bash", approval: i}
-		assertBandedRow(t, renderPermissionBox(p, 60, 1), "["+h.key+"] "+string(h.action))
+		assertBandedRow(t, renderPermissionBox(p, 60, 1, false, 0), "["+h.key+"] "+string(h.action))
 	}
 }
 
@@ -623,11 +890,11 @@ func TestPermissionBandFollowsTheCursor(t *testing.T) {
 func TestPermissionCursorFailsSecure(t *testing.T) {
 	t.Parallel()
 
-	p := promptFromPermission(callID(1), bashPermission("rm -rf /"))
+	p := promptFromPermission(callID(1), bashPermission("rm -rf /"), nil)
 	if got := approvalAt(p.approval); got != gate.ApprovalDeny {
 		t.Errorf("fresh permission prompt selects %q, want %q", got, gate.ApprovalDeny)
 	}
-	assertBandedRow(t, renderPermissionBox(p, 60, 1), "[n] "+string(gate.ApprovalDeny))
+	assertBandedRow(t, renderPermissionBox(p, 60, 1, false, 0), "[n] "+string(gate.ApprovalDeny))
 
 	for _, i := range []int{-1, len(approvalHints), 1 << 20} {
 		if got := approvalAt(i); got != gate.ApprovalDeny {

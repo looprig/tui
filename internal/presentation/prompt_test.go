@@ -2,7 +2,52 @@ package presentation
 
 import (
 	"testing"
+
+	"github.com/looprig/harness/pkg/tool"
 )
+
+func TestPromptFromPermissionCarriesTheDiff(t *testing.T) {
+	t.Parallel()
+
+	preview := &tool.MutationPreview{
+		Path:        "a.go",
+		UnifiedDiff: "@@ -1 +1 @@\n-a\n+b\n",
+	}
+
+	p := promptFromPermission(callID(1), toolRequest("EditFile", "edit a.go"), preview)
+
+	if p.DiffPath != preview.Path || p.Diff != preview.UnifiedDiff {
+		t.Fatalf("preview not carried: %+v", p)
+	}
+}
+
+func TestPromptFromPermissionWithoutAPreview(t *testing.T) {
+	t.Parallel()
+
+	p := promptFromPermission(callID(1), toolRequest("EditFile", "edit a.go"), nil)
+	if p.Diff != "" || p.DiffPath != "" || p.DiffCreates {
+		t.Fatalf("nil preview produced preview fields: %+v", p)
+	}
+}
+
+func TestPromptFromPermissionCarriesCreateAndCopiesPreview(t *testing.T) {
+	t.Parallel()
+
+	preview := &tool.MutationPreview{
+		Path:        "new.go",
+		UnifiedDiff: "@@ -0,0 +1 @@\n+package new\n",
+		Creates:     true,
+	}
+	p := promptFromPermission(callID(1), toolRequest("WriteFile", "write new.go"), preview)
+
+	preview.Path = "mutated.go"
+	preview.UnifiedDiff = "mutated"
+	preview.Creates = false
+
+	if p.DiffPath != "new.go" || p.Diff != "@@ -0,0 +1 @@\n+package new\n" || !p.DiffCreates {
+		t.Fatalf("prompt retained or failed to copy preview values: %+v", p)
+	}
+}
 
 // TestPromptFromPermission covers building the ONE combined permission prompt
 // view-model from a typed prepared tool.Request: the ToolName/Summary are copied
@@ -20,7 +65,7 @@ func TestPromptFromPermission(t *testing.T) {
 	)
 
 	id := callID(7)
-	p := promptFromPermission(id, req)
+	p := promptFromPermission(id, req, nil)
 
 	if p.ToolExecutionID != id {
 		t.Errorf("ToolExecutionID = %v, want %v", p.ToolExecutionID, id)
@@ -51,7 +96,7 @@ func TestPromptFromPermission(t *testing.T) {
 func TestPromptFromPermissionPureToolNoRequirements(t *testing.T) {
 	t.Parallel()
 
-	p := promptFromPermission(callID(8), toolRequest("Mystery", "does a thing"))
+	p := promptFromPermission(callID(8), toolRequest("Mystery", "does a thing"), nil)
 	if p.Kind != promptPermission || p.ToolName != "Mystery" || p.Summary != "does a thing" {
 		t.Errorf("prompt = %+v, want a header-only Mystery permission prompt", p)
 	}

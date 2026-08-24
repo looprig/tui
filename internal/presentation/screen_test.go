@@ -18,6 +18,7 @@ import (
 	"github.com/looprig/harness/pkg/event"
 	"github.com/looprig/harness/pkg/gate"
 	"github.com/looprig/harness/pkg/identity"
+	"github.com/looprig/harness/pkg/tool"
 	contextcount "github.com/looprig/inference/contextcount"
 	model "github.com/looprig/inference/model"
 	"github.com/looprig/tui/components"
@@ -401,6 +402,776 @@ func TestModernCtrlTExpandsThinking(t *testing.T) {
 	}
 }
 
+func TestModernCtrlTExpandsActivePermissionDiff(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xD4)
+	m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, 48)
+	m = feed(t, m, event.PermissionRequested{
+		Header:          hdr(loopID),
+		ToolExecutionID: callID(0xD5),
+		Request:         toolRequest("EditFile", "update config.yaml"),
+		Preview: &tool.MutationPreview{
+			Path:        "config.yaml",
+			UnifiedDiff: manyLineDiff(40),
+		},
+	})
+
+	collapsed := stripANSI(m.bottomBoxView())
+	if !strings.Contains(collapsed, "more lines") || strings.Contains(collapsed, "+line-39") {
+		t.Fatalf("initial gate diff is not capped:\n%s", collapsed)
+	}
+
+	m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	expanded := stripANSI(m.bottomBoxView())
+	if !strings.Contains(expanded, "+line-29") {
+		t.Errorf("ctrl+t did not reveal a later gate diff row:\n%s", expanded)
+	}
+	if !strings.Contains(expanded, "… 8 more lines") {
+		t.Errorf("terminal-limited expanded diff missing its truthful marker:\n%s", expanded)
+	}
+}
+
+func TestModernPermissionDiffRespectsProductionFrameBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, height := range []int{20, 24, 32, 48} {
+		height := height
+		t.Run(fmt.Sprintf("height_%d", height), func(t *testing.T) {
+			t.Parallel()
+
+			loopID := callID(byte(0xD7 + height))
+			m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, 80, height)
+			m.presentation = SessionPresentation{ProfileName: "Writable", WorkspaceRoot: "/workspace"}
+			m = feed(t, m, loopStarted(loopID, "builder"))
+			m = feed(t, m, event.PermissionRequested{
+				Header:          hdr(loopID),
+				ToolExecutionID: callID(0xD8),
+				Request: toolRequest(
+					"EditFile",
+					"update config.yaml after carefully reviewing this intentionally wrapped mutation summary for approval",
+					requirement("read workspace configuration", "always allow reads in workspace"),
+					requirement("write config.yaml", "always allow config writes"),
+					requirement("execute formatter", "always allow formatter"),
+				),
+				Preview: &tool.MutationPreview{Path: "config.yaml", UnifiedDiff: manyLineDiff(40)},
+			})
+			m = feed(t, m, event.PermissionRequested{
+				Header:          hdr(loopID),
+				ToolExecutionID: callID(0xD9),
+				Request:         toolRequest("Bash", "queued gate"),
+			})
+
+			assertFrame := func(label string, screen Screen) (plain string, diffRows int) {
+				t.Helper()
+				view := screen.View().Content
+				rows := strings.Split(view, "\n")
+				if logical := len(rows); logical > height {
+					t.Errorf("%s logical height = %d, want <= %d:\n%s", label, logical, height, stripANSI(view))
+				}
+				if physical := lipgloss.Height(view); physical > height {
+					t.Errorf("%s physical height = %d, want <= %d", label, physical, height)
+				}
+
+				lay := screen.layout()
+				if got := lay.barY + lay.barH; got != len(rows) {
+					t.Errorf("%s layout ends at row %d, emitted rows = %d", label, got, len(rows))
+				}
+				if lay.boxTop < 0 || lay.boxTop+lay.boxH > len(rows) {
+					t.Fatalf("%s box region [%d,%d) outside %d emitted rows", label, lay.boxTop, lay.boxTop+lay.boxH, len(rows))
+				}
+				boxRows := strings.Join(rows[lay.boxTop:lay.boxTop+lay.boxH], "\n")
+				if want := screen.bottomBoxView(); boxRows != want {
+					t.Errorf("%s layout box rows do not equal rendered bottom box:\ngot  %q\nwant %q", label, boxRows, want)
+				}
+
+				plain = stripANSI(view)
+				if height == 20 {
+					for _, want := range []string{"Approve EditFile?", "Approval disabled", "[n] Deny", "(+1 more pending)", "/workspace [WRITABLE]"} {
+						if !strings.Contains(plain, want) {
+							t.Errorf("%s constrained frame missing %q:\n%s", label, want, plain)
+						}
+					}
+					if strings.Contains(plain, "[y]") || strings.Contains(plain, "[a]") {
+						t.Errorf("%s constrained frame exposed approval controls:\n%s", label, plain)
+					}
+					return plain, 0
+				}
+				wantContent := []string{
+					"Approve EditFile?",
+					"read workspace configuration", "always allow reads in workspace",
+					"write config.yaml", "always allow config writes",
+					"execute formatter", "always allow formatter",
+					"[y]", "[a]", "[n]", "(+1 more pending)", "/workspace [WRITABLE]",
+				}
+				for _, want := range wantContent {
+					if !strings.Contains(plain, want) {
+						t.Errorf("%s frame missing %q:\n%s", label, want, plain)
+					}
+				}
+				for _, line := range strings.Split(plain, "\n") {
+					if strings.Contains(line, "+line-") {
+						diffRows++
+					}
+				}
+				if strings.Contains(plain, "more lines") {
+					shown := diffRows
+					if strings.Contains(plain, "@@ -1 +1 @@") {
+						shown++
+					}
+					omitted := 41 - shown // 41 raw rows: one hunk plus 40 +lines.
+					if marker := fmt.Sprintf("… %d more lines", omitted); !strings.Contains(plain, marker) {
+						t.Errorf("%s frame missing truthful terminal marker %q:\n%s", label, marker, plain)
+					}
+				}
+				return plain, diffRows
+			}
+
+			_, collapsedRows := assertFrame("collapsed", m)
+			m, _ = updateScreen(t, m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+			_, expandedRows := assertFrame("expanded", m)
+			if height == 48 && expandedRows <= collapsedRows+4 {
+				t.Errorf("expanded diff rows = %d, collapsed = %d; want materially more within the terminal budget", expandedRows, collapsedRows)
+			}
+		})
+	}
+}
+
+func permissionWithAuthorizationRows(count int) tool.Request {
+	requirements := make([]tool.Requirement, 0, count)
+	for i := 0; i < count; i++ {
+		requirements = append(requirements, requirement(
+			fmt.Sprintf("capability %d", i),
+			fmt.Sprintf("always allow candidate %d", i),
+		))
+	}
+	return toolRequest("EditFile", "change the workspace configuration", requirements...)
+}
+
+func TestModernIncompletePermissionContextIsDenyOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		keys []tea.KeyPressMsg
+	}{
+		{name: "approve accelerator", keys: []tea.KeyPressMsg{runeKey('y')}},
+		{name: "approve always accelerator", keys: []tea.KeyPressMsg{runeKey('a')}},
+		{name: "arrow cannot reach hidden approval", keys: []tea.KeyPressMsg{upKey(), enterKey()}},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			loopID := callID(0xE1)
+			agent := &fakeAgent{activeLoopID: loopID}
+			m := newScreenSized(t, agent, 80, 20)
+			m = feed(t, m, event.PermissionRequested{
+				Header:          hdr(loopID),
+				ToolExecutionID: callID(0xE2),
+				Request:         permissionWithAuthorizationRows(7),
+				Preview:         &tool.MutationPreview{Path: "config.yaml", UnifiedDiff: manyLineDiff(40)},
+			})
+
+			plain := stripANSI(m.View().Content)
+			for _, want := range []string{"Approve EditFile?", "Approval disabled", "resize to review", "[n] Deny"} {
+				if !strings.Contains(plain, want) {
+					t.Fatalf("incomplete permission frame missing %q:\n%s", want, plain)
+				}
+			}
+			if strings.Contains(plain, "[y]") || strings.Contains(plain, "[a]") {
+				t.Fatalf("incomplete permission frame exposed approval actions:\n%s", plain)
+			}
+
+			var cmd tea.Cmd
+			for _, key := range tt.keys {
+				m, cmd = updateScreen(t, m, key)
+			}
+			drainCmd(t, cmd)
+			if agent.approveCalled {
+				t.Fatal("incomplete permission context dispatched Approve")
+			}
+			if tt.keys[len(tt.keys)-1].String() == "enter" {
+				if !agent.denyCalled || m.interaction.PendingCount() != 0 {
+					t.Fatal("enter on the visible deny-only control did not deny")
+				}
+			} else if agent.denyCalled || m.interaction.PendingCount() != 1 {
+				t.Fatal("approval accelerator resolved an incomplete permission gate")
+			}
+		})
+	}
+}
+
+func TestModernIncompletePermissionContextDenyKeysStillDeny(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []tea.KeyPressMsg{runeKey('n'), {Code: tea.KeyEsc}, enterKey()} {
+		key := key
+		t.Run(key.String(), func(t *testing.T) {
+			t.Parallel()
+			loopID := callID(0xE3)
+			agent := &fakeAgent{activeLoopID: loopID}
+			m := newScreenSized(t, agent, 80, 20)
+			m = feed(t, m, event.PermissionRequested{
+				Header: hdr(loopID), ToolExecutionID: callID(0xE4),
+				Request: permissionWithAuthorizationRows(7),
+			})
+
+			m, cmd := updateScreen(t, m, key)
+			drainCmd(t, cmd)
+			if !agent.denyCalled || agent.approveCalled || m.interaction.PendingCount() != 0 {
+				t.Fatalf("%s did not deny the incomplete permission gate", key.String())
+			}
+		})
+	}
+}
+
+func TestModernIncompletePermissionContextClickCannotSelectApproval(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xE7)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 80, 20)
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xE8),
+		Request: permissionWithAuthorizationRows(7),
+	})
+	lay := m.layout()
+	m, _ = updateScreen(t, m, tea.MouseClickMsg{X: 10, Y: lay.boxTop + 1, Button: tea.MouseLeft})
+	m, cmd := updateScreen(t, m, enterKey())
+	drainCmd(t, cmd)
+	if agent.approveCalled || !agent.denyCalled || m.interaction.PendingCount() != 0 {
+		t.Fatal("click in an incomplete permission card made hidden approval selectable")
+	}
+}
+
+func TestModernIncompletePermissionContextFitsTinyFrames(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []struct{ width, height int }{{80, 10}, {40, 12}} {
+		size := size
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			t.Parallel()
+			loopID := callID(byte(0xEB + size.height))
+			m := newScreenSized(t, &fakeAgent{activeLoopID: loopID}, size.width, size.height)
+			m = feed(t, m, event.PermissionRequested{
+				Header: hdr(loopID), ToolExecutionID: callID(0xEC),
+				Request: permissionWithAuthorizationRows(7),
+			})
+			view := m.View().Content
+			if logical := len(strings.Split(view, "\n")); logical > size.height {
+				t.Errorf("logical height = %d, want <= %d", logical, size.height)
+			}
+			if physical := lipgloss.Height(view); physical > size.height {
+				t.Errorf("physical height = %d, want <= %d", physical, size.height)
+			}
+			plain := stripANSI(view)
+			if !strings.Contains(plain, "Approval disabled") || !strings.Contains(plain, "[n] Deny") {
+				t.Errorf("tiny incomplete frame lacks warning/deny:\n%s", plain)
+			}
+			if strings.Contains(plain, "[y]") || strings.Contains(plain, "[a]") {
+				t.Errorf("tiny incomplete frame exposes approval controls:\n%s", plain)
+			}
+		})
+	}
+}
+
+func TestModernPermissionResizeCannotApproveUnseenContext(t *testing.T) {
+	t.Parallel()
+
+	newGate := func(t *testing.T, height int) (Screen, *fakeAgent) {
+		t.Helper()
+		loopID := callID(0xE5)
+		agent := &fakeAgent{activeLoopID: loopID}
+		m := newScreenSized(t, agent, 80, height)
+		m = feed(t, m, event.PermissionRequested{
+			Header: hdr(loopID), ToolExecutionID: callID(0xE6),
+			Request: permissionWithAuthorizationRows(7),
+		})
+		return m, agent
+	}
+
+	t.Run("stale approve selection becomes deny", func(t *testing.T) {
+		m, agent := newGate(t, 48)
+		m, _ = updateScreen(t, m, upKey()) // deny -> approve-always
+		m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 20})
+		m, cmd := updateScreen(t, m, enterKey())
+		drainCmd(t, cmd)
+		if agent.approveCalled || !agent.denyCalled || m.interaction.PendingCount() != 0 {
+			t.Fatal("enter after shrinking over hidden context did not fail secure")
+		}
+	})
+
+	t.Run("restoring space re-enables approvals", func(t *testing.T) {
+		m, agent := newGate(t, 20)
+		m, cmd := updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if agent.approveCalled || m.interaction.PendingCount() != 1 {
+			t.Fatal("small frame approved before authorization context was visible")
+		}
+		m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 48})
+		plain := stripANSI(m.View().Content)
+		if !strings.Contains(plain, "capability 6") || !strings.Contains(plain, "always allow candidate 6") || !strings.Contains(plain, "[y] Approve") {
+			t.Fatalf("larger frame did not restore complete context and approvals:\n%s", plain)
+		}
+		m, cmd = updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+			t.Fatal("approval remained disabled after complete context became visible")
+		}
+	})
+}
+
+func TestModernDismissingKeyPanelCannotApproveContextItJustRevealed(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xE9)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 80, 24)
+	m.keyPanelOpen = true // a compose-mode legend may survive the gate-opening event
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xEA),
+		Request: permissionWithAuthorizationRows(6),
+	})
+	if plain := stripANSI(m.View().Content); !strings.Contains(plain, "Approval disabled") {
+		t.Fatalf("fixture context unexpectedly complete with the key panel open:\n%s", plain)
+	}
+
+	m, cmd := updateScreen(t, m, runeKey('y'))
+	drainCmd(t, cmd)
+	if agent.approveCalled || m.interaction.PendingCount() != 1 {
+		t.Fatal("the key that dismissed the panel approved authorization context absent from its frame")
+	}
+	if m.keyPanelOpen {
+		t.Fatal("approval accelerator did not dismiss the transient key panel")
+	}
+	if plain := stripANSI(m.View().Content); !strings.Contains(plain, "capability 5") || !strings.Contains(plain, "[y] Approve") {
+		t.Fatalf("the frame after dismissal did not reveal complete context:\n%s", plain)
+	}
+
+	m, cmd = updateScreen(t, m, runeKey('y'))
+	drainCmd(t, cmd)
+	if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+		t.Fatal("approval was not re-enabled on the next key after complete context was visible")
+	}
+}
+
+func TestModernPermissionAuthorizationTextIsTerminalSafe(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xED)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 80, 48)
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xEE),
+		Request: toolRequest("Bash\x1b[3B", "run\x1b[3A the requested command\u200f", requirement(
+			"cap\x1b[2Jability\rhidden\u202e",
+			"always\x1b[1A allow candidate\u2066",
+		)),
+	})
+
+	view := m.View().Content
+	for _, control := range []string{"\x1b[3B", "\x1b[3A", "\x1b[2J", "\x1b[1A", "\r", "\u200f", "\u202e", "\u2066"} {
+		if strings.Contains(view, control) {
+			t.Errorf("authorization card emitted raw terminal control %q", control)
+		}
+	}
+	plain := stripANSI(view)
+	for _, escaped := range []string{`Approve Bash\x1b[3B?`, `run\x1b[3A the requested command\u200f`, `cap\x1b[2Jability\rhidden\u202e`, `always\x1b[1A allow candidate\u2066`} {
+		if !strings.Contains(plain, escaped) {
+			t.Errorf("authorization card did not visibly escape %q:\n%s", escaped, plain)
+		}
+	}
+
+	m, cmd := updateScreen(t, m, runeKey('y'))
+	drainCmd(t, cmd)
+	if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+		t.Fatal("fully visible sanitized authorization context was not approvable")
+	}
+}
+
+func TestModernPermissionCompletenessCountsEscapedAuthorizationText(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xEF)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 40, 20)
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xF0),
+		Request: toolRequest("Bash", "run command", requirement(
+			"command "+strings.Repeat("\x1b[2J", 60),
+		)),
+	})
+	plain := stripANSI(m.View().Content)
+	if !strings.Contains(plain, "Approval disabled") || strings.Contains(plain, "[y]") {
+		t.Fatalf("escaped authorization expansion did not make the frame fail closed:\n%s", plain)
+	}
+
+	m, cmd := updateScreen(t, m, runeKey('y'))
+	drainCmd(t, cmd)
+	if agent.approveCalled || m.interaction.PendingCount() != 1 {
+		t.Fatal("approval router ignored sanitized authorization row count")
+	}
+}
+
+func TestModernPermissionDiffDisclosureIsRequiredBeforeApproval(t *testing.T) {
+	t.Parallel()
+
+	newGate := func(t *testing.T, height int) (Screen, *fakeAgent) {
+		t.Helper()
+		loopID := callID(0xA1)
+		agent := &fakeAgent{activeLoopID: loopID}
+		m := newScreenSized(t, agent, 80, height)
+		m = feed(t, m, event.PermissionRequested{
+			Header: hdr(loopID), ToolExecutionID: callID(0xA2),
+			Request: toolRequest("EditFile", "update config.yaml",
+				requirement("write config.yaml", "always allow config writes")),
+			Preview: &tool.MutationPreview{
+				Path:        "config.yaml",
+				UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+			},
+		})
+		return m, agent
+	}
+
+	t.Run("short frame is deny only", func(t *testing.T) {
+		m, agent := newGate(t, 15) // authorization fits, but label + mutation + marker do not
+		plain := stripANSI(m.View().Content)
+		if !strings.Contains(plain, "Approval disabled") || strings.Contains(plain, "[y]") {
+			t.Fatalf("frame with no room for the mutation disclosure did not fail closed:\n%s", plain)
+		}
+		m, cmd := updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if agent.approveCalled || agent.denyCalled || m.interaction.PendingCount() != 1 {
+			t.Fatal("approve accelerator resolved a gate whose mutation preview was not visible")
+		}
+	})
+
+	t.Run("minimum truthful disclosure enables approval", func(t *testing.T) {
+		m, agent := newGate(t, 16)
+		plain := stripANSI(m.View().Content)
+		for _, want := range []string{"Change config.yaml", "-old", "… 2 more lines"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("minimum complete frame lacks truthful mutation row %q:\n%s", want, plain)
+			}
+		}
+		if !strings.Contains(plain, "[y] Approve") || strings.Contains(plain, "Approval disabled") {
+			t.Fatalf("minimum complete frame did not expose normal approval controls:\n%s", plain)
+		}
+		m, cmd := updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+			t.Fatal("gate stayed disabled after its authorization and mutation disclosure became visible")
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		diff string
+	}{
+		{name: "header only", diff: "--- a/config.yaml\n+++ b/config.yaml\n"},
+		{name: "unparseable", diff: "this is not a unified diff"},
+		{name: "malformed hunk", diff: "@@ not-a-range @@\n+fake\n"},
+		{name: "whitespace", diff: " \n\t\n"},
+	} {
+		tt := tt
+		t.Run(tt.name+" is deny only", func(t *testing.T) {
+			loopID := callID(0xA3)
+			agent := &fakeAgent{activeLoopID: loopID}
+			m := newScreenSized(t, agent, 80, 48)
+			m = feed(t, m, event.PermissionRequested{
+				Header: hdr(loopID), ToolExecutionID: callID(0xA4),
+				Request: toolRequest("EditFile", "update config.yaml",
+					requirement("write config.yaml", "always allow config writes")),
+				Preview: &tool.MutationPreview{Path: "config.yaml", UnifiedDiff: tt.diff},
+			})
+			plain := stripANSI(m.View().Content)
+			if !strings.Contains(plain, "Approval disabled") || strings.Contains(plain, "[y]") {
+				t.Fatalf("nonempty invalid diff did not fail closed:\n%s", plain)
+			}
+			m, cmd := updateScreen(t, m, runeKey('y'))
+			drainCmd(t, cmd)
+			if agent.approveCalled || agent.denyCalled || m.interaction.PendingCount() != 1 {
+				t.Fatal("approve accelerator resolved a gate with no parsed mutation row")
+			}
+		})
+	}
+
+	t.Run("tiny valid diff needs no omission marker", func(t *testing.T) {
+		loopID := callID(0xA5)
+		agent := &fakeAgent{activeLoopID: loopID}
+		m := newScreenSized(t, agent, 80, 16)
+		m = feed(t, m, event.PermissionRequested{
+			Header: hdr(loopID), ToolExecutionID: callID(0xA6),
+			Request: toolRequest("WriteFile", "create config.yaml",
+				requirement("write config.yaml", "always allow config writes")),
+			Preview: &tool.MutationPreview{
+				Path: "config.yaml", Creates: true, UnifiedDiff: "@@ -0,0 +1 @@\n+new\n",
+			},
+		})
+		plain := stripANSI(m.View().Content)
+		for _, want := range []string{"Create config.yaml", "@@ -0,0 +1 @@", "+new", "[y] Approve"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("tiny valid diff lacks %q:\n%s", want, plain)
+			}
+		}
+		if strings.Contains(plain, "more lines") || strings.Contains(plain, "Approval disabled") {
+			t.Fatalf("fully disclosed tiny diff has a false omission/disabled marker:\n%s", plain)
+		}
+	})
+
+	t.Run("long path cannot consume the omitted marker", func(t *testing.T) {
+		loopID := callID(0xA7)
+		agent := &fakeAgent{activeLoopID: loopID}
+		m := newScreenSized(t, agent, 40, 16)
+		m = feed(t, m, event.PermissionRequested{
+			Header: hdr(loopID), ToolExecutionID: callID(0xA8),
+			Request: toolRequest("EditFile", "update config.yaml",
+				requirement("write config.yaml", "allow write")),
+			Preview: &tool.MutationPreview{
+				Path: strings.Repeat("very-long-directory/", 20) + "config.yaml", UnifiedDiff: manyLineDiff(40),
+			},
+		})
+		plain := stripANSI(m.View().Content)
+		for _, want := range []string{"Change very-long", "+line-00", "… 40 more lines", "[y] Approve"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("minimum long-path disclosure lacks independent row %q:\n%s", want, plain)
+			}
+		}
+	})
+
+	t.Run("minimum window shows the validated in-hunk mutation", func(t *testing.T) {
+		loopID := callID(0xA9)
+		agent := &fakeAgent{activeLoopID: loopID}
+		m := newScreenSized(t, agent, 80, 16)
+		m = feed(t, m, event.PermissionRequested{
+			Header: hdr(loopID), ToolExecutionID: callID(0xAA),
+			Request: toolRequest("EditFile", "update config.yaml",
+				requirement("write config.yaml", "always allow config writes")),
+			Preview: &tool.MutationPreview{
+				Path:        "config.yaml",
+				UnifiedDiff: "+misleading preamble\n@@ -1 +1 @@\n-real mutation\n",
+			},
+		})
+		plain := stripANSI(m.View().Content)
+		for _, want := range []string{"-real mutation", "… 2 more lines", "[y] Approve"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("minimum window lacks validated mutation disclosure %q:\n%s", want, plain)
+			}
+		}
+		if strings.Contains(plain, "+misleading preamble") {
+			t.Fatalf("minimum window substituted a lexical preamble for the validated mutation:\n%s", plain)
+		}
+	})
+
+	t.Run("stale approval selection fails closed after shrink", func(t *testing.T) {
+		m, agent := newGate(t, 16)
+		m, _ = updateScreen(t, m, upKey()) // deny -> approve-always
+		m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: 80, Height: 15})
+		m, cmd := updateScreen(t, m, enterKey())
+		drainCmd(t, cmd)
+		if agent.approveCalled || !agent.denyCalled || m.interaction.PendingCount() != 0 {
+			t.Fatal("enter on a stale approval after hiding the mutation disclosure did not deny")
+		}
+	})
+
+	t.Run("key panel dismissal cannot approve newly revealed diff", func(t *testing.T) {
+		m, agent := newGate(t, 17)
+		m.keyPanelOpen = true
+		if plain := stripANSI(m.View().Content); !strings.Contains(plain, "Approval disabled") {
+			t.Fatalf("fixture unexpectedly exposed the diff with the key panel open:\n%s", plain)
+		}
+		m, cmd := updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if agent.approveCalled || m.interaction.PendingCount() != 1 || m.keyPanelOpen {
+			t.Fatal("the key that dismissed the panel approved a newly revealed mutation")
+		}
+		if plain := stripANSI(m.View().Content); !strings.Contains(plain, "Change config.yaml") {
+			t.Fatalf("panel dismissal did not reveal the mutation disclosure:\n%s", plain)
+		}
+		m, cmd = updateScreen(t, m, runeKey('y'))
+		drainCmd(t, cmd)
+		if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+			t.Fatal("approval was not re-enabled on the next key after diff disclosure")
+		}
+	})
+}
+
+func TestModernPermissionTitleIsBoundedToThePlannedRow(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name             string
+		toolName         string
+		height           int
+		requirementCount int
+		complete         bool
+	}{
+		{name: "long ASCII complete", toolName: strings.Repeat("LongToolName", 40), height: 20, complete: true},
+		{name: "wide sanitized complete", toolName: strings.Repeat("工具", 30) + "\x1b[2J", height: 20, complete: true},
+		{name: "long ASCII incomplete", toolName: strings.Repeat("LongToolName", 40), height: 20, requirementCount: 7},
+		{name: "wide sanitized incomplete", toolName: strings.Repeat("工具", 30) + "\x1b[2J", height: 20, requirementCount: 7},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const width = 40
+			loopID := callID(0xB1)
+			agent := &fakeAgent{activeLoopID: loopID}
+			m := newScreenSized(t, agent, width, tt.height)
+			requirements := []tool.Requirement{requirement("execute command", "allow command")}
+			if tt.requirementCount > 0 {
+				requirements = permissionWithAuthorizationRows(tt.requirementCount).Requirements
+			}
+			m = feed(t, m, event.PermissionRequested{
+				Header: hdr(loopID), ToolExecutionID: callID(0xB2),
+				Request: toolRequest(tt.toolName, "run", requirements...),
+			})
+			view := m.View().Content
+			for surface, rendered := range map[string]string{"bottom card": m.bottomBoxView(), "screen": view} {
+				for i, line := range strings.Split(rendered, "\n") {
+					if got := ansi.StringWidth(line); got > width {
+						t.Fatalf("%s line %d is %d cells, want <= %d: %q", surface, i, got, width, line)
+					}
+				}
+			}
+			if strings.Contains(view, "\x1b[2J") {
+				t.Fatal("tool title emitted an untrusted terminal control")
+			}
+			plain := stripANSI(view)
+			if titleLine := strings.Split(stripANSI(m.bottomBoxView()), "\n")[1]; !strings.Contains(titleLine, "…") {
+				t.Fatalf("long title was not explicitly truncated to its planned row: %q", titleLine)
+			}
+			if tt.complete {
+				for _, want := range []string{"Approve ", "execute command", "allow command", "[y] Approve", "[a] Approve always", "[n] Deny"} {
+					if !strings.Contains(plain, want) {
+						t.Fatalf("complete bounded-title frame lacks %q:\n%s", want, plain)
+					}
+				}
+				m, cmd := updateScreen(t, m, runeKey('y'))
+				drainCmd(t, cmd)
+				if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+					t.Fatal("bounded complete title did not leave its visible gate approvable")
+				}
+			} else {
+				if !strings.Contains(plain, "Approval disabled") || strings.Contains(plain, "[y]") {
+					t.Fatalf("incomplete bounded-title frame did not fail closed:\n%s", plain)
+				}
+				m, cmd := updateScreen(t, m, runeKey('y'))
+				drainCmd(t, cmd)
+				if agent.approveCalled || m.interaction.PendingCount() != 1 {
+					t.Fatal("long title enabled approval in an incomplete frame")
+				}
+			}
+		})
+	}
+}
+
+func TestModernPermissionWithoutIntelligibleControlsIsDenyOnly(t *testing.T) {
+	t.Parallel()
+
+	// A permission row needs the five cells of " [k] " plus enough label cells to
+	// distinguish the shared "Approve" action from "Approve always…". The latter's
+	// shortest whole-word distinguishing rendering is "Approve always…" (15 cells).
+	firstUsableWidth := cardRailWidth + keyRowGap + ansi.StringWidth("[a]") + ansi.StringWidth("Approve always…")
+	for _, width := range []int{0, 1, cardRailWidth, cardRailWidth + 1, firstUsableWidth - 1} {
+		width := width
+		for _, tt := range []struct {
+			name     string
+			keys     []tea.KeyPressMsg
+			wantDeny bool
+		}{
+			{name: "y is inert", keys: []tea.KeyPressMsg{runeKey('y')}},
+			{name: "a is inert", keys: []tea.KeyPressMsg{runeKey('a')}},
+			{name: "up is inert", keys: []tea.KeyPressMsg{upKey()}},
+			{name: "down is inert", keys: []tea.KeyPressMsg{downKey()}},
+			{name: "enter denies", keys: []tea.KeyPressMsg{enterKey()}, wantDeny: true},
+			{name: "n denies", keys: []tea.KeyPressMsg{runeKey('n')}, wantDeny: true},
+			{name: "escape denies", keys: []tea.KeyPressMsg{{Code: tea.KeyEsc}}, wantDeny: true},
+		} {
+			tt := tt
+			t.Run(fmt.Sprintf("width_%d/%s", width, tt.name), func(t *testing.T) {
+				t.Parallel()
+				loopID := callID(byte(0xF1 + width))
+				agent := &fakeAgent{activeLoopID: loopID}
+				m := newScreenSized(t, agent, width, 200)
+				m = feed(t, m, event.PermissionRequested{
+					Header: hdr(loopID), ToolExecutionID: callID(0xF4),
+					Request: toolRequest("T", "s", requirement("r", "c")),
+				})
+
+				p := *m.activePrompt()
+				plan := planPermissionCard(p, width, 1, false, m.permissionCardHeightBudget())
+				if plan.authorizationComplete || m.permissionAuthorizationComplete() {
+					t.Fatal("permission plan treated a frame without intelligible approval controls as complete")
+				}
+
+				var cmd tea.Cmd
+				for _, key := range tt.keys {
+					m, cmd = updateScreen(t, m, key)
+				}
+				drainCmd(t, cmd)
+				if agent.approveCalled {
+					t.Fatal("unusable permission frame dispatched Approve")
+				}
+				if tt.wantDeny {
+					if !agent.denyCalled || m.interaction.PendingCount() != 0 {
+						t.Fatal("deny key did not resolve the unusable permission gate")
+					}
+				} else if agent.denyCalled || m.interaction.PendingCount() != 1 {
+					t.Fatal("navigation/approval key resolved the unusable permission gate")
+				}
+			})
+		}
+	}
+}
+
+func TestModernPermissionResizeToUnintelligibleControlsInvalidatesApproveSelection(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(0xF5)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, 80, 48)
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xF6),
+		Request: toolRequest("T", "s", requirement("r", "c")),
+	})
+	m, _ = updateScreen(t, m, upKey()) // deny -> approve-always
+	lastUnusableWidth := cardRailWidth + keyRowGap + ansi.StringWidth("[a]") + ansi.StringWidth("Approve always…") - 1
+	m, _ = updateScreen(t, m, tea.WindowSizeMsg{Width: lastUnusableWidth, Height: 200})
+	m, cmd := updateScreen(t, m, enterKey())
+	drainCmd(t, cmd)
+	if agent.approveCalled || !agent.denyCalled || m.interaction.PendingCount() != 0 {
+		t.Fatal("enter on a stale approve selection after rail-only resize did not deny")
+	}
+}
+
+func TestModernPermissionFirstUsableWidthUsesNormalCompleteness(t *testing.T) {
+	t.Parallel()
+
+	width := cardRailWidth + keyRowGap + ansi.StringWidth("[a]") + ansi.StringWidth("Approve always…")
+	loopID := callID(0xF7)
+	agent := &fakeAgent{activeLoopID: loopID}
+	m := newScreenSized(t, agent, width, 200)
+	m = feed(t, m, event.PermissionRequested{
+		Header: hdr(loopID), ToolExecutionID: callID(0xF8),
+		Request: toolRequest("T", "s", requirement("r", "c")),
+	})
+	if !m.permissionAuthorizationComplete() {
+		t.Fatal("first width with intelligible approval controls was not complete")
+	}
+	plain := stripANSI(m.View().Content)
+	for _, control := range []string{"[y] Approve", "[a] Approve always…", "[n] Deny"} {
+		if !strings.Contains(plain, control) {
+			t.Fatalf("first usable width lacks intelligible control %q:\n%s", control, plain)
+		}
+	}
+	m, cmd := updateScreen(t, m, runeKey('y'))
+	drainCmd(t, cmd)
+	if !agent.approveCalled || m.interaction.PendingCount() != 0 {
+		t.Fatal("complete width-above-rail permission gate was not approvable")
+	}
+}
+
 // TestModernPrintableGoesToComposer pins the key-routing precedence: a printable key reaches
 // the composer (appended to its value) and does NOT scroll the viewport.
 func TestModernPrintableGoesToComposer(t *testing.T) {
@@ -579,13 +1350,14 @@ func TestModernCompletionTrayMouseMotionSelectsRow(t *testing.T) {
 			want:     "second",
 		},
 		{
-			// The session tray adds its three-row title/count/spacer header before the
-			// two-row records and their spacer, so the SECOND record starts six rows down.
+			// The session tray adds its four-row top-spacer/title/count/separator header
+			// before the two-row records and their spacer, so the SECOND record starts
+			// seven rows down.
 			// That arithmetic is exactly what a shared row-to-item mapping has to get
 			// right, and this is the only test that exercises the session branch of
 			// trayMouse.
 			name: "session record",
-			row:  6,
+			row:  7,
 			open: func(m *Screen) {
 				m.sessionTray = components.NewSessionComplete([]components.SessionItem{
 					{ID: "first", Title: "First", LastUsed: "2026-07-15", ShortID: "aaaaaaaa"},
@@ -1938,6 +2710,177 @@ func TestModernRestoreSkipsBufferedDeliveryAlreadyInReplay(t *testing.T) {
 	if len(committed) != 1 || committedText(committed[0]) != "once" {
 		t.Fatalf("committed duplicate replay = %+v, want one row", committed)
 	}
+}
+
+func TestModernRestoreReconcilesLiveOnlyPermissionPreview(t *testing.T) {
+	t.Parallel()
+
+	loopID, eventID, toolExecutionID := callID(0xD1), callID(0xD2), callID(0xD3)
+	h := hdr(loopID)
+	h.EventID = eventID
+	durable := event.PermissionRequested{
+		Header:          h,
+		ToolExecutionID: toolExecutionID,
+		Request:         toolRequest("EditFile", "durable edit summary"),
+	}
+	preview := &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+		Creates:     true,
+	}
+	live := durable
+	live.Request = toolRequest("EditFile", "live duplicate must not replace durable state")
+	live.Preview = preview
+
+	agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+	m := newScreenSized(t, agent, 80, 24)
+	m.restoring = true
+	msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+	m = feed(t, m, live)
+	m = feedRestored(t, m, msg)
+
+	if got := m.interaction.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount = %d, want exactly one restored permission prompt", got)
+	}
+	p := m.activePrompt()
+	if p == nil {
+		t.Fatal("ActivePrompt = nil, want restored permission prompt")
+	}
+	if p.DiffPath != preview.Path || p.Diff != preview.UnifiedDiff || p.DiffCreates != preview.Creates {
+		t.Fatalf("live-only preview was lost at restore barrier: %+v", *p)
+	}
+	if p.Summary != durable.Request.Summary {
+		t.Errorf("Summary = %q, want durable %q; reconciliation replayed journaled state", p.Summary, durable.Request.Summary)
+	}
+	restoredPrompt := msg.interaction.ActivePrompt()
+	if restoredPrompt == nil || restoredPrompt.Diff != "" || restoredPrompt.DiffPath != "" || restoredPrompt.DiffCreates {
+		t.Fatalf("reconciliation mutated the caller's restored interaction: %+v", restoredPrompt)
+	}
+	_, transcriptLive := m.transcript.projectionFor(loopID)
+	if len(transcriptLive.gateDecisions) != 1 || len(transcriptLive.gateDescriptions) != 1 {
+		t.Fatalf("permission transcript state duplicated: decisions=%+v descriptions=%+v", transcriptLive.gateDecisions, transcriptLive.gateDescriptions)
+	}
+	if got := transcriptLive.gateDescriptions[toolExecutionID]; got != durable.Request.Summary {
+		t.Errorf("gate description = %q, want durable %q", got, durable.Request.Summary)
+	}
+
+	preview.Path = "mutated.yaml"
+	preview.UnifiedDiff = "mutated"
+	preview.Creates = false
+	if p.DiffPath != "config.yaml" || p.Diff != "@@ -1 +1 @@\n-old\n+new\n" || !p.DiffCreates {
+		t.Fatalf("prompt retained the caller's preview pointer: %+v", *p)
+	}
+}
+
+func TestModernRestorePermissionPreviewReconciliationKeepsFirst(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		buffered []*tool.MutationPreview
+	}{
+		{
+			name: "exact live duplicate remains one prompt",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first"},
+				{Path: "first.go", UnifiedDiff: "first"},
+			},
+		},
+		{
+			name: "nil duplicate cannot erase first preview",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first", Creates: true},
+				nil,
+			},
+		},
+		{
+			name: "conflicting duplicate cannot replace first preview",
+			buffered: []*tool.MutationPreview{
+				{Path: "first.go", UnifiedDiff: "first", Creates: true},
+				{Path: "conflict.go", UnifiedDiff: "conflict"},
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			loopID := callID(byte(0xE0 + i))
+			h := hdr(loopID)
+			h.EventID = callID(byte(0xF0 + i))
+			durable := event.PermissionRequested{
+				Header:          h,
+				ToolExecutionID: callID(0xD4),
+				Request:         toolRequest("EditFile", "durable"),
+			}
+			agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+			m := newScreenSized(t, agent, 80, 24)
+			m.restoring = true
+			msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+			for _, preview := range tt.buffered {
+				live := durable
+				live.Preview = preview
+				m = feed(t, m, live)
+			}
+			m = feedRestored(t, m, msg)
+
+			if got := m.interaction.PendingCount(); got != 1 {
+				t.Fatalf("PendingCount = %d, want exactly one", got)
+			}
+			p := m.activePrompt()
+			first := tt.buffered[0]
+			if p == nil || p.DiffPath != first.Path || p.Diff != first.UnifiedDiff || p.DiffCreates != first.Creates {
+				t.Fatalf("active prompt = %+v, want first preview %+v", p, first)
+			}
+		})
+	}
+}
+
+func TestModernRestorePreviewReconciliationLeavesOtherGateKindsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	t.Run("AskUser duplicate retains durable prompt", func(t *testing.T) {
+		t.Parallel()
+
+		loopID := callID(0xC1)
+		h := hdr(loopID)
+		h.EventID = callID(0xC2)
+		durable := event.UserInputRequested{Header: h, ToolExecutionID: callID(0xC3), Question: "durable question"}
+		live := durable
+		live.Question = "live duplicate"
+		agent := &fakeAgent{activeLoopID: loopID, backlog: []event.Event{durable}}
+		m := newScreenSized(t, agent, 80, 24)
+		m.restoring = true
+		msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+		m = feed(t, m, live)
+		m = feedRestored(t, m, msg)
+
+		p := m.activePrompt()
+		if m.interaction.PendingCount() != 1 || p == nil || p.Question != durable.Question {
+			t.Fatalf("AskUser overlap changed: pending=%d prompt=%+v", m.interaction.PendingCount(), p)
+		}
+	})
+
+	t.Run("form duplicate retains durable prompt", func(t *testing.T) {
+		t.Parallel()
+
+		durable := formGateOpened(formSchema(), gate.FormActionAccept)
+		durable.EventID = callID(0xC4)
+		live := durable
+		live.Gate.Prompt.Title = "live duplicate"
+		agent := &fakeAgent{activeLoopID: formLoopID, backlog: []event.Event{durable}}
+		m := newScreenSized(t, agent, 80, 24)
+		m.restoring = true
+		msg := runRestoreCmd(t, restoreBacklogCmd(context.Background(), agent))
+		m = feed(t, m, live)
+		m = feedRestored(t, m, msg)
+
+		p := m.activePrompt()
+		if m.interaction.PendingCount() != 1 || p == nil || p.Title != durable.Gate.Prompt.Title {
+			t.Fatalf("form overlap changed: pending=%d prompt=%+v", m.interaction.PendingCount(), p)
+		}
+	})
 }
 
 func TestModernRestoreDeduplicatesCompactionCompletionOverlap(t *testing.T) {

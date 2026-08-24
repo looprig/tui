@@ -1,0 +1,19 @@
+▌                                                           
+▌ Approve EditFile?                                         
+▌                                                           
+▌ update the workspace configuration                        
+▌                                                           
+▌ Change config.yaml                                        
+▌ @@ -1,2 +1,2 @@                                           
+▌ -name: old                                                
+▌ -enabled: false                                           
+▌ +name: looprig                                            
+▌ +enabled: true                                            
+▌                                                           
+▌ • write config.yaml                                       
+▌     ↳ always allow writes under the workspace             
+▌                                                           
+▌  [y] Approve                                              
+▌  [a] Approve always for this workspace                    
+▌  [n] Deny                                                 
+▌                                                           

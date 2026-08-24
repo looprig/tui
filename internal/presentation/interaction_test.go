@@ -179,6 +179,29 @@ func TestInteractionEnqueuePermission(t *testing.T) {
 	}
 }
 
+func TestInteractionEnqueuePermissionCarriesLivePreview(t *testing.T) {
+	t.Parallel()
+
+	preview := &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+		Creates:     true,
+	}
+	m := newInteractionModel().ApplyEvent(event.PermissionRequested{
+		ToolExecutionID: callID(1),
+		Request:         bashPermission("go build"),
+		Preview:         preview,
+	})
+
+	p := m.ActivePrompt()
+	if p == nil {
+		t.Fatal("ActivePrompt = nil, want permission prompt")
+	}
+	if p.DiffPath != preview.Path || p.Diff != preview.UnifiedDiff || !p.DiffCreates {
+		t.Fatalf("active prompt dropped live preview: %+v", *p)
+	}
+}
+
 // TestInteractionEnqueueUserInput covers enqueuing a UserInputRequested event:
 // a promptUserInput is appended carrying the Question/Choices, freeText reflects
 // whether choices exist, and the mode switches to the head's mode.
@@ -1221,7 +1244,7 @@ func TestPermissionCursorIsNotTheChoiceCursor(t *testing.T) {
 	// A permission prompt that also carries choices (the shape a shared field would make
 	// dangerous). Moving the approval cursor must not touch the choice cursor, and vice
 	// versa.
-	p := promptFromPermission(callID(1), bashPermission("go build"))
+	p := promptFromPermission(callID(1), bashPermission("go build"), nil)
 	p.Choices = []string{"alpha"}
 
 	before := p.selected

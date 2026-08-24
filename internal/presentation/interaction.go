@@ -120,7 +120,7 @@ func (m interactionModel) pendingGateLoops() map[uuid.UUID]bool {
 func (m interactionModel) ApplyEvent(ev event.Event) interactionModel {
 	switch ev := ev.(type) {
 	case event.PermissionRequested:
-		m.enqueueForLoop(promptFromPermission(ev.ToolExecutionID, ev.Request), ev.EventHeader().LoopID)
+		m.enqueueForLoop(promptFromPermission(ev.ToolExecutionID, ev.Request, ev.Preview), ev.EventHeader().LoopID)
 	case event.UserInputRequested:
 		m.enqueueForLoop(promptFromUserInput(ev.ToolExecutionID, ev.Question, ev.Choices), ev.EventHeader().LoopID)
 	case event.GateOpened:
@@ -154,6 +154,35 @@ func (m interactionModel) ApplyEvent(ev event.Event) interactionModel {
 func (m *interactionModel) enqueueForLoop(p prompt, loopID uuid.UUID) {
 	p.LoopID = loopID
 	m.enqueue(p)
+}
+
+// reconcilePermissionPreview merges the one live-only field that an enduring
+// PermissionRequested cannot recover from replay. It is deliberately narrower than
+// enqueue: restored request text and every other durable projection remain authoritative.
+//
+// The first non-empty preview wins. A nil, empty, repeated, or conflicting later
+// observation cannot erase or replace what the user is already reviewing. The pending
+// slice is cloned before mutation to preserve interactionModel's value-copy contract.
+func (m interactionModel) reconcilePermissionPreview(ev event.PermissionRequested) interactionModel {
+	if ev.Preview == nil || (ev.Preview.Path == "" && ev.Preview.UnifiedDiff == "" && !ev.Preview.Creates) {
+		return m
+	}
+	loopID := ev.EventHeader().LoopID
+	for i := range m.pending {
+		p := m.pending[i]
+		if p.Kind != promptPermission || p.LoopID != loopID || p.ToolExecutionID != ev.ToolExecutionID {
+			continue
+		}
+		if p.Diff != "" || p.DiffPath != "" || p.DiffCreates {
+			return m
+		}
+		m.pending = cloneHead(m.pending)
+		m.pending[i].Diff = ev.Preview.UnifiedDiff
+		m.pending[i].DiffPath = ev.Preview.Path
+		m.pending[i].DiffCreates = ev.Preview.Creates
+		return m
+	}
+	return m
 }
 
 // enqueue appends p unless the SAME gate is already pending (append-once: a re-delivered gate
@@ -554,6 +583,18 @@ func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, 
 	case "a":
 		return m.resolveApproval(head, gate.ApprovalApproveAlwaysWorkspace)
 	case "n":
+		return m.resolveApproval(head, gate.ApprovalDeny)
+	}
+	return m, noop
+}
+
+// permissionDenyOnlyKey routes a permission card whose complete authorization context
+// does not fit the current frame. The visible control is Deny, so Enter resolves Deny
+// regardless of a cursor retained from a larger frame. Approval accelerators and arrows
+// are inert until Screen can render every requirement and candidate again.
+func (m interactionModel) permissionDenyOnlyKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
+	head := *m.ActivePrompt()
+	if msg.Code == tea.KeyEsc || isEnter(msg) || accelerator(msg) == "n" {
 		return m.resolveApproval(head, gate.ApprovalDeny)
 	}
 	return m, noop
