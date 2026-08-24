@@ -9,14 +9,10 @@ import (
 
 type trayRowKind uint8
 
-const (
-	// trayRowChoice is the ordinary interactive completion row. It is the zero value so
-	// every existing tray literal remains selectable without carrying extra boilerplate.
-	trayRowChoice trayRowKind = iota
-	// trayRowHeading is visual group chrome, such as a model provider. It renders in the
-	// panel but never takes the cursor or dispatches a selection.
-	trayRowHeading
-)
+// trayRowHeading is visual group chrome, such as a model provider. It renders in the
+// panel but never takes the cursor or dispatches a selection. Ordinary interactive rows
+// keep the trayRowKind zero value, so existing literals need no extra boilerplate.
+const trayRowHeading trayRowKind = 1
 
 type completionTrayRow struct {
 	primary   string
