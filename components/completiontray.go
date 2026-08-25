@@ -14,6 +14,13 @@ type trayRowKind uint8
 // keep the trayRowKind zero value, so existing literals need no extra boilerplate.
 const trayRowHeading trayRowKind = 1
 
+// trayRowSpacer is a blank rail-carrying row: the breathing room BETWEEN a group's last
+// option and the next group's heading. It is a row rather than a delegate pad because a
+// tray's spacing is uniform per entry (see trayLayout.PadV) while this gap falls only at a
+// group boundary -- and because it must carry the rail, so the panel's left edge runs
+// unbroken through the gap. Like a heading it never takes the cursor.
+const trayRowSpacer trayRowKind = 2
+
 type completionTrayRow struct {
 	primary   string
 	secondary string
@@ -92,29 +99,37 @@ func newTrayRowRender(rows []completionTrayRow, width, inset int) trayRowRender 
 
 // row composes one PHYSICAL row -- rail, inset, body -- and paints its background.
 //
-// The rail is the same neutral gray on every row, selected or not. It is the tray's left
-// edge, not a second cursor: the band is the cursor, so a highlighted rail would say the
-// same thing twice and break the edge's continuity down the tray. It is moot on the selected
-// row in any case -- the shared fill is light, so styles.SelectedRow strips inner styling and
-// re-renders the row near-black, discarding whatever color were chosen here.
+// The rail is the tray's left edge, not a second cursor: the band is the cursor. On an
+// ordinary row it is the same neutral gray throughout, and on the SELECTED row it is handed
+// to styles.SelectedRowWithRail, which redraws it in the band's own color. Either way the
+// edge reads as one continuous line down the panel and never restates the selection.
 //
 // The clamp happens BEFORE the band because styles.SelectedRow pads to width but never
 // truncates; that half of the contract is the caller's. It clamps short of width by the
 // inset, so nothing is ever drawn in the trailing inset columns -- while the FILL still runs
-// the full width, so the tray stays one solid block rather than a ragged one.
+// the full width, so the tray stays one solid block rather than a ragged one. The rail's own
+// column is excluded from the body's budget, since the rail is composed beside the body
+// rather than truncated with it.
 func (r trayRowRender) row(body string, selected bool) string {
-	line := styles.AccentBarStyle.Render(styles.AccentBar) + strings.Repeat(" ", 1+r.inset) + body
-	line = ansi.Truncate(line, max(0, r.width-r.inset), "")
-	if selected {
-		return styles.SelectedRow(line, r.width)
+	avail := max(0, r.width-r.inset)
+	if avail <= 0 {
+		return styles.FillLineBackgroundWith("", r.width, r.panelOpen, r.panelReset)
 	}
+	content := ansi.Truncate(strings.Repeat(" ", 1+r.inset)+body, max(0, avail-ansi.StringWidth(styles.AccentBar)), "")
+	if selected {
+		return styles.SelectedRowWithRail(styles.AccentBar, content, r.width)
+	}
+	line := styles.AccentBarStyle.Render(styles.AccentBar) + content
 	return styles.FillLineBackgroundWith(line, r.width, r.panelOpen, r.panelReset)
 }
 
 // line renders a whole tray row: the primary, padded out to the shared column, then the
 // faint secondary beside it.
 func (r trayRowRender) line(row completionTrayRow, selected bool) string {
-	if row.kind == trayRowHeading {
+	switch row.kind {
+	case trayRowSpacer:
+		return r.row("", false)
+	case trayRowHeading:
 		return r.row(styles.HeadlineStyle.Render(row.primary), false)
 	}
 	body := row.primary

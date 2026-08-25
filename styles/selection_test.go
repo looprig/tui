@@ -267,3 +267,49 @@ func TestSelectedRowNilFillReturnsRowUnchanged(t *testing.T) {
 		t.Errorf("nil fill = %q, want the row unchanged %q", got, row)
 	}
 }
+
+// TestSelectedRowWithRailKeepsTheRailInTheFillColor pins the fix for a rail that read as a
+// second cursor: on the light fill the row's own styling is stripped to near-black, and a
+// rail carried inside that row went black with it — a dark mark down the left of the band.
+// The rail is drawn in the FILL's color instead, so it disappears into the band while the
+// panel's edge stays continuous on the rows above and below.
+func TestSelectedRowWithRailKeepsTheRailInTheFillColor(t *testing.T) {
+	t.Parallel()
+
+	if selectionIsDark(selectionBg) {
+		t.Fatal("configured selectionBg is dark, want light: this test pins the light branch")
+	}
+
+	const rail = "▌"
+	got := SelectedRowWithRail(AccentBarStyle.Render(rail), " opus-5", 20)
+
+	fillFG := openingSGR(t, lipgloss.NewStyle().Foreground(selectionBg))
+	if !strings.Contains(got, fillFG+rail) {
+		t.Errorf("rail is not drawn in the fill's color %q; got %q", fillFG, got)
+	}
+	if sgr := nearBlackSGR(t); strings.Contains(got, sgr+rail) {
+		t.Errorf("rail was re-rendered near-black like the body; got %q", got)
+	}
+	if sgr := openingSGR(t, AccentBarStyle); strings.Contains(got, sgr) {
+		t.Errorf("rail kept its own unselected color %q on the band; got %q", sgr, got)
+	}
+	if w := lipgloss.Width(got); w != 20 {
+		t.Errorf("width = %d, want 20 (the rail counts toward the band)", w)
+	}
+	if visible := strings.TrimRight(stripANSI(got), " "); visible != rail+" opus-5" {
+		t.Errorf("visible text = %q, want %q", visible, rail+" opus-5")
+	}
+	assertNoCursorGlyph(t, got)
+	assertWellFormedEscapes(t, got)
+}
+
+// TestSelectedRowIsTheRaillessCase pins that SelectedRow is SelectedRowWithRail's empty-rail
+// form rather than a second implementation that could drift from it.
+func TestSelectedRowIsTheRaillessCase(t *testing.T) {
+	t.Parallel()
+
+	row := CardKeyStyle.Render("[1]") + " Approve once"
+	if got, want := SelectedRow(row, 30), SelectedRowWithRail("", row, 30); got != want {
+		t.Errorf("SelectedRow = %q, want the empty-rail form %q", got, want)
+	}
+}

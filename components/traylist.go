@@ -75,7 +75,7 @@ type trayItem struct {
 	kind               trayRowKind
 }
 
-func (t trayItem) selectable() bool { return t.kind != trayRowHeading }
+func (t trayItem) selectable() bool { return t.kind != trayRowHeading && t.kind != trayRowSpacer }
 
 // FilterValue is the PRIMARY only, so list.MatchesForItem's rune indices map 1:1 onto the
 // column trayDelegate underlines. Including the secondary would let a match land on a rune

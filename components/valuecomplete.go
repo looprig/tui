@@ -73,7 +73,7 @@ func newValueComplete(items []ValueItem, query string, grouped bool) *ValueCompl
 	// terminal's width at render time, so there is no width worth guessing here.
 	tray := newTrayList(rows, 0, trayLayout{})
 	if grouped {
-		tray.SetFilterFunc(modelFilter(choices, rowToItem))
+		tray.SetFilterFunc(modelFilter(choices, rows, rowToItem))
 	} else {
 		tray.SetFilterFunc(valueFilter(choices))
 	}
@@ -112,9 +112,16 @@ func groupedModelRows(items []ValueItem) ([]completionTrayRow, []int) {
 		groups[group].indices = append(groups[group].indices, i)
 	}
 
-	rows := make([]completionTrayRow, 0, len(items)+len(groups))
-	rowToItem := make([]int, 0, len(items)+len(groups))
+	rows := make([]completionTrayRow, 0, 2*len(groups)+len(items))
+	rowToItem := make([]int, 0, 2*len(groups)+len(items))
 	for _, group := range groups {
+		// A blank row separates the previous provider's models from this heading, so the
+		// groups read as blocks rather than one unbroken column. Never before the FIRST
+		// heading: that gap would sit under the tray header, which already ends in one.
+		if len(rows) > 0 {
+			rows = append(rows, completionTrayRow{kind: trayRowSpacer})
+			rowToItem = append(rowToItem, -1)
+		}
 		rows = append(rows, completionTrayRow{primary: strings.ToUpper(group.name), filter: group.name, kind: trayRowHeading})
 		rowToItem = append(rowToItem, -1)
 		for _, index := range group.indices {
@@ -167,17 +174,28 @@ func valueFilter(items []ValueItem) list.FilterFunc {
 // modelFilter keeps provider headings only when that provider or one of its models matches.
 // A provider hit keeps its entire group, while name hits preserve useful underlines and alias
 // or opaque-ID hits deliberately carry no underline because those strings are not on the row.
-func modelFilter(items []ValueItem, rowToItem []int) list.FilterFunc {
+//
+// A group's leading spacer survives with it, EXCEPT when the group would be first in the
+// filtered projection: a gap above the topmost heading is a blank row hanging off the tray
+// header, not separation between anything.
+func modelFilter(items []ValueItem, rows []completionTrayRow, rowToItem []int) list.FilterFunc {
 	return func(term string, labels []string) []list.Rank {
 		var ranks []list.Rank
-		for start := 0; start < len(rowToItem); {
-			if rowToItem[start] >= 0 {
+		for start := 0; start < len(rows); {
+			if rows[start].kind != trayRowSpacer && rows[start].kind != trayRowHeading {
 				start++
 				continue
 			}
 			head := start
-			end := start + 1
-			for end < len(rowToItem) && rowToItem[end] >= 0 {
+			for head < len(rows) && rows[head].kind == trayRowSpacer {
+				head++
+			}
+			if head >= len(rows) || rows[head].kind != trayRowHeading {
+				start = head // a spacer with no heading behind it belongs to no group
+				continue
+			}
+			end := head + 1
+			for end < len(rows) && rowToItem[end] >= 0 {
 				end++
 			}
 			providerMatch := len(list.DefaultFilter(term, []string{labels[head]})) > 0
@@ -195,6 +213,11 @@ func modelFilter(items []ValueItem, rowToItem []int) list.FilterFunc {
 				}
 			}
 			if len(groupRanks) > 0 {
+				if len(ranks) > 0 {
+					for row := start; row < head; row++ {
+						ranks = append(ranks, list.Rank{Index: row})
+					}
+				}
 				ranks = append(ranks, list.Rank{Index: head})
 				ranks = append(ranks, groupRanks...)
 			}

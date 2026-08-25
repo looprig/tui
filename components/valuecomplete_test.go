@@ -1,6 +1,7 @@
 package components
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,15 +63,23 @@ func TestModelCompleteGroupsProvidersWithoutSelectingThem(t *testing.T) {
 	if !strings.Contains(plain[1], "MODELS") || !strings.Contains(plain[2], "2 models") {
 		t.Fatalf("model header = %q, want a top spacer then bold MODELS with a muted count", plain[:3])
 	}
-	if !strings.Contains(plain[4], "OPENAI") || !strings.Contains(plain[6], "ANTHROPIC") {
+	if !strings.Contains(plain[4], "OPENAI") || !strings.Contains(plain[7], "ANTHROPIC") {
 		t.Fatalf("provider headings = %q, want OPENAI then ANTHROPIC", plain)
 	}
 	if !strings.Contains(plain[5], "GPT-5.4") || !strings.Contains(plain[5], "coding and reasoning") {
 		t.Errorf("OpenAI model row = %q, want the compact name and description", plain[5])
 	}
+	// The gap between one provider's last model and the next heading. It is a rail-carrying
+	// row, not an empty string: the panel's left edge runs unbroken through the gap.
+	if body := strings.TrimSpace(strings.TrimPrefix(plain[6], "▌")); body != "" {
+		t.Errorf("row between the groups = %q, want a blank rail row separating them", plain[6])
+	}
 
 	if tray.SelectWindowRow(4, 10) {
 		t.Fatal("provider heading selection reported a move, want headings inert")
+	}
+	if tray.SelectWindowRow(6, 10) {
+		t.Fatal("group spacer selection reported a move, want spacers inert")
 	}
 	tray.Down()
 	if got := tray.Selected().ID; got != "claude-sonnet-4.5" {
@@ -84,6 +93,52 @@ func TestModelCompleteGroupsProvidersWithoutSelectingThem(t *testing.T) {
 	tray.Filter("sonnet")
 	if got := tray.Selected().ID; got != "claude-sonnet-4.5" {
 		t.Errorf("alias filter selected %q, want claude-sonnet-4.5", got)
+	}
+}
+
+// TestModelCompleteGroupGapsSurviveFiltering pins where the group gap goes once a filter has
+// dropped rows: it stays BETWEEN two surviving groups, and it is dropped above whichever
+// group ends up first, where it would only hang a blank row off the tray header.
+func TestModelCompleteGroupGapsSurviveFiltering(t *testing.T) {
+	t.Parallel()
+
+	tray := NewModelComplete([]ValueItem{
+		// No descriptions: this test is about which ROWS the projection contains, so the
+		// rows are compared whole rather than searched for a substring.
+		{ID: "gpt-5.4", Provider: "OpenAI", Label: "GPT-5.4"},
+		{ID: "claude-sonnet-4.5", Provider: "Anthropic", Label: "Claude Sonnet 4.5"},
+		{ID: "claude-opus-5", Provider: "Anthropic", Label: "Claude Opus 5"},
+	})
+	if tray == nil {
+		t.Fatal("NewModelComplete() = nil, want three choices")
+	}
+
+	body := func() []string {
+		lines := strings.Split(tray.ViewWindow(100, 12), "\n")[trayHeaderHeight:]
+		plain := make([]string, 0, len(lines))
+		for _, line := range lines {
+			plain = append(plain, strings.TrimSpace(strings.TrimPrefix(ansi.Strip(line), "▌")))
+		}
+		return plain
+	}
+
+	// "claude" matches both Anthropic models and nothing in the OpenAI group, so the
+	// surviving group is now first: its leading gap goes with the group above it.
+	tray.Filter("claude")
+	if got, want := body(), []string{"ANTHROPIC", "Claude Sonnet 4.5", "Claude Opus 5"}; !slices.Equal(got, want) {
+		t.Errorf("filtered tray = %q, want no leading gap above the first group %q", got, want)
+	}
+
+	// Both groups survive "5", so the gap between them is back.
+	tray.Filter("5")
+	if got, want := body(), []string{"OPENAI", "GPT-5.4", "", "ANTHROPIC", "Claude Sonnet 4.5", "Claude Opus 5"}; !slices.Equal(got, want) {
+		t.Errorf("filtered tray = %q, want a gap between the two groups %q", got, want)
+	}
+
+	// Clearing the filter restores the unfiltered projection, gap included.
+	tray.Filter("")
+	if got, want := body(), []string{"OPENAI", "GPT-5.4", "", "ANTHROPIC", "Claude Sonnet 4.5", "Claude Opus 5"}; !slices.Equal(got, want) {
+		t.Errorf("unfiltered tray = %q, want %q", got, want)
 	}
 }
 

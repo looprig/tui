@@ -29,11 +29,12 @@ func selectedBandOpen(t *testing.T) string {
 // every unintended pixel change loud, not to assert that this particular escape soup is
 // beautiful. Regenerate it only alongside a deliberate, explained visual change.
 //
-// It has moved twice, both deliberately: the selected row went through styles.SelectedRow
-// (its fill and near-black text replaced the tray's own private fill and the bold blue
-// label), and "/clear" now carries two extra spaces so its description starts at the same
-// column as "/compact"'s.
-const trayGolden = "\x1b[48;2;36;37;39m\x1b[38;2;80;80;80m▌\x1b[m\x1b[48;2;36;37;39m /clear    \x1b[2mstart a new conversation\x1b[m\x1b[48;2;36;37;39m        \x1b[m\n\x1b[48;2;162;210;255m\x1b[38;2;16;16;16m▌ /compact  compact the current conversation\x1b[m\x1b[48;2;162;210;255m\x1b[m"
+// It has moved three times, all deliberately: the selected row went through
+// styles.SelectedRow (its fill and near-black text replaced the tray's own private fill and
+// the bold blue label), "/clear" gained two spaces so its description starts at the same
+// column as "/compact"'s, and the selected row's RAIL is now drawn in the band's own color
+// instead of the near-black the rest of that row is stripped to.
+const trayGolden = "\x1b[48;2;36;37;39m\x1b[38;2;80;80;80m▌\x1b[m\x1b[48;2;36;37;39m /clear    \x1b[2mstart a new conversation\x1b[m\x1b[48;2;36;37;39m        \x1b[m\n\x1b[48;2;162;210;255m\x1b[38;2;162;210;255m▌\x1b[m\x1b[48;2;162;210;255m\x1b[38;2;16;16;16m /compact  compact the current conversation\x1b[m\x1b[48;2;162;210;255m\x1b[m"
 
 func TestTrayRenderIsStable(t *testing.T) {
 	rows := []completionTrayRow{
