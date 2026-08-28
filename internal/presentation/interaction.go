@@ -548,28 +548,26 @@ func (m interactionModel) editFormField(msg tea.KeyPressMsg) (interactionModel, 
 }
 
 // permissionKey routes a key in modePermissionPrompt (head is the ONE combined
-// tool-preparation approval prompt). It offers exactly the three gate.ApprovalControls
-// actions: y approves (gate.ApprovalApprove), a approves-always-for-this-workspace
-// (gate.ApprovalApproveAlwaysWorkspace, persisting the displayed candidates), and n or
-// esc deny fail-secure (gate.ApprovalDeny). There is no session scope, user-global
-// scope, or per-capability sub-prompt. An approve/deny resolves the head, so it pops
-// optimistically; any other key re-renders.
+// tool-preparation approval prompt). It always offers y to approve and n/esc to deny.
+// It offers a to approve-always-for-this-workspace only when the prompt contains a reusable
+// candidate to persist. There is no session scope, user-global scope, or per-capability
+// sub-prompt. An approve/deny resolves the head, so it pops optimistically; any other key
+// re-renders.
 //
 // The actions are also SELECTABLE rows: ↑/↓ move the band (resolving nothing) and enter
 // resolves the banded row. The two paths are equals, not alternatives — y/a/n remain
 // one-keystroke accelerators rather than becoming labels on a list you must walk.
 //
 // Binding enter is the one key here that can resolve a gate the user never named, so the
-// cursor starts on Deny (promptFromPermission) and an out-of-range cursor denies
-// (approvalAt). A card can appear under a user's hands mid-typing; the blind keystroke must
-// block the call.
+// cursor starts on Approve (promptFromPermission). An out-of-range cursor still denies
+// (approvalAtHints), so malformed state cannot turn into approval.
 func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, uiAction) {
 	head := *m.ActivePrompt()
 	if msg.Code == tea.KeyEsc {
 		return m.resolveApproval(head, gate.ApprovalDeny)
 	}
 	if isEnter(msg) {
-		return m.resolveApproval(head, approvalAt(head.approval))
+		return m.resolveApproval(head, approvalAtHints(head.approval, head.approvalHints()))
 	}
 	switch msg.Code {
 	case tea.KeyUp:
@@ -581,7 +579,9 @@ func (m interactionModel) permissionKey(msg tea.KeyPressMsg) (interactionModel, 
 	case "y":
 		return m.resolveApproval(head, gate.ApprovalApprove)
 	case "a":
-		return m.resolveApproval(head, gate.ApprovalApproveAlwaysWorkspace)
+		if approvalHintIndex(head.approvalHints(), gate.ApprovalApproveAlwaysWorkspace) >= 0 {
+			return m.resolveApproval(head, gate.ApprovalApproveAlwaysWorkspace)
+		}
 	case "n":
 		return m.resolveApproval(head, gate.ApprovalDeny)
 	}

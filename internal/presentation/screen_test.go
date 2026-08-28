@@ -427,7 +427,7 @@ func TestModernCtrlTExpandsActivePermissionDiff(t *testing.T) {
 	if !strings.Contains(expanded, "+line-29") {
 		t.Errorf("ctrl+t did not reveal a later gate diff row:\n%s", expanded)
 	}
-	if !strings.Contains(expanded, "… 8 more lines") {
+	if !strings.Contains(expanded, "… 7 more lines") {
 		t.Errorf("terminal-limited expanded diff missing its truthful marker:\n%s", expanded)
 	}
 }

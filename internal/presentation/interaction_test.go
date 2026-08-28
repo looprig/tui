@@ -540,11 +540,11 @@ func TestInteractionClearPromptsForLoopDrainsAndRestores(t *testing.T) {
 // permission card is active. It must never reach the composer's submit path: a card
 // preempts the editor, and a half-written message must not be sent by a keystroke aimed at
 // the card. What it does do is resolve the gate the FAIL-SECURE way — the action cursor
-// starts on Deny, so an enter pressed blind blocks the tool call rather than running it.
+// starts on Approve, so enter resolves the selected action without reaching the composer.
 //
 // This assertion used to be "enter is a plain no-op here", which held only because
 // permission mode had no enter binding at all. Selectable action rows gave it one; the
-// invariants that survive are "never a submit" and "never a blind approve".
+// invariant that survives is "never a submit".
 func TestInteractionPromptModeEnterNeverSubmits(t *testing.T) {
 	t.Parallel()
 
@@ -559,8 +559,8 @@ func TestInteractionPromptModeEnterNeverSubmits(t *testing.T) {
 	if action.Kind == uiSubmit {
 		t.Fatalf("enter in permission mode submitted the composer: %q", action.Text)
 	}
-	if action.Kind != uiDeny {
-		t.Errorf("enter in permission mode Kind = %d, want uiDeny (%d) — a blind enter must fail secure", action.Kind, uiDeny)
+	if action.Kind != uiApprove || action.Approval != gate.ApprovalApprove {
+		t.Errorf("enter in permission mode action = %+v, want one-time approval", action)
 	}
 	if m.PendingCount() != 0 {
 		t.Errorf("PendingCount = %d, want 0 (enter resolved the gate)", m.PendingCount())
@@ -1167,10 +1167,8 @@ func TestInteractionChildGateRoutable(t *testing.T) {
 // ↑/↓ then pressing enter resolves the row the band names. Making the rows selectable must
 // not turn the accelerators into decoration.
 //
-// It also pins the fail-secure edges. The cursor starts on Deny, so enter pressed blind —
-// the realistic accident, a card appearing under a user's hands mid-typing — DENIES. ↑/↓
-// alone resolve nothing (no pop, no action), so navigating cannot approve by itself. And
-// esc still denies, unchanged.
+// It also pins the requested default and fail-secure edges. The cursor starts on Approve;
+// ↑/↓ alone resolve nothing (no pop, no action), and esc still denies.
 func TestInteractionPermissionSelectionAndAccelerators(t *testing.T) {
 	t.Parallel()
 
@@ -1183,18 +1181,18 @@ func TestInteractionPermissionSelectionAndAccelerators(t *testing.T) {
 		wantApproval gate.ApprovalAction
 		wantPop      bool
 	}{
-		{name: "enter on the default row denies (fail secure)", keys: []tea.KeyPressMsg{enterKey()}, wantKind: uiDeny, wantPop: true},
-		{name: "down from deny wraps to approve, enter approves", keys: []tea.KeyPressMsg{downKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
-		{name: "up from deny reaches approve-always, enter approves it", keys: []tea.KeyPressMsg{upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
-		{name: "a full down cycle returns to deny", keys: []tea.KeyPressMsg{downKey(), downKey(), downKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
+		{name: "enter on the default row approves", keys: []tea.KeyPressMsg{enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "down from approve reaches approve-always", keys: []tea.KeyPressMsg{downKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
+		{name: "up from approve wraps to deny", keys: []tea.KeyPressMsg{upKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
+		{name: "a full down cycle returns to approve", keys: []tea.KeyPressMsg{downKey(), downKey(), downKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
 		// ↑ PAST the top row. moveApproval normalizes Go's negative remainder with a double
 		// modulo, so index 0 - 1 wraps to the LAST row rather than to -1. Three ↑ reach the
 		// top and step off it; the fourth proves the wrap landed on a real row, because a
 		// single-modulo -1 would keep counting down into indices that name no row and
 		// approvalAt would deny every one of them. Three ↑ alone cannot show this: -1 and the
 		// correct index 2 both resolve to Deny.
-		{name: "up off the top wraps to the last row", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
-		{name: "up past the top keeps cycling real rows", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
+		{name: "three up movements complete a full cycle", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), enterKey()}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
+		{name: "up past a full cycle wraps to deny", keys: []tea.KeyPressMsg{upKey(), upKey(), upKey(), upKey(), enterKey()}, wantKind: uiDeny, wantPop: true},
 		{name: "navigating alone resolves nothing", keys: []tea.KeyPressMsg{downKey(), upKey(), downKey()}, wantKind: uiNoop, wantPop: false},
 		{name: "y still approves directly", keys: []tea.KeyPressMsg{runeKey('y')}, wantKind: uiApprove, wantApproval: gate.ApprovalApprove, wantPop: true},
 		{name: "a still approves always for this workspace directly", keys: []tea.KeyPressMsg{runeKey('a')}, wantKind: uiApprove, wantApproval: gate.ApprovalApproveAlwaysWorkspace, wantPop: true},
@@ -1231,6 +1229,29 @@ func TestInteractionPermissionSelectionAndAccelerators(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInteractionPermissionWithoutCandidatesDisablesWorkspaceApproval(t *testing.T) {
+	t.Parallel()
+
+	req := toolRequest("EditFile", "edit /tmp/config", requirement("write /tmp/config"))
+
+	t.Run("a is inert", func(t *testing.T) {
+		m := permissionModel(req)
+		m, action, _ := m.Update(runeKey('a'))
+		if action.Kind != uiNoop || m.PendingCount() != 1 {
+			t.Fatalf("a resolved a non-persistable gate: action=%+v pending=%d", action, m.PendingCount())
+		}
+	})
+
+	t.Run("navigation cycles only approve and deny", func(t *testing.T) {
+		m := permissionModel(req)
+		m, _, _ = m.Update(downKey())
+		m, action, _ := m.Update(enterKey())
+		if action.Kind != uiDeny || m.PendingCount() != 0 {
+			t.Fatalf("down from approve did not select deny: action=%+v pending=%d", action, m.PendingCount())
+		}
+	})
 }
 
 // TestPermissionCursorIsNotTheChoiceCursor pins that the permission action cursor and the

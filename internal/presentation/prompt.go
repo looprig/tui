@@ -222,19 +222,18 @@ type prompt struct {
 	// (tool.Requirement.Description / tool.RuleCandidate.Description) — the TUI never
 	// reconstructs a rule or parses tool arguments.
 	Requirements []requirementLine
-	// approval is the promptPermission cursor over approvalHints — which action row the
-	// card bands and enter resolves.
+	// approval is the promptPermission cursor over the prompt's available approval hints —
+	// which action row the card bands and enter resolves.
 	//
 	// It is deliberately NOT the promptUserInput `selected` cursor, even though only one
 	// of the two is ever live on a given prompt. The two have incompatible invariants:
-	// approval wraps modulo the three fixed approval actions, while selected is clamped
+	// approval wraps modulo the two or three available approval actions, while selected is clamped
 	// to len(Choices) and is then used as an UNCHECKED index into that slice
 	// (interaction.go choiceKey). Sharing one int would make the choice card's index
 	// safety a matter of convention — "the wrapping mover is never called on a prompt
 	// with Choices" — rather than of construction. One int is cheaper than that argument.
 	//
-	// promptFromPermission starts it on gate.ApprovalDeny, not at zero: the module's rule
-	// is fail secure, so the row a stray enter lands on must block the tool call.
+	// promptFromPermission starts it on gate.ApprovalApprove as the requested default.
 	approval int
 	Question string   // promptUserInput: the AskUser question
 	Choices  []string // promptUserInput: selectable choices (nil → free-text)
@@ -587,16 +586,14 @@ type requirementLine struct {
 // never reconstructs a rule or parses tool arguments. freeText is false: a permission
 // gate is never free-text.
 //
-// The action cursor starts on Deny rather than at index zero. Fail secure: the card can
-// appear under a user's hands mid-typing, so the row a blind enter resolves must be the
-// one that blocks the call.
+// The action cursor starts on Approve. A workspace-persistent action is available only
+// when at least one displayed candidate can actually be persisted.
 func promptFromPermission(callID uuid.UUID, req tool.Request, preview *tool.MutationPreview) prompt {
 	p := prompt{
 		ToolExecutionID: callID,
 		Kind:            promptPermission,
 		ToolName:        req.ToolName,
 		Summary:         req.Summary,
-		approval:        denyHintIndex(approvalHints),
 	}
 	if preview != nil {
 		p.Diff = preview.UnifiedDiff
@@ -610,6 +607,7 @@ func promptFromPermission(callID uuid.UUID, req tool.Request, preview *tool.Muta
 		}
 		p.Requirements = append(p.Requirements, line)
 	}
+	p.approval = approvalHintIndex(p.approvalHints(), gate.ApprovalApprove)
 	return p
 }
 
@@ -665,7 +663,7 @@ func (p *prompt) moveSelection(delta int) {
 // It is the up/down handler for permission mode; like moveSelection, the value-copy router
 // calls it on the head of the RETURNED model's freshly-cloned slice.
 func (p *prompt) moveApproval(delta int) {
-	n := len(approvalHints)
+	n := len(p.approvalHints())
 	if n == 0 {
 		p.approval = 0
 		return
@@ -679,10 +677,23 @@ func (p *prompt) moveApproval(delta int) {
 // defensiveness: an ambiguous cursor must block the tool call, and falling back to index 0
 // would instead resolve it to Approve.
 func approvalAt(i int) gate.ApprovalAction {
-	if i < 0 || i >= len(approvalHints) {
+	return approvalAtHints(i, approvalHints)
+}
+
+func approvalAtHints(i int, hints []approvalHint) gate.ApprovalAction {
+	if i < 0 || i >= len(hints) {
 		return gate.ApprovalDeny
 	}
-	return approvalHints[i].action
+	return hints[i].action
+}
+
+func approvalHintIndex(hints []approvalHint, action gate.ApprovalAction) int {
+	for i, hint := range hints {
+		if hint.action == action {
+			return i
+		}
+	}
+	return -1
 }
 
 // denyHintIndex is where a fresh permission prompt's action cursor starts: the
@@ -715,9 +726,9 @@ type approvalHint struct {
 	action gate.ApprovalAction
 }
 
-// approvalHints is the ordered permission action list, one selectable row per
-// gate.ApprovalControls control. The labels ARE the gate.ApprovalAction values the session
-// validates against.
+// approvalHints is the complete ordered permission action list. A prompt with no reusable
+// candidates uses oneTimeApprovalHints so it cannot offer a persistence action that would
+// save nothing. The labels ARE the gate.ApprovalAction values the session validates against.
 //
 // It is written out rather than derived, because a control's KEY is a TUI decision that the
 // shared control set does not carry — there is nothing to derive the "y" from. The pairing
@@ -728,6 +739,20 @@ var approvalHints = []approvalHint{
 	{"y", gate.ApprovalApprove},
 	{"a", gate.ApprovalApproveAlwaysWorkspace},
 	{"n", gate.ApprovalDeny},
+}
+
+var oneTimeApprovalHints = []approvalHint{
+	{"y", gate.ApprovalApprove},
+	{"n", gate.ApprovalDeny},
+}
+
+func (p prompt) approvalHints() []approvalHint {
+	for _, requirement := range p.Requirements {
+		if len(requirement.Candidates) > 0 {
+			return approvalHints
+		}
+	}
+	return oneTimeApprovalHints
 }
 
 // requirementBullet / candidateBullet prefix the requirement and candidate rows so the
@@ -745,9 +770,9 @@ const (
 // renderPermissionBox renders the ONE combined tool-preparation approval prompt as a
 // blue-panel card: a bold "Approve <ToolName>?" title, the request summary, the optional
 // already-rendered mutation diff, then the unmet requirements and their exact persisted
-// rule candidates, and finally one SELECTABLE row per action
-// gate.ApprovalControls declares (Approve / Approve always for this workspace / Deny),
-// keyed y/a/n. expanded controls only the permission diff's row fold. When pending > 1 a
+// rule candidates, and finally one SELECTABLE row per available action. Persistable prompts
+// use Approve / Approve always for this workspace / Deny, keyed y/a/n; prompts with no
+// candidates use Approve / Deny, keyed y/n. expanded controls only the permission diff's row fold. When pending > 1 a
 // faint "(+N more pending)" note trails the card. It renders the typed payload only — no
 // agent, no mutation, no rule reconstruction.
 //
@@ -815,7 +840,7 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 		requirements: requirementRows,
 		diff:         rawDiffRows,
 	}
-	if textW < minimumPermissionActionTextWidth() {
+	if textW < minimumPermissionActionTextWidth(p) {
 		return plan // the action labels cannot communicate every distinct authorization choice
 	}
 	if p.Diff != "" && parsedMutationRowIndex(rawDiffRows) < 0 {
@@ -829,7 +854,7 @@ func planPermissionCard(p prompt, width, pending int, expanded bool, heightBudge
 		return plan
 	}
 	contentBudget := permissionCardContentBudget(heightBudget, pending)
-	fixedRows := 1 + len(requirementRows) + len(approvalHints) // title + authorization + actions
+	fixedRows := 1 + len(requirementRows) + len(p.approvalHints()) // title + authorization + actions
 	minimumDiffRows := 0
 	if p.Diff != "" {
 		// Label + at least one actual +/- row + a separate omitted-count marker. A
@@ -1050,8 +1075,9 @@ func permissionDiffBody(p prompt, rawRows []diffRow, textW int, expanded bool, r
 // AskUser choice card uses, which is the point: an approval and a choice must not read as
 // two different kinds of thing, and neither carries a cursor glyph — the band is the cursor.
 func permissionActionRows(p prompt, textW int) string {
-	rows := make([]string, 0, len(approvalHints))
-	for i, h := range approvalHints {
+	hints := p.approvalHints()
+	rows := make([]string, 0, len(hints))
+	for i, h := range hints {
 		row := keyRow("["+h.key+"]", string(h.action), textW)
 		if i == p.approval {
 			row = styles.SelectedRow(row, textW)
@@ -1067,13 +1093,14 @@ func permissionActionRows(p prompt, textW int) string {
 // one cell for the ellipsis that says more consequence text exists. The row then adds its
 // rendered " [key] " chrome. For today's controls this makes "Approve always…" the
 // limiting label, rather than relying on a magic terminal-width cutoff.
-func minimumPermissionActionTextWidth() int {
-	labels := make([]string, len(approvalHints))
-	for i, hint := range approvalHints {
+func minimumPermissionActionTextWidth(p prompt) int {
+	hints := p.approvalHints()
+	labels := make([]string, len(hints))
+	for i, hint := range hints {
 		labels[i] = string(hint.action)
 	}
 	minimum := 0
-	for i, hint := range approvalHints {
+	for i, hint := range hints {
 		labelWidth := minimumDistinctActionLabelWidth(labels[i], labels)
 		rowWidth := keyRowGap + ansi.StringWidth("["+hint.key+"]") + labelWidth
 		if rowWidth > minimum {

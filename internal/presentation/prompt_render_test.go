@@ -852,7 +852,8 @@ func TestDenyHintIndexWithoutADenyRow(t *testing.T) {
 func TestPermissionRowsAreSelectable(t *testing.T) {
 	t.Parallel()
 
-	p := prompt{ToolName: "Bash", approval: 1}
+	p := promptFromPermission(callID(1), bashPermission("go test ./..."), nil)
+	p.approval = 1
 	rendered := renderPermissionBox(p, 60, 1, false, 0)
 	got := stripANSI(rendered)
 
@@ -871,6 +872,22 @@ func TestPermissionRowsAreSelectable(t *testing.T) {
 	assertBandedRow(t, rendered, "[a] "+string(gate.ApprovalApproveAlwaysWorkspace))
 }
 
+func TestPermissionWithoutReusableCandidatesOmitsWorkspaceApproval(t *testing.T) {
+	t.Parallel()
+
+	p := promptFromPermission(callID(1), toolRequest("EditFile", "edit /tmp/config", requirement("write /tmp/config")), nil)
+	got := stripANSI(renderPermissionBox(p, 60, 1, false, 0))
+
+	if strings.Contains(got, string(gate.ApprovalApproveAlwaysWorkspace)) || strings.Contains(got, "[a]") {
+		t.Fatalf("permission card offered a workspace approval with nothing to persist:\n%s", got)
+	}
+	for _, want := range []string{"[y] " + string(gate.ApprovalApprove), "[n] " + string(gate.ApprovalDeny)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("permission card missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestPermissionBandFollowsTheCursor pins that the band tracks p.approval — exactly one
 // row banded, and it is the one the cursor names. assertBandedRow's "exactly one" half is
 // the load-bearing part: two banded rows would mean two cursors.
@@ -878,23 +895,22 @@ func TestPermissionBandFollowsTheCursor(t *testing.T) {
 	t.Parallel()
 
 	for i, h := range approvalHints {
-		p := prompt{ToolName: "Bash", approval: i}
+		p := promptFromPermission(callID(1), bashPermission("go test ./..."), nil)
+		p.approval = i
 		assertBandedRow(t, renderPermissionBox(p, 60, 1, false, 0), "["+h.key+"] "+string(h.action))
 	}
 }
 
-// TestPermissionCursorFailsSecure covers the two fail-secure properties of the action
-// cursor. A freshly built permission prompt starts on Deny, so the action a stray enter
-// lands on blocks the tool call rather than running it. And a cursor that names no row at
-// all resolves to Deny rather than to whatever sits at index 0.
-func TestPermissionCursorFailsSecure(t *testing.T) {
+// TestPermissionCursorStartsOnApprove covers the requested default while preserving the
+// fail-secure behavior for a cursor that names no row at all.
+func TestPermissionCursorStartsOnApprove(t *testing.T) {
 	t.Parallel()
 
 	p := promptFromPermission(callID(1), bashPermission("rm -rf /"), nil)
-	if got := approvalAt(p.approval); got != gate.ApprovalDeny {
-		t.Errorf("fresh permission prompt selects %q, want %q", got, gate.ApprovalDeny)
+	if got := approvalAt(p.approval); got != gate.ApprovalApprove {
+		t.Errorf("fresh permission prompt selects %q, want %q", got, gate.ApprovalApprove)
 	}
-	assertBandedRow(t, renderPermissionBox(p, 60, 1, false, 0), "[n] "+string(gate.ApprovalDeny))
+	assertBandedRow(t, renderPermissionBox(p, 60, 1, false, 0), "[y] "+string(gate.ApprovalApprove))
 
 	for _, i := range []int{-1, len(approvalHints), 1 << 20} {
 		if got := approvalAt(i); got != gate.ApprovalDeny {
