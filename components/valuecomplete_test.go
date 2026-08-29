@@ -41,6 +41,31 @@ func TestValueCompleteNavigationWrapsAndViewClamps(t *testing.T) {
 	}
 }
 
+func TestValueCompleteStartsOnCurrentChoice(t *testing.T) {
+	t.Parallel()
+
+	tray := NewValueComplete([]ValueItem{
+		{ID: "base", Label: "Default"},
+		{ID: "review", Label: "Review", Current: true},
+	}, "")
+	if got := tray.Selected().ID; got != "review" {
+		t.Fatalf("initial selection = %q, want current choice review", got)
+	}
+}
+
+func TestModelCompleteStartsOnCurrentChoiceAcrossProviderGroups(t *testing.T) {
+	t.Parallel()
+
+	tray := NewModelComplete([]ValueItem{
+		{ID: "gpt", Provider: "OpenAI", Label: "GPT"},
+		{ID: "sonnet", Provider: "Anthropic", Label: "Sonnet"},
+		{ID: "opus", Provider: "Anthropic", Label: "Opus", Current: true},
+	})
+	if got := tray.Selected().ID; got != "opus" {
+		t.Fatalf("initial grouped selection = %q, want current model opus", got)
+	}
+}
+
 func TestModelCompleteGroupsProvidersWithoutSelectingThem(t *testing.T) {
 	t.Parallel()
 

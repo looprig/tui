@@ -14,6 +14,7 @@ type ValueItem struct {
 	Label       string
 	Description string
 	Aliases     []string
+	Current     bool
 }
 
 // ValueComplete is the runtime-choice tray -- in practice the model picker -- over the
@@ -64,7 +65,7 @@ func newValueComplete(items []ValueItem, query string, grouped bool) *ValueCompl
 		rows, rowToItem = groupedModelRows(choices)
 	} else {
 		for i, item := range choices {
-			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label})
+			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label, current: item.Current})
 			rowToItem = append(rowToItem, i)
 		}
 	}
@@ -126,7 +127,7 @@ func groupedModelRows(items []ValueItem) ([]completionTrayRow, []int) {
 		rowToItem = append(rowToItem, -1)
 		for _, index := range group.indices {
 			item := items[index]
-			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label})
+			rows = append(rows, completionTrayRow{primary: item.Label, secondary: item.Description, filter: item.Label, current: item.Current})
 			rowToItem = append(rowToItem, index)
 		}
 	}

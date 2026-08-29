@@ -11,6 +11,9 @@ import (
 type SessionItem struct {
 	ID    string
 	Title string
+	// Current marks the session backing the active Agent. It remains independent from the
+	// cursor after the user navigates to a different resume target.
+	Current bool
 	// Description is filter-only session context. It stays out of the compact two-row
 	// picker so the visible row remains a quick scan of title, activity, date, and short ID.
 	Description string
@@ -57,6 +60,7 @@ func NewSessionComplete(items []SessionItem) *SessionComplete {
 			primary:   item.Title + joinMetadata(item.State, item.Activity),
 			secondary: fmt.Sprintf("%s · %s", item.LastUsed, item.ShortID),
 			filter:    item.Title,
+			current:   item.Current,
 		}
 	}
 	// Width zero: every render supplies its own width, and this panel never calls the

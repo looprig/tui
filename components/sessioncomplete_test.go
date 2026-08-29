@@ -89,6 +89,19 @@ func TestSessionCompleteNavigatesByRecord(t *testing.T) {
 	}
 }
 
+func TestSessionCompleteStartsOnCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	tray := NewSessionComplete([]SessionItem{
+		{ID: "one", Title: "First"},
+		{ID: "two", Title: "Second", Current: true},
+		{ID: "three", Title: "Third"},
+	})
+	if got := tray.Selected().ID; got != "two" {
+		t.Fatalf("initial selection = %q, want current session two", got)
+	}
+}
+
 func TestSessionCompleteFiltersDescriptionAndIDBelowAHeader(t *testing.T) {
 	t.Parallel()
 
