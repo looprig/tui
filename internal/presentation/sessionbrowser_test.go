@@ -169,6 +169,27 @@ func TestSessionsListedShowsLastUsedFallingBackToCreated(t *testing.T) {
 	}
 }
 
+func TestSessionsListedStartsOnCurrentAgentSession(t *testing.T) {
+	t.Parallel()
+
+	current := SessionID(callID(9))
+	agent := &fakeAgent{activeLoopID: callID(1), sessionID: current}
+	sessions := []SessionSummary{
+		{ID: SessionID(callID(2)), Title: "older"},
+		{ID: current, Title: "current"},
+		{ID: SessionID(callID(3)), Title: "newer"},
+	}
+	m := New(context.Background(), agent, fakeOpen(agent), AgentBanner{})
+	m, _ = updateScreen(t, m, sessionsListedMsg{sessions: sessions})
+
+	if m.sessionTray == nil {
+		t.Fatal("sessionTray is nil after sessionsListedMsg")
+	}
+	if got := m.sessionTray.Selected().ID; got != current.String() {
+		t.Fatalf("initial session selection = %q, want active agent session %q", got, current)
+	}
+}
+
 var _ SessionBrowser = (*sessionBrowserFake)(nil)
 
 // presenterAgent is a fakeAgent that ALSO implements SessionPresenter, so a resumed

@@ -528,6 +528,7 @@ func (m *Screen) handleSessionsListed(msg sessionsListedMsg) tea.Cmd {
 		items = append(items, components.SessionItem{
 			ID:          id,
 			Title:       title,
+			Current:     session.ID == m.agent.SessionID(),
 			Description: session.Description,
 			State:       session.State,
 			Activity:    relativeActivity(now, session.LastActiveAt),

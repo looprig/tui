@@ -19,6 +19,7 @@ type ModeOption struct {
 	Label       string
 	Description string
 	Aliases     []string
+	Current     bool
 }
 
 type ModelOption struct {
@@ -27,6 +28,7 @@ type ModelOption struct {
 	Label       string
 	Description string
 	Aliases     []string
+	Current     bool
 }
 
 type EffortOption struct {
@@ -34,10 +36,13 @@ type EffortOption struct {
 	Label       string
 	Description string
 	Aliases     []string
+	Current     bool
 }
 
-// LoopRuntimeOptions contains available choices only. Current mode, model, and
-// effort are authoritative event projections and deliberately do not live here.
+// LoopRuntimeOptions contains available choices. Each option's Current marker maps the
+// catalog's opaque choice identity to the live loop value so a picker can identify its
+// active row even when, for example, a model ID is a product routing alias. Durable current
+// state and status display remain authoritative event projections.
 //
 // Access is deliberately absent: the access profile is FIXED for the session and
 // supplied synchronously as SessionPresentation, never a mutable runtime control.
@@ -94,15 +99,15 @@ func queryRuntimeChoices(ctx context.Context, catalog RuntimeCatalog, kind runti
 		switch kind {
 		case runtimeTrayMode:
 			for _, option := range options.Modes {
-				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases})
+				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases, Current: option.Current})
 			}
 		case runtimeTrayModel:
 			for _, option := range options.Models {
-				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Provider: option.Provider, Label: option.Label, Description: option.Description, Aliases: option.Aliases})
+				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Provider: option.Provider, Label: option.Label, Description: option.Description, Aliases: option.Aliases, Current: option.Current})
 			}
 		case runtimeTrayEffort:
 			for _, option := range options.Efforts {
-				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases})
+				msg.items = append(msg.items, components.ValueItem{ID: string(option.ID), Label: option.Label, Description: option.Description, Aliases: option.Aliases, Current: option.Current})
 			}
 		}
 		return msg

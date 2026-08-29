@@ -207,10 +207,47 @@ func TestRuntimeModelChoicesKeepProviderForGrouping(t *testing.T) {
 	}
 }
 
+func TestRuntimeChoicesCarryCurrentMarkers(t *testing.T) {
+	t.Parallel()
+
+	loopID := callID(1)
+	base := &runtimeCatalogFake{fakeAgent: &fakeAgent{activeLoopID: loopID}}
+	catalog := runtimeCurrentCatalogFake{runtimeCatalogFake: base}
+	for _, tc := range []struct {
+		kind runtimeTrayKind
+		id   string
+	}{
+		{kind: runtimeTrayMode, id: "review"},
+		{kind: runtimeTrayModel, id: "sonnet"},
+		{kind: runtimeTrayEffort, id: "high"},
+	} {
+		msg := queryRuntimeChoices(context.Background(), &catalog, tc.kind, loopID)().(runtimeChoicesMsg)
+		if len(msg.items) != 2 {
+			t.Fatalf("kind %d choices = %d, want 2", tc.kind, len(msg.items))
+		}
+		if !msg.items[1].Current || msg.items[1].ID != tc.id {
+			t.Errorf("kind %d current item = %#v, want %q marked current", tc.kind, msg.items[1], tc.id)
+		}
+		if msg.items[0].Current {
+			t.Errorf("kind %d first item unexpectedly marked current: %#v", tc.kind, msg.items[0])
+		}
+	}
+}
+
 type runtimeModelCatalogFake struct{ *runtimeCatalogFake }
 
 func (*runtimeModelCatalogFake) LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error) {
 	return LoopRuntimeOptions{Models: []ModelOption{{ID: "gpt-5.4", Provider: "OpenAI", Label: "GPT-5.4"}}}, nil
+}
+
+type runtimeCurrentCatalogFake struct{ *runtimeCatalogFake }
+
+func (*runtimeCurrentCatalogFake) LoopRuntimeOptions(context.Context, uuid.UUID) (LoopRuntimeOptions, error) {
+	return LoopRuntimeOptions{
+		Modes:   []ModeOption{{ID: "base"}, {ID: "review", Current: true}},
+		Models:  []ModelOption{{ID: "gpt"}, {ID: "sonnet", Current: true}},
+		Efforts: []EffortOption{{ID: "low"}, {ID: "high", Current: true}},
+	}, nil
 }
 
 var _ Agent = (*fakeAgent)(nil)
@@ -218,3 +255,4 @@ var _ RuntimeCatalog = (*runtimeCatalogFake)(nil)
 var _ RuntimeController = (*runtimeControllerFake)(nil)
 var _ RuntimeCatalog = (*runtimeFullFake)(nil)
 var _ RuntimeController = (*runtimeFullFake)(nil)
+var _ RuntimeCatalog = (*runtimeCurrentCatalogFake)(nil)
