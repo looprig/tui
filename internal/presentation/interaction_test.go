@@ -202,6 +202,39 @@ func TestInteractionEnqueuePermissionCarriesLivePreview(t *testing.T) {
 	}
 }
 
+func TestInteractionDuplicatePermissionEnrichesPendingPreview(t *testing.T) {
+	t.Parallel()
+
+	loopID, executionID := callID(2), callID(3)
+	h := event.Header{Coordinates: identity.Coordinates{LoopID: loopID}}
+	m := newInteractionModel().ApplyEvent(event.PermissionRequested{
+		Header:          h,
+		ToolExecutionID: executionID,
+		Request:         bashPermission("go build"),
+	})
+	preview := &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+	}
+	m = m.ApplyEvent(event.PermissionRequested{
+		Header:          h,
+		ToolExecutionID: executionID,
+		Request:         bashPermission("live duplicate"),
+		Preview:         preview,
+	})
+
+	if got := m.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount = %d, want one enriched prompt", got)
+	}
+	p := m.ActivePrompt()
+	if p == nil || p.DiffPath != preview.Path || p.Diff != preview.UnifiedDiff {
+		t.Fatalf("active prompt did not absorb duplicate preview: %+v", p)
+	}
+	if p.Summary != "go build" {
+		t.Errorf("Summary = %q, want original durable summary", p.Summary)
+	}
+}
+
 // TestInteractionEnqueueUserInput covers enqueuing a UserInputRequested event:
 // a promptUserInput is appended carrying the Question/Choices, freeText reflects
 // whether choices exist, and the mode switches to the head's mode.

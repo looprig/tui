@@ -204,6 +204,14 @@ func (a *sessionAdapter) foldGate(ev event.Event) {
 	}
 }
 
+func (a *sessionAdapter) permissionOpen(ev event.PermissionRequested) bool {
+	key := gateKey{loopID: ev.EventHeader().LoopID, toolExecutionID: ev.ToolExecutionID}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.forward[key]
+	return ok
+}
+
 // Submit delivers a multimodal user message fire-and-forget to the ACTIVE loop and returns
 // the InputID the resulting Reply events carry (Cause.CommandID).
 func (a *sessionAdapter) Submit(ctx context.Context, blocks []content.Block) (uuid.UUID, error) {
@@ -238,13 +246,14 @@ func (a *sessionAdapter) AcceptsImages(loopID uuid.UUID) bool {
 func (a *sessionAdapter) Subscribe(filter event.EventFilter) (event.Subscription, error) {
 	if a.openReplay != nil {
 		return newReplayingSubscription(replayingSubscriptionConfig{
-			ctx:        context.Background(),
-			sessionID:  a.sess.SessionID(),
-			filter:     filter,
-			initialSeq: a.replayedThrough,
-			subscribe:  a.sess.SubscribeEvents,
-			openReplay: a.openReplay,
-			foldGate:   a.foldGate,
+			ctx:            context.Background(),
+			sessionID:      a.sess.SessionID(),
+			filter:         filter,
+			initialSeq:     a.replayedThrough,
+			subscribe:      a.sess.SubscribeEvents,
+			openReplay:     a.openReplay,
+			foldGate:       a.foldGate,
+			permissionOpen: a.permissionOpen,
 		})
 	}
 	inner, err := a.sess.SubscribeEvents(filter)

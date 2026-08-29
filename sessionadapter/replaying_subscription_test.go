@@ -16,6 +16,7 @@ import (
 	"github.com/looprig/harness/pkg/identity"
 	"github.com/looprig/harness/pkg/journal"
 	"github.com/looprig/harness/pkg/sessionstore"
+	"github.com/looprig/harness/pkg/tool"
 )
 
 type replayPlan struct {
@@ -259,6 +260,66 @@ func TestReplayingSubscriptionRecoversGapInJournalOrderWithoutOverlap(t *testing
 	wantOpens := []uint64{0, 2, 3}
 	if !reflect.DeepEqual(gotOpens, wantOpens) {
 		t.Errorf("replay open positions = %v, want %v", gotOpens, wantOpens)
+	}
+}
+
+func TestReplayingSubscriptionForwardsLivePermissionPreviewOverlap(t *testing.T) {
+	t.Parallel()
+
+	sessionID := uuid.UUID{0xA1}
+	loopID := uuid.UUID{0xA2}
+	executionID := uuid.UUID{0xA3}
+	gateID := uuid.UUID{0xA4}
+	initial := newFakeSub()
+	d1 := event.Delivery{Event: replaySessionEvent(sessionID, 1), JournalSeq: 1}
+	opened := gateOpened(loopID, executionID, gateID)
+	opened.Header.SessionID = sessionID
+	opened.Header.EventID = uuid.UUID{0xA5}
+	d3 := event.Delivery{Event: opened, JournalSeq: 3}
+	h := event.Header{
+		Coordinates: identity.Coordinates{SessionID: sessionID, LoopID: loopID},
+		EventID:     uuid.UUID{0xA6},
+	}
+	durableRequest := event.PermissionRequested{Header: h, ToolExecutionID: executionID}
+	d4 := event.Delivery{Event: durableRequest, JournalSeq: 4}
+	preview := &tool.MutationPreview{
+		Path:        "config.yaml",
+		UnifiedDiff: "@@ -1 +1 @@\n-old\n+new\n",
+	}
+	liveRequest := durableRequest
+	liveRequest.Preview = preview
+	opener := &replayTestOpener{plans: map[uint64]replayPlan{
+		0: {deliveries: []event.Delivery{d1}},
+		2: {deliveries: []event.Delivery{d3, d4}},
+	}}
+	controller := &fakeController{
+		sessionID:      sessionID,
+		sub:            initial,
+		subscribeQueue: []event.Subscription{initial},
+	}
+	adapter, err := NewWithReplay(context.Background(), controller, opener)
+	if err != nil {
+		t.Fatalf("NewWithReplay() = %v", err)
+	}
+	defer func() { _ = adapter.Close(context.Background()) }()
+	stream, err := adapter.Subscribe(event.EventFilter{Enduring: event.LoopScope{All: true}})
+	if err != nil {
+		t.Fatalf("Subscribe() = %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+	waitForSubscriptionCalls(t, controller, 1)
+
+	// Sequence 2 represents a private gate_prepared frame. Receiving live sequence
+	// 3 repairs that gap from the journal, which can race ahead through the durable,
+	// preview-less sequence 4 before its live twin reaches the adapter.
+	initial.ch <- d3
+	initial.ch <- event.Delivery{Event: liveRequest, JournalSeq: 4}
+	_ = readDelivery(t, stream) // replayed GateOpened at sequence 3
+	_ = readDelivery(t, stream) // replayed PermissionRequested at sequence 4
+	enrichment := readDelivery(t, stream)
+	requested, ok := enrichment.Event.(event.PermissionRequested)
+	if !ok || requested.Preview == nil || requested.Preview.UnifiedDiff != preview.UnifiedDiff {
+		t.Fatalf("live overlap = %#v, want preview-bearing PermissionRequested", enrichment.Event)
 	}
 }
 

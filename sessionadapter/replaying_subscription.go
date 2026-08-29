@@ -43,9 +43,10 @@ type replayingSubscriptionConfig struct {
 	filter     event.EventFilter
 	initialSeq uint64
 
-	subscribe  func(event.EventFilter) (event.Subscription, error)
-	openReplay func(uint64) (journal.EventReplayer, error)
-	foldGate   func(event.Event)
+	subscribe      func(event.EventFilter) (event.Subscription, error)
+	openReplay     func(uint64) (journal.EventReplayer, error)
+	foldGate       func(event.Event)
+	permissionOpen func(event.PermissionRequested) bool
 }
 
 // replayingSubscription keeps the session's live fan-in attached while it repairs a
@@ -57,11 +58,12 @@ type replayingSubscription struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	sessionID  uuid.UUID
-	filter     event.EventFilter
-	subscribe  func(event.EventFilter) (event.Subscription, error)
-	openReplay func(uint64) (journal.EventReplayer, error)
-	foldGate   func(event.Event)
+	sessionID      uuid.UUID
+	filter         event.EventFilter
+	subscribe      func(event.EventFilter) (event.Subscription, error)
+	openReplay     func(uint64) (journal.EventReplayer, error)
+	foldGate       func(event.Event)
+	permissionOpen func(event.PermissionRequested) bool
 
 	out      chan event.Delivery
 	done     chan struct{}
@@ -89,16 +91,17 @@ func newReplayingSubscription(cfg replayingSubscriptionConfig) (event.Subscripti
 	}
 	ctx, cancel := context.WithCancel(cfg.ctx)
 	s := &replayingSubscription{
-		ctx:        ctx,
-		cancel:     cancel,
-		sessionID:  cfg.sessionID,
-		filter:     cfg.filter,
-		subscribe:  cfg.subscribe,
-		openReplay: cfg.openReplay,
-		foldGate:   cfg.foldGate,
-		out:        make(chan event.Delivery),
-		done:       make(chan struct{}),
-		finished:   make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+		sessionID:      cfg.sessionID,
+		filter:         cfg.filter,
+		subscribe:      cfg.subscribe,
+		openReplay:     cfg.openReplay,
+		foldGate:       cfg.foldGate,
+		permissionOpen: cfg.permissionOpen,
+		out:            make(chan event.Delivery),
+		done:           make(chan struct{}),
+		finished:       make(chan struct{}),
 	}
 	go s.run(cfg.initialSeq)
 	return s, nil
@@ -308,6 +311,9 @@ func isTemporaryError(err error) bool {
 func (s *replayingSubscription) deliver(delivery event.Delivery, lastSeq *uint64) bool {
 	seq := delivery.JournalSeq
 	if seq != 0 && seq <= *lastSeq {
+		if s.isOpenPermissionPreviewOverlap(delivery) {
+			return s.send(delivery)
+		}
 		return true
 	}
 	exposed := shouldExposeEvent(s.filter, delivery.Event)
@@ -320,11 +326,30 @@ func (s *replayingSubscription) deliver(delivery event.Delivery, lastSeq *uint64
 	if s.foldGate != nil {
 		s.foldGate(delivery.Event)
 	}
-	select {
-	case s.out <- delivery:
+	if s.send(delivery) {
 		if seq > *lastSeq {
 			*lastSeq = seq
 		}
+		return true
+	}
+	return false
+}
+
+func (s *replayingSubscription) isOpenPermissionPreviewOverlap(delivery event.Delivery) bool {
+	requested, ok := delivery.Event.(event.PermissionRequested)
+	if !ok || requested.Preview == nil || s.permissionOpen == nil {
+		return false
+	}
+	preview := requested.Preview
+	if preview.Path == "" && preview.UnifiedDiff == "" && !preview.Creates {
+		return false
+	}
+	return shouldExposeEvent(s.filter, requested) && s.permissionOpen(requested)
+}
+
+func (s *replayingSubscription) send(delivery event.Delivery) bool {
+	select {
+	case s.out <- delivery:
 		return true
 	case <-s.done:
 		return false

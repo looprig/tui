@@ -120,6 +120,7 @@ func (m interactionModel) pendingGateLoops() map[uuid.UUID]bool {
 func (m interactionModel) ApplyEvent(ev event.Event) interactionModel {
 	switch ev := ev.(type) {
 	case event.PermissionRequested:
+		m = m.reconcilePermissionPreview(ev)
 		m.enqueueForLoop(promptFromPermission(ev.ToolExecutionID, ev.Request, ev.Preview), ev.EventHeader().LoopID)
 	case event.UserInputRequested:
 		m.enqueueForLoop(promptFromUserInput(ev.ToolExecutionID, ev.Question, ev.Choices), ev.EventHeader().LoopID)
