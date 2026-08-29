@@ -90,6 +90,69 @@ func TestTrayListSkipsNonSelectableRows(t *testing.T) {
 	}
 }
 
+// TestTrayListCurrentChoiceStartsSelectedAndVisible pins the distinction between the live
+// value and the cursor: a current row is where a newly opened tray starts, and the sliding
+// window must follow that cursor even when the row is below the first screenful.
+func TestTrayListCurrentChoiceStartsSelectedAndVisible(t *testing.T) {
+	t.Parallel()
+
+	rows := []completionTrayRow{
+		{primary: "one"},
+		{primary: "two"},
+		{primary: "three"},
+		{primary: "four"},
+		{primary: "five", current: true},
+	}
+	tray := newTrayList(rows, 40, trayLayout{})
+
+	if got := tray.Selected().primary; got != "five" {
+		t.Fatalf("initial selection = %q, want current choice five", got)
+	}
+	if view := stripANSI(tray.ViewWindow(40, 2)); !strings.Contains(view, "five") {
+		t.Errorf("initial two-row window = %q, want current choice five visible", view)
+	}
+}
+
+// TestTrayListCurrentChoiceStaysBlueAfterCursorMoves proves current and selected are
+// independent. The selected row owns the full-width band; after it moves away, the active
+// row keeps a blue primary so the user can still tell which value is in force.
+func TestTrayListCurrentChoiceStaysBlueAfterCursorMoves(t *testing.T) {
+	t.Parallel()
+
+	tray := newTrayList([]completionTrayRow{
+		{primary: "one"},
+		{primary: "two", current: true},
+		{primary: "three"},
+	}, 40, trayLayout{})
+	tray.Down()
+
+	lines := strings.Split(tray.View(), "\n")
+	if got := tray.Selected().primary; got != "three" {
+		t.Fatalf("selection after Down = %q, want three", got)
+	}
+	if want := styles.CurrentChoiceStyle.Render("two"); !strings.Contains(lines[1], want) {
+		t.Errorf("current unselected row = %q, want blue primary %q", lines[1], want)
+	}
+	if band := selectedBandOpen(t); !strings.HasPrefix(lines[2], band) {
+		t.Errorf("selected row = %q, want selection band", lines[2])
+	}
+}
+
+// TestTrayListCurrentChoiceSkipsGroupChrome ensures a grouped model tray can start on a
+// current model without ever treating its provider heading as the active selectable row.
+func TestTrayListCurrentChoiceSkipsGroupChrome(t *testing.T) {
+	t.Parallel()
+
+	tray := newTrayList([]completionTrayRow{
+		{primary: "OPENAI", kind: trayRowHeading},
+		{primary: "GPT-5.4"},
+		{primary: "GPT-5.6", current: true},
+	}, 40, trayLayout{})
+	if got := tray.Selected().primary; got != "GPT-5.6" {
+		t.Fatalf("initial grouped selection = %q, want current model GPT-5.6", got)
+	}
+}
+
 // TestTrayListStackedLayout covers the session tray's shape: two rows per item, PadV spacers
 // between entries but not after the last, and a band that covers BOTH of the selected item's
 // rows. A band on only the title row would read as a one-row entry with an orphan beneath it.

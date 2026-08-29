@@ -28,6 +28,9 @@ type completionTrayRow struct {
 	// Empty falls back to primary, preserving every existing tray's behavior.
 	filter string
 	kind   trayRowKind
+	// current marks the value active in the runtime independently from the cursor.
+	// A newly opened tray starts here; after navigation the row remains blue.
+	current bool
 }
 
 // completionTrayPrimaryColumn is the display width every primary is padded out to so the
@@ -132,9 +135,13 @@ func (r trayRowRender) line(row completionTrayRow, selected bool) string {
 	case trayRowHeading:
 		return r.row(styles.HeadlineStyle.Render(row.primary), false)
 	}
-	body := row.primary
+	primary := row.primary
+	if row.current && !selected {
+		primary = styles.CurrentChoiceStyle.Render(primary)
+	}
+	body := primary
 	if row.secondary != "" {
-		body += completionTrayGap(row.primary, r.column) + styles.CardHintStyle.Render(row.secondary)
+		body += completionTrayGap(primary, r.column) + styles.CardHintStyle.Render(row.secondary)
 	}
 	return r.row(body, selected)
 }

@@ -73,6 +73,7 @@ type trayItem struct {
 	primary, secondary string
 	filter             string
 	kind               trayRowKind
+	current            bool
 }
 
 func (t trayItem) selectable() bool { return t.kind != trayRowHeading && t.kind != trayRowSpacer }
@@ -144,6 +145,9 @@ func (d trayDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	primary := it.primary
 	if matches := m.MatchesForItem(index); it.selectable() && len(matches) > 0 {
 		primary = lipgloss.StyleRunes(primary, matches, trayMatchStyle, lipgloss.NewStyle())
+	}
+	if it.current && !selected {
+		primary = styles.CurrentChoiceStyle.Render(primary)
 	}
 
 	rows := make([]string, 0, d.layout.rowsPerEntry())
@@ -221,8 +225,22 @@ func newTrayList(rows []completionTrayRow, width int, layout trayLayout) *trayLi
 	// every hand-rolled panel already had.
 	l.InfiniteScrolling = true
 	t := &trayList{m: l, layout: layout}
-	t.selectFirstSelectable()
+	t.selectInitialSelectable()
 	return t
+}
+
+// selectInitialSelectable starts a newly opened tray on its active value, which also makes
+// the sliding window bring a late active row into view. A catalog with no current row keeps
+// the historical first-choice behavior.
+func (t *trayList) selectInitialSelectable() {
+	for i := range t.m.VisibleItems() {
+		item := t.itemAt(i)
+		if item.selectable() && item.current {
+			t.m.Select(i)
+			return
+		}
+	}
+	t.selectFirstSelectable()
 }
 
 // Selected is the item under the cursor, or the zero trayItem when the list is empty. It is

@@ -77,6 +77,19 @@ func TestSelectionBgIsTheOneSemanticBlue(t *testing.T) {
 	}
 }
 
+// TestCurrentChoiceStyleUsesTheSemanticBlue keeps the persistent active-value marker on
+// the same blue token as the tray rail and selection family rather than introducing a
+// private near-match.
+func TestCurrentChoiceStyleUsesTheSemanticBlue(t *testing.T) {
+	t.Parallel()
+
+	const text = "current"
+	want := lipgloss.NewStyle().Foreground(CardBorderColor).Render(text)
+	if got := CurrentChoiceStyle.Render(text); got != want {
+		t.Errorf("CurrentChoiceStyle = %q, want semantic blue %q", got, want)
+	}
+}
+
 // TestSelectionIsDark pins the derivation that replaced the stored SelectionIsDark flag: the
 // answer is computed FROM the fill, so it can never contradict the fill it describes.
 func TestSelectionIsDark(t *testing.T) {

@@ -31,6 +31,11 @@ var CardRailStyle = lipgloss.NewStyle().Foreground(CardBorderColor)
 // blue token rather than drifting shades.
 var WorkflowActivityStyle = lipgloss.NewStyle().Foreground(CardBorderColor)
 
+// CurrentChoiceStyle marks the value that is active behind a picker. It is deliberately
+// separate from the cursor's selection band: after the cursor moves, this blue primary
+// remains on the live value while the band shows what Enter would choose.
+var CurrentChoiceStyle = lipgloss.NewStyle().Foreground(CardBorderColor)
+
 // CardTitleStyle renders the bold card title row — "Approve Bash?", the AskUser
 // question, or the "answer" label — so the required action reads at a glance above the
 // card body.
