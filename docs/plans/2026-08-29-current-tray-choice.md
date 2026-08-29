@@ -220,4 +220,3 @@ Run: `git -C tui diff --check && git -C tui status --short`
 Run: `git -C carbon diff --check && git -C carbon status --short`
 
 Expected: no whitespace errors; only intentional files are changed or committed.
-

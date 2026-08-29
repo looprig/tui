@@ -69,4 +69,3 @@ all marked rows remain styled; catalog tests prevent this in Carbon.
   active session is marked from `Agent.SessionID()`.
 - Carbon tests prove current mode, aliased model, and effort are marked exactly
   once.
-
