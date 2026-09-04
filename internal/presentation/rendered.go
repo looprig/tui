@@ -108,10 +108,93 @@ var (
 // removed before the generic pass, then a final guard removes any residual ESC left by a
 // malformed or truncated sequence — the hard fail-secure guarantee at the clipboard
 // boundary.
+//
+// The passes are applied in the same order and to the same intermediate strings as the
+// regex-only original (each pass sees the previous pass's output — a sequence a single
+// fused scan would NOT reproduce, since removing one sequence can join its neighbours
+// into another). What changed is only how much work each pass does:
+//
+//   - Each string-sequence pass is guarded by a cheap substring test for its introducer.
+//     A pass whose introducer is absent provably cannot match, so skipping it cannot
+//     change the result. Glamour/Lipgloss output carries CSI colour sequences and
+//     nothing else, so in the overwhelmingly common case only the CSI pass runs.
+//   - The CSI pass is hand-scanned rather than compiled. Its three character classes are
+//     mutually disjoint ([0-9;:?], then 0x20-0x2F, then one 0x40-0x7E), so greedy
+//     matching is deterministic and needs no backtracking — which is exactly what made
+//     the regex version costly, at ~12us per line across thousands of lines per frame.
+//
+// TestPlainFromStyledMatchesRegexpReference and FuzzPlainFromStyledMatchesRegexp pin this
+// to the original regex implementation, which is retained verbatim in the test as the
+// reference. Any divergence is a test failure, so the fast path cannot drift from the
+// grammar the security comment above describes.
 func plainFromStyled(styled string) string {
-	s := ansiOSC.ReplaceAllString(styled, "")
-	s = ansiString.ReplaceAllString(s, "")
-	s = ansiCSI.ReplaceAllString(s, "")
-	s = ansiEscape.ReplaceAllString(s, "")
-	return strings.ReplaceAll(s, "\x1b", "")
+	if !strings.ContainsRune(styled, ansiESC) {
+		return styled
+	}
+	s := styled
+	if strings.Contains(s, "\x1b]") {
+		s = ansiOSC.ReplaceAllString(s, "")
+	}
+	if containsESCIntroducer(s, "P^X_") {
+		s = ansiString.ReplaceAllString(s, "")
+	}
+	s = stripCSI(s)
+	if strings.ContainsRune(s, ansiESC) {
+		s = ansiEscape.ReplaceAllString(s, "")
+		s = strings.ReplaceAll(s, "\x1b", "")
+	}
+	return s
+}
+
+// ansiESC is the escape byte introducing every sequence stripped here.
+const ansiESC = '\x1b'
+
+// containsESCIntroducer reports whether s holds an ESC immediately followed by one of
+// the introducer bytes — the precondition for ansiString to match anywhere in s.
+func containsESCIntroducer(s string, introducers string) bool {
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == ansiESC && strings.IndexByte(introducers, s[i+1]) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stripCSI removes every CSI sequence, exactly as ansiCSI.ReplaceAllString(s, "") does:
+// ESC '[', parameter bytes [0-9;:?], intermediate bytes 0x20-0x2F, one final byte
+// 0x40-0x7E. A position that fails to complete the sequence is left intact and the scan
+// resumes one byte later, matching the regex engine's leftmost-match retry. Scanning by
+// BYTE is safe for UTF-8 text: every byte of a multi-byte rune is >= 0x80 and so falls
+// outside all three classes and cannot be mistaken for part of a sequence.
+func stripCSI(s string) string {
+	start := strings.Index(s, "\x1b[")
+	if start < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	b.WriteString(s[:start])
+
+	for i := start; i < len(s); {
+		if s[i] != ansiESC || i+1 >= len(s) || s[i+1] != '[' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		j := i + 2
+		for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == ';' || s[j] == ':' || s[j] == '?') {
+			j++
+		}
+		for j < len(s) && s[j] >= 0x20 && s[j] <= 0x2F {
+			j++
+		}
+		if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7E {
+			i = j + 1 // complete sequence: drop it
+			continue
+		}
+		// Incomplete: not a CSI match here, so the ESC stays and the scan retries at i+1.
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
 }

@@ -67,16 +67,11 @@ func renderMDDot(md string, width int, dot string) string {
 	}
 
 	renderWidth := max(0, width-dotWidth)
-	r, err := styles.NewMarkdownRenderer(renderWidth)
-	if err != nil {
-		return dot + md
-	}
-	out, err := styles.RenderMarkdown(r, md, renderWidth)
-	if err != nil {
+	lines, ok := renderMarkdownDoc(md, renderWidth)
+	if !ok {
 		return dot + md
 	}
 
-	lines := dedentDocument(out)
 	continuationRail := railSpine(1)
 	for i := range lines {
 		if i == 0 {
@@ -493,15 +488,10 @@ func renderMDRail(md string, width int, bar string) string {
 		return strings.Join(out, "\n")
 	}
 	renderWidth := max(0, width-barWidth)
-	r, err := styles.NewMarkdownRenderer(renderWidth)
-	if err != nil {
+	lines, ok := renderMarkdownDoc(md, renderWidth)
+	if !ok {
 		return raw()
 	}
-	out, err := styles.RenderMarkdown(r, md, renderWidth)
-	if err != nil {
-		return raw()
-	}
-	lines := dedentDocument(out)
 	for i := range lines {
 		lines[i] = bar + lines[i]
 	}
