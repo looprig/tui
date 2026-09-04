@@ -1905,10 +1905,11 @@ func (m Screen) renderFocused() []renderedLine {
 		if committed[i].Kind == kindAssistant && thinkingText(committed[i].Blocks) != "" {
 			lines = markClickableHeader(lines)
 		}
-		// MODERN-ONLY: bracket the user row with rail pad rows (a padded card), then paint the
-		// gray panel behind the whole block — pads included. The session/agent banner uses the
-		// same fill without the user-card padding; scrollback keeps both backgrounds bare.
-		if committed[i].Kind == kindUser {
+		// MODERN-ONLY: bracket the user row and the session/agent banner with rail pad rows
+		// (padded cards), then paint the gray panel behind the whole block — pads included —
+		// so both read as cards with vertical breathing room rather than text flush to the
+		// panel edge. Scrollback keeps both backgrounds bare.
+		if committed[i].Kind == kindUser || committed[i].Kind == kindBanner {
 			lines = padUserCard(lines)
 		}
 		if committed[i].Kind == kindUser || committed[i].Kind == kindBanner {

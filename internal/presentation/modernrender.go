@@ -43,8 +43,10 @@ func renderQueued(messages [][]content.Block, width int) string {
 // side (top and bottom) — the vertical breathing room inside the gray panel.
 const userPadRows = 1
 
-// padUserCard brackets a user entry's rendered lines with userPadRows rail pad row(s) above and
-// below so the MODERN gray panel reads as a padded card rather than text flush to the panel edge.
+// padUserCard brackets a committed panel entry's rendered lines with userPadRows rail pad
+// row(s) above and below so the MODERN gray panel reads as a padded card rather than text
+// flush to the panel edge. It serves BOTH the user-message card and the startup banner,
+// which share the same padded-card treatment.
 // A pad row carries the accent bar in styled (the rail runs unbroken top-to-bottom, so the card
 // reads as one block once paintPanelBackground fills it gray) but NO plain text — it is vertical
 // whitespace, so nothing extra reaches the clipboard. Every line's sub is reassigned 0-based
