@@ -222,6 +222,16 @@ func NoticeStyle(level uint8) lipgloss.Style {
 	}
 }
 
+// Startup-banner styles color the two lines of the session/agent identity header
+// (renderStartupBanner). BannerNameStyle renders the identity line — the agent name
+// (plus its description when present) — bold white so the banner opens as a clear
+// title. BannerSessionStyle renders the "Session: #…" line in a muted gray so the
+// session identity stays legible but quiet.
+var (
+	BannerNameStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	BannerSessionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
+)
+
 // Tool-call styles: a tool card and its result preview render dim, subordinate to
 // the assistant narration they nest beneath.
 var (

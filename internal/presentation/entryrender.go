@@ -114,10 +114,25 @@ func renderNotice(level noticeLevel, text string, width int) []string {
 }
 
 // renderStartupBanner renders the session/agent identity header with the normal panel's
-// quiet rail and neutral info text. Its background is applied only by the modern viewport
+// quiet rail. The lines are styled per role: the FIRST line is the identity line (the
+// agent name, plus its description when present) and renders bold white
+// (styles.BannerNameStyle); every following line — the "Session: #<uuid>" line — renders
+// in the muted gray (styles.BannerSessionStyle). Both keep the shared dark-neutral
+// "▌ " rail (styles.AccentBarStyle), so the banner reads as one panel whose two roles
+// stay visually distinct. Its background is applied only by the modern viewport
 // (paintPanelBackground), preserving scrollback's background-free rendering.
 func renderStartupBanner(text string, width int) []string {
-	out := barWrapWithStyles(styles.AccentBarStyle, styles.NoticeInfoStyle, strings.Split(text, "\n"), width)
+	bar := styles.AccentBarStyle.Render(styles.AccentBarPrompt)
+	var out []string
+	for i, raw := range strings.Split(text, "\n") {
+		textStyle := styles.BannerSessionStyle
+		if i == 0 {
+			textStyle = styles.BannerNameStyle
+		}
+		for _, line := range wrapToWidth(raw, width-barWidth) {
+			out = append(out, bar+textStyle.Render(line))
+		}
+	}
 	if len(out) == 0 {
 		out = append(out, styles.AccentBarStyle.Render(styles.AccentBarPrompt))
 	}
