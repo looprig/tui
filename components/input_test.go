@@ -56,6 +56,54 @@ func TestInputBoxAppearance(t *testing.T) {
 	}
 }
 
+func TestInputBoxMultilinePasteIsCollapsedAndExpanded(t *testing.T) {
+	t.Parallel()
+
+	const pasted = "first line\n\nthird line"
+	b := NewInputBox()
+	b.Resize(60)
+	b.Update(tea.PasteMsg{Content: pasted})
+
+	if got, want := b.DisplayValue(), "[pasted 22 chars]"; got != want {
+		t.Fatalf("DisplayValue() = %q, want %q", got, want)
+	}
+	if got := b.Value(); got != pasted {
+		t.Fatalf("Value() = %q, want exact paste %q", got, pasted)
+	}
+	if plain := stripANSI(b.View()); !strings.Contains(plain, "[pasted 22 chars]") {
+		t.Fatalf("View() = %q, want collapsed paste marker", plain)
+	}
+}
+
+func TestInputBoxSingleLinePasteStaysEditable(t *testing.T) {
+	t.Parallel()
+
+	b := NewInputBox()
+	b.Update(tea.PasteMsg{Content: "ordinary paste"})
+
+	if got := b.DisplayValue(); got != "ordinary paste" {
+		t.Fatalf("DisplayValue() = %q, want ordinary paste", got)
+	}
+	if got := b.Value(); got != "ordinary paste" {
+		t.Fatalf("Value() = %q, want ordinary paste", got)
+	}
+}
+
+func TestInputBoxDeletingCollapsedPasteDropsPayload(t *testing.T) {
+	t.Parallel()
+
+	b := NewInputBox()
+	b.Update(tea.PasteMsg{Content: "first\nsecond"})
+	b.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	if got := b.DisplayValue(); got != "" {
+		t.Fatalf("DisplayValue() after backspace = %q, want empty", got)
+	}
+	if got := b.Value(); got != "" {
+		t.Fatalf("Value() after backspace = %q, want empty", got)
+	}
+}
+
 // TestInputBoxGrows checks the content height clamps to [minInputLines, maxInputLines]
 // and grows with the number of logical lines in between.
 func TestInputBoxGrows(t *testing.T) {

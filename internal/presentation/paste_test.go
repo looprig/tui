@@ -31,8 +31,9 @@ func TestBracketedPasteInsertsIntoComposer(t *testing.T) {
 func TestMultilinePasteDoesNotSubmit(t *testing.T) {
 	agent := &fakeAgent{activeLoopID: callID(1)}
 	m := newScreenSized(t, agent, 80, 24)
+	const pasted = "func main() {\n\tprintln(\"hi\")\n}"
 
-	m, _ = updateScreen(t, m, tea.PasteMsg{Content: "func main() {\n\tprintln(\"hi\")\n}"})
+	m, _ = updateScreen(t, m, tea.PasteMsg{Content: pasted})
 
 	got := m.interaction.input.Value()
 	if !strings.Contains(got, "func main() {") || !strings.Contains(got, "println(\"hi\")") {
@@ -43,6 +44,19 @@ func TestMultilinePasteDoesNotSubmit(t *testing.T) {
 	}
 	if agent.submitCalled || agent.submitToLoopCalled {
 		t.Error("a multiline paste submitted a turn; it must only fill the composer")
+	}
+	if display := m.interaction.input.DisplayValue(); display != "[pasted 30 chars]" {
+		t.Errorf("composer display = %q, want one collapsed paste marker", display)
+	}
+
+	var cmd tea.Cmd
+	m, cmd = updateScreen(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	drainCmd(t, cmd)
+	if !agent.submitToLoopCalled || agent.submitCalled {
+		t.Fatalf("submit calls after Enter = toLoop %v default %v, want exactly the focused-loop path", agent.submitToLoopCalled, agent.submitCalled)
+	}
+	if submitted := firstBlockText(agent.lastSubmitToLoopBlocks); submitted != pasted {
+		t.Fatalf("submitted text = %q, want exact paste %q", submitted, pasted)
 	}
 }
 

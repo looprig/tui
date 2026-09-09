@@ -1188,9 +1188,9 @@ func (m *Screen) applyTraySearch() {
 }
 
 func (m *Screen) forwardToTraySearch(msg tea.Msg) tea.Cmd {
-	before := m.interaction.input.Value()
+	before := m.interaction.input.DisplayValue()
 	cmd := m.interaction.input.Update(msg)
-	if m.interaction.input.Value() != before {
+	if m.interaction.input.DisplayValue() != before {
 		m.applyTraySearch()
 		m.resize()
 	}

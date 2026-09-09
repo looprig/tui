@@ -711,9 +711,9 @@ func (m interactionModel) answerKey(msg tea.KeyPressMsg) (interactionModel, uiAc
 func (m interactionModel) ForwardToEditor(msg tea.Msg) (interactionModel, tea.Cmd) {
 	switch m.mode {
 	case modeCompose:
-		before := m.input.Value()
+		before := m.input.DisplayValue()
 		cmd := m.input.Update(msg)
-		if m.input.Value() != before {
+		if m.input.DisplayValue() != before {
 			m.refreshCompletion()
 		}
 		return m, cmd

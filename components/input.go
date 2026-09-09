@@ -1,8 +1,10 @@
 package components
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -44,14 +46,24 @@ const placeholder = "Type a message…"
 // panel via SetMinLines/SetBackground/SetVerticalPadding. Nothing else changes, so the
 // scrollback composer stays byte-identical.
 type InputBox struct {
-	ta       textarea.Model
-	minLines int    // visible-height floor; default minInputLines (1)
-	width    int    // last Resize width — the column budget each row's fill spans
-	hasBG    bool   // whether the modern gray panel fill is enabled (default: off)
-	bgOpen   string // SGR that turns the fill on (derived once in SetBackground); "" when off
-	bgReset  string // SGR that turns the fill off
-	padV     int    // background-filled padding rows above AND below the text region (default 0)
+	ta          textarea.Model
+	pastes      []pasteSegment
+	nextPasteID uint64
+	minLines    int    // visible-height floor; default minInputLines (1)
+	width       int    // last Resize width — the column budget each row's fill spans
+	hasBG       bool   // whether the modern gray panel fill is enabled (default: off)
+	bgOpen      string // SGR that turns the fill on (derived once in SetBackground); "" when off
+	bgReset     string // SGR that turns the fill off
+	padV        int    // background-filled padding rows above AND below the text region (default 0)
 }
+
+type pasteSegment struct {
+	marker  string
+	visible string
+	payload string
+}
+
+const pasteBoundary = "\u2063"
 
 // NewInputBox returns a configured, focused prompt editor.
 //
@@ -192,19 +204,36 @@ func (b *InputBox) capHeight() {
 	b.ta.SetHeight(b.Height())
 }
 
-// Value returns the current text.
+// Value returns the current text with collapsed paste markers expanded to the exact
+// original payloads.
 func (b *InputBox) Value() string {
-	return b.ta.Value()
+	v := b.ta.Value()
+	for _, paste := range b.pastes {
+		v = strings.Replace(v, paste.marker, paste.payload, 1)
+	}
+	return v
+}
+
+// DisplayValue returns the compact text held by the editor. Invisible marker boundaries
+// distinguish retained paste segments from marker-looking text typed by the user.
+func (b *InputBox) DisplayValue() string {
+	v := b.ta.Value()
+	for _, paste := range b.pastes {
+		v = strings.Replace(v, paste.marker, paste.visible, 1)
+	}
+	return v
 }
 
 // Reset clears the text.
 func (b *InputBox) Reset() {
 	b.ta.Reset()
+	b.pastes = nil
 	b.capHeight()
 }
 
 // SetValue replaces the text.
 func (b *InputBox) SetValue(s string) {
+	b.pastes = nil
 	b.ta.SetValue(s)
 	b.capHeight()
 }
@@ -236,10 +265,51 @@ func (b *InputBox) Focus() tea.Cmd {
 // Update forwards the message to the textarea and grows the editor to fit the
 // current content (capped at maxInputLines, past which it scrolls internally).
 func (b *InputBox) Update(msg tea.Msg) tea.Cmd {
+	if paste, ok := msg.(tea.PasteMsg); ok && strings.ContainsAny(paste.Content, "\r\n") {
+		b.nextPasteID++
+		visible := fmt.Sprintf("[pasted %d chars]", utf8.RuneCountInString(paste.Content))
+		marker := pasteBoundary + invisiblePasteID(b.nextPasteID) + pasteBoundary + visible + pasteBoundary
+		b.pastes = append(b.pastes, pasteSegment{marker: marker, visible: visible, payload: paste.Content})
+		msg = tea.PasteMsg{Content: marker}
+	}
+
+	// A collapsed paste at the cursor is one composer item: one backspace removes its
+	// marker and retained payload together.
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok && key.Matches(keyMsg, b.ta.KeyMap.DeleteCharacterBackward) {
+		current := b.ta.Value()
+		for i := len(b.pastes) - 1; i >= 0; i-- {
+			if strings.HasSuffix(current, b.pastes[i].marker) {
+				b.ta.SetValue(strings.TrimSuffix(current, b.pastes[i].marker))
+				b.pastes = append(b.pastes[:i], b.pastes[i+1:]...)
+				b.capHeight()
+				return nil
+			}
+		}
+	}
+
 	var cmd tea.Cmd
 	b.ta, cmd = b.ta.Update(msg)
 	b.capHeight()
 	return cmd
+}
+
+// invisiblePasteID gives each retained payload a fixed-size identity without adding
+// visible text to the composer. The two code points are zero-width, and 64 bits keeps
+// marker size bounded regardless of how many pastes a session receives.
+func invisiblePasteID(id uint64) string {
+	const (
+		zero = '\u200b'
+		one  = '\u200c'
+	)
+	runes := make([]rune, 64)
+	for i := range runes {
+		if id&(uint64(1)<<i) == 0 {
+			runes[i] = zero
+		} else {
+			runes[i] = one
+		}
+	}
+	return string(runes)
 }
 
 // View renders the editor inside the bordered box. The box grows with the content because
